@@ -1,0 +1,29 @@
+{
+  "name": "coolfix",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CoolFix — Multi-Agent Technician Scheduling System (Show Me Your Agents Hackathon, NUS ISS)",
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000",
+    "lint": "next lint",
+    "seed": "tsx scripts/seed.ts",
+    "eval": "tsx scripts/eval.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.45.4",
+    "next": "^14.2.35",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-bedrock-runtime": "3.637.0",
+    "@types/node": "20.14.10",
+    "@types/react": "18.3.3",
+    "@types/react-dom": "18.3.0",
+    "dotenv": "16.4.5",
+    "tsx": "4.16.2",
+    "typescript": "5.5.3"
+  }
+}

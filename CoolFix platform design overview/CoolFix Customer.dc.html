@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  body { margin:0; background:#faf9f6; }
+  * { box-sizing:border-box; }
+  a { color:#2563eb; text-decoration:none; }
+  a:hover { color:#1d4ed8; }
+  input, textarea { font-family:'IBM Plex Sans',system-ui,sans-serif; }
+  input:focus, textarea:focus { outline:2px solid #2563eb; outline-offset:-1px; }
+</style>
+</helmet>
+<div style="min-height:100vh; background:#faf9f6; font-family:'IBM Plex Sans',system-ui,sans-serif; color:#1a1917; -webkit-font-smoothing:antialiased">
+
+  <div style="display:flex; align-items:center; justify-content:space-between; gap:20px; padding:0 18px; height:54px; background:#171613; color:#f2f0ec; position:sticky; top:0; z-index:50">
+    <div style="display:flex; align-items:center; gap:11px; min-width:0">
+      <div style="width:20px; height:20px; border-radius:5px; background:#2563eb; flex-shrink:0"></div>
+      <div style="font-weight:600; letter-spacing:-0.01em">CoolFix</div>
+      <div style="font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:#8a857e; border:1px solid #35322d; border-radius:4px; padding:2px 6px; white-space:nowrap">BOOKING · SG</div>
+    </div>
+    <div style="display:flex; gap:2px; background:#242220; padding:3px; border-radius:8px; flex-shrink:0">
+      <a href="CoolFix Admin.dc.html" style="font-size:12.5px; color:#8a857e; padding:6px 12px; border-radius:6px">Company</a>
+      <a href="CoolFix Technician.dc.html" style="font-size:12.5px; color:#8a857e; padding:6px 12px; border-radius:6px">Technician</a>
+      <span style="font-size:12.5px; font-weight:500; color:#f2f0ec; background:#3a3733; border-radius:6px; padding:6px 12px">Customer</span>
+    </div>
+  </div>
+
+  <div style="max-width:720px; margin:0 auto; padding:22px 18px 72px">
+
+    <div style="display:flex; gap:5px; margin-bottom:24px; flex-wrap:wrap">
+      <sc-for list="{{ steps }}" as="s" hint-placeholder-count="5">
+        <button onClick="{{ s.go }}" style="{{ s.style }}">{{ s.label }}</button>
+      </sc-for>
+    </div>
+
+    <!-- 1 · Landing -->
+    <sc-if value="{{ s0 }}" hint-placeholder-val="{{ true }}">
+    <div style="text-align:center; padding:14px 0 0">
+      <div style="display:inline-block; font-size:12px; color:#57534d; background:#f0eeea; border-radius:20px; padding:6px 14px; margin-bottom:24px">Trusted by 500+ homes and offices across Singapore</div>
+      <h1 style="margin:0; font-size:40px; line-height:1.08; letter-spacing:-0.03em; font-weight:600; text-wrap:pretty">Aircon trouble?<br>Pick how fast you need us.</h1>
+      <p style="max-width:470px; margin:18px auto 28px; font-size:15px; line-height:1.65; color:#57534d; text-wrap:pretty">Tell us the fault, choose your response window, and we match the right certified technician. Your slot locks 3 hours before the visit and will not move after that.</p>
+      <button onClick="{{ next }}" style="font-family:inherit; font-size:15px; font-weight:600; background:#171613; color:#fff; border:none; border-radius:9px; padding:14px 28px; cursor:pointer">Book a repair</button>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:11px; margin-top:42px; text-align:left">
+        <sc-for list="{{ valueProps }}" as="v" hint-placeholder-count="3">
+          <div style="background:#fff; border:1px solid #e8e5e0; border-radius:11px; padding:15px 16px">
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:#2563eb; letter-spacing:.05em; margin-bottom:8px">{{ v.tag }}</div>
+            <div style="font-size:13.5px; line-height:1.55; color:#3d3a35">{{ v.text }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- 2 · Form -->
+    <sc-if value="{{ s1 }}" hint-placeholder-val="{{ false }}">
+    <div>
+      <h1 style="margin:0 0 4px; font-size:25px; font-weight:600; letter-spacing:-0.02em">Tell us what is wrong</h1>
+      <div style="font-size:13.5px; color:#77736d; margin-bottom:20px">The clearer your description, the better we can match a technician with the right licence.</div>
+      <div style="background:#fff; border:1px solid #e8e5e0; border-radius:12px; padding:19px; display:flex; flex-direction:column; gap:17px">
+        <div>
+          <div style="font-size:13px; font-weight:500; margin-bottom:7px">Service address</div>
+          <input value="Blk 12 Havelock Road, #05-118, Singapore 160012" style="width:100%; font-size:14px; padding:11px 12px; border:1px solid #ddd9d3; border-radius:8px; background:#faf9f6">
+        </div>
+        <div>
+          <div style="font-size:13px; font-weight:500; margin-bottom:8px">What is happening?</div>
+          <div style="display:flex; flex-wrap:wrap; gap:7px">
+            <sc-for list="{{ issues }}" as="c" hint-placeholder-count="5">
+              <button onClick="{{ c.go }}" style="{{ c.style }}">{{ c.label }}</button>
+            </sc-for>
+          </div>
+        </div>
+        <div>
+          <div style="font-size:13px; font-weight:500; margin-bottom:7px">Describe it in your own words</div>
+          <textarea rows="4" style="width:100%; font-size:14px; line-height:1.6; padding:11px 12px; border:1px solid #ddd9d3; border-radius:8px; background:#faf9f6; resize:vertical">Bedroom unit stopped cooling since last night. Still blows air but not cold, and there is a damp smell near the vent. Unit is about 4 years old.</textarea>
+          <div style="font-size:11.5px; color:#8b8781; margin-top:6px; font-family:'IBM Plex Mono',monospace">this text is parsed into a structured job before dispatch</div>
+        </div>
+        <div>
+          <div style="font-size:13px; font-weight:500; margin-bottom:8px">Photos <span style="color:#8b8781; font-weight:400">· optional, up to 3</span></div>
+          <div style="display:flex; gap:9px; flex-wrap:wrap">
+            <sc-for list="{{ photoSlots }}" as="p" hint-placeholder-count="3">
+              <div style="{{ p.style }}"><span style="font-family:'IBM Plex Mono',monospace; font-size:10px; color:#8b8781">{{ p.label }}</span></div>
+            </sc-for>
+          </div>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px">
+          <div>
+            <div style="font-size:13px; font-weight:500; margin-bottom:7px">Mobile</div>
+            <input value="+65 8123 4567" style="width:100%; font-size:14px; padding:11px 12px; border:1px solid #ddd9d3; border-radius:8px; background:#faf9f6">
+          </div>
+          <div>
+            <div style="font-size:13px; font-weight:500; margin-bottom:7px">Email for reminders</div>
+            <input value="xiuying.chen@email.com" style="width:100%; font-size:14px; padding:11px 12px; border:1px solid #ddd9d3; border-radius:8px; background:#faf9f6">
+          </div>
+        </div>
+        <div style="font-size:12px; color:#8b8781; line-height:1.55; border-top:1px solid #f0eeea; padding-top:13px">We email you a confirmation now, and a reminder 3 hours before the visit — the moment your slot is locked.</div>
+      </div>
+      <button onClick="{{ next }}" style="margin-top:15px; width:100%; font-family:inherit; font-size:15px; font-weight:600; background:#171613; color:#fff; border:none; border-radius:9px; padding:14px; cursor:pointer">Continue to response times</button>
+    </div>
+    </sc-if>
+
+    <!-- 3 · Tier -->
+    <sc-if value="{{ s2 }}" hint-placeholder-val="{{ false }}">
+    <div>
+      <h1 style="margin:0 0 4px; font-size:25px; font-weight:600; letter-spacing:-0.02em">How soon do you need a technician?</h1>
+      <div style="font-size:13.5px; color:#77736d; margin-bottom:20px">Faster costs more: we hold capacity aside for it, and it may mean rescheduling another customer.</div>
+      <div style="display:flex; flex-direction:column; gap:10px">
+        <sc-for list="{{ tierCards }}" as="t" hint-placeholder-count="4">
+          <button onClick="{{ t.pick }}" style="{{ t.style }}">
+            <div style="{{ t.railStyle }}"></div>
+            <div style="flex:1; min-width:0; text-align:left">
+              <div style="display:flex; align-items:center; gap:9px; flex-wrap:wrap">
+                <span style="font-size:16px; font-weight:600">{{ t.name }}</span>
+                <span style="{{ t.chipStyle }}">{{ t.window }}</span>
+              </div>
+              <div style="font-size:13px; color:#57534d; margin-top:5px; line-height:1.55">{{ t.desc }}</div>
+            </div>
+            <div style="text-align:right; flex-shrink:0">
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:19px; font-weight:600">{{ t.price }}</div>
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:#8b8781">{{ t.delta }}</div>
+            </div>
+          </button>
+        </sc-for>
+      </div>
+      <div style="{{ noticeStyle }}">{{ notice }}</div>
+      <button onClick="{{ next }}" style="margin-top:14px; width:100%; font-family:inherit; font-size:15px; font-weight:600; background:#171613; color:#fff; border:none; border-radius:9px; padding:14px; cursor:pointer">Confirm booking · {{ selectedPrice }}</button>
+      <div style="text-align:center; font-size:11.5px; color:#8b8781; margin-top:10px">Payment on completion. Free cancellation until your slot locks.</div>
+    </div>
+    </sc-if>
+
+    <!-- 4 · Confirmation -->
+    <sc-if value="{{ s3 }}" hint-placeholder-val="{{ false }}">
+    <div style="text-align:center; padding:18px 0 0">
+      <div style="width:54px; height:54px; border-radius:50%; background:#eef7f1; color:#15803d; display:flex; align-items:center; justify-content:center; font-size:25px; margin:0 auto 16px">✓</div>
+      <h1 style="margin:0; font-size:25px; font-weight:600; letter-spacing:-0.02em">Booking received</h1>
+      <p style="font-size:14px; color:#57534d; margin:8px auto 24px; max-width:420px; line-height:1.6">We are matching a certified technician now. You will get an email as soon as the visit is scheduled.</p>
+      <div style="background:#fff; border:1px solid #e8e5e0; border-radius:12px; padding:18px; text-align:left; max-width:420px; margin:0 auto">
+        <sc-for list="{{ summary }}" as="r" hint-placeholder-count="5">
+          <div style="display:flex; justify-content:space-between; gap:14px; padding:9px 0; border-bottom:1px solid #f3f1ee; font-size:13.5px">
+            <span style="color:#77736d">{{ r.k }}</span>
+            <span style="{{ r.style }}">{{ r.v }}</span>
+          </div>
+        </sc-for>
+        <div style="font-size:12px; color:#8b8781; line-height:1.6; margin-top:13px">A confirmation email is on its way to xiuying.chen@email.com, and a reminder follows 3 hours before the visit once your slot locks.</div>
+      </div>
+      <button onClick="{{ next }}" style="margin-top:18px; font-family:inherit; font-size:14px; font-weight:600; background:#171613; color:#fff; border:none; border-radius:9px; padding:13px 24px; cursor:pointer">Track this booking</button>
+    </div>
+    </sc-if>
+
+    <!-- 5 · Tracker -->
+    <sc-if value="{{ s4 }}" hint-placeholder-val="{{ false }}">
+    <div>
+      <div style="display:flex; align-items:flex-end; justify-content:space-between; gap:14px; flex-wrap:wrap; margin-bottom:18px">
+        <div>
+          <h1 style="margin:0; font-size:25px; font-weight:600; letter-spacing:-0.02em">Your booking</h1>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:12.5px; color:#77736d; margin-top:4px">CF-2471 · Urgent · S$141</div>
+        </div>
+        <div style="{{ etaStyle }}">Today 15:00 – 16:30</div>
+      </div>
+
+      <div style="background:#fff; border:1px solid #e8e5e0; border-radius:12px; padding:18px 20px">
+        <sc-for list="{{ trackSteps }}" as="t" hint-placeholder-count="4">
+          <div style="display:grid; grid-template-columns:22px minmax(0,1fr); gap:14px">
+            <div style="display:flex; flex-direction:column; align-items:center">
+              <div style="{{ t.dotStyle }}">{{ t.mark }}</div>
+              <sc-if value="{{ t.hasLine }}" hint-placeholder-val="{{ true }}">
+                <div style="{{ t.lineStyle }}"></div>
+              </sc-if>
+            </div>
+            <div style="{{ t.bodyStyle }}">
+              <div style="font-size:14.5px; font-weight:{{ t.weight }}">{{ t.title }}</div>
+              <div style="font-size:12.5px; color:#77736d; line-height:1.55; margin-top:3px">{{ t.desc }}</div>
+              <sc-if value="{{ t.hasTech }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex; align-items:center; gap:11px; background:#faf9f6; border:1px solid #eeece8; border-radius:10px; padding:11px 12px; margin-top:10px">
+                  <div style="width:38px; height:38px; border-radius:10px; background:#2563eb; color:#fff; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono',monospace; font-size:13px; font-weight:600">WM</div>
+                  <div style="min-width:0; flex:1">
+                    <div style="font-size:13.5px; font-weight:600">Tan Wei Ming</div>
+                    <div style="font-size:11.5px; color:#77736d">Gas handling certified · 4.9 ★ over 320 jobs</div>
+                  </div>
+                </div>
+              </sc-if>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="background:#fff; border:1px solid #e8e5e0; border-radius:12px; padding:16px 18px; margin-top:12px">
+        <div style="font-size:13.5px; font-weight:600; margin-bottom:9px">Messages sent to you</div>
+        <sc-for list="{{ messages }}" as="m" hint-placeholder-count="3">
+          <div style="display:flex; gap:11px; padding:9px 0; border-bottom:1px solid #f3f1ee">
+            <span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:#8b8781; width:52px; flex-shrink:0">{{ m.time }}</span>
+            <span style="font-size:12.5px; line-height:1.55; color:#3d3a35">{{ m.text }}</span>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+    </sc-if>
+
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:860,&quot;height&quot;:900}}">
+const TIERS = [
+  { id: 'urgent',   name: 'Urgent',   color: '#d0342c', window: 'within 24 hours', price: 'S$141', delta: '+60%',
+    desc: 'Same or next day. We hold capacity aside for emergencies and may reschedule a lower tier to fit you in.' },
+  { id: 'priority', name: 'Priority', color: '#e07a1f', window: 'within 3 days',   price: 'S$110', delta: '+25%',
+    desc: 'Early access to open slots. Rarely moved once assigned.' },
+  { id: 'standard', name: 'Standard', color: '#2563eb', window: 'within 1 week',   price: 'S$88',  delta: 'base rate',
+    desc: 'Scheduled in normal order at our base call-out rate.' },
+  { id: 'flexible', name: 'Flexible', color: '#16a34a', window: 'within 2 weeks',  price: 'S$75',  delta: '−15%',
+    desc: 'Cheapest option. Your visit may be moved a few times to fill gaps, but never inside the last 3 hours.' },
+];
+
+class Component extends DCLogic {
+  state = { step: 0, tier: 'urgent', issue: 'Not cooling' };
+
+  renderVals() {
+    const st = this.state.step;
+    const labels = ['Welcome', 'Describe', 'Response time', 'Confirm', 'Track'];
+    const sel = TIERS.find(t => t.id === this.state.tier);
+
+    const notices = {
+      urgent:   { text: 'Only 1 emergency slot is left for today. Booking now reserves it.', bg: '#fdf1f0', bd: '#f2c9c5', fg: '#9b241d' },
+      priority: { text: 'Three technicians in your area are free within this window.', bg: '#fdf6ee', bd: '#f0dcc2', fg: '#9a5a12' },
+      standard: { text: 'Plenty of availability. You will usually be scheduled within 3 days anyway.', bg: '#f0f4fd', bd: '#cfdcf6', fg: '#1d4ed8' },
+      flexible: { text: 'Wednesday 09 Sep is near capacity — we may propose 11 Sep instead to keep an emergency slot open.', bg: '#eef7f1', bd: '#cfe6d8', fg: '#15803d' },
+    }[this.state.tier];
+
+    const track = [
+      { title: 'Request received', desc: 'Mon 07 Sep, 14:02 · fault parsed as “not cooling, refrigerant handling”', state: 'done' },
+      { title: 'Technician assigned', desc: 'Mon 07 Sep, 14:05 · matched on licence, distance and workload', state: 'done', hasTech: true },
+      { title: 'Schedule locked', desc: 'Locks at 12:00, 3 hours before your visit. After that the time cannot change.', state: 'current' },
+      { title: 'Visit completed', desc: 'You will receive the service report and invoice here.', state: 'todo', last: true },
+    ];
+
+    return {
+      s0: st === 0, s1: st === 1, s2: st === 2, s3: st === 3, s4: st === 4,
+      next: () => this.setState(s => ({ step: Math.min(4, s.step + 1) })),
+      steps: labels.map((label, i) => ({
+        label: (i + 1) + '. ' + label,
+        go: () => this.setState({ step: i }),
+        style: `font-family:inherit;font-size:11.5px;font-weight:${i === st ? 600 : 400};color:${i === st ? '#171613' : '#8b8781'};background:${i === st ? '#eae7e1' : 'transparent'};border:1px solid ${i === st ? '#ddd9d3' : 'transparent'};border-radius:20px;padding:6px 12px;cursor:pointer`,
+      })),
+      valueProps: [
+        { tag: 'CERTIFIED', text: 'Every technician carries the licence your fault needs — gas handling, LEW or chiller.' },
+        { tag: 'NO GHOST SLOTS', text: 'Your appointment freezes 3 hours before the visit. No last-minute reshuffles.' },
+        { tag: 'PAY FOR SPEED', text: 'Not urgent? Choose a flexible window and pay 15% less than the base rate.' },
+      ],
+      issues: ['Not cooling', 'Water leaking', 'Strange noise', 'Routine servicing', 'New installation', 'Something else'].map(label => ({
+        label,
+        go: () => this.setState({ issue: label }),
+        style: `font-family:inherit;font-size:13px;padding:8px 13px;border-radius:20px;cursor:pointer;background:${this.state.issue === label ? '#171613' : '#faf9f6'};color:${this.state.issue === label ? '#fff' : '#3d3a35'};border:1px solid ${this.state.issue === label ? '#171613' : '#ddd9d3'}`,
+      })),
+      photoSlots: [
+        { label: '+ add photo' }, { label: 'indoor unit' }, { label: 'water stain' },
+      ].map((p, i) => ({ label: p.label, style: `width:104px;height:80px;border-radius:9px;display:flex;align-items:center;justify-content:center;border:1px ${i === 0 ? 'dashed #c9c5be' : 'solid #e0ddd7'};background:${i === 0 ? '#faf9f6' : 'repeating-linear-gradient(135deg,#f4f2ef 0 6px,#eae7e2 6px 12px)'};cursor:pointer` })),
+      tierCards: TIERS.map(t => {
+        const on = t.id === this.state.tier;
+        return {
+          name: t.name, window: t.window, desc: t.desc, price: t.price, delta: t.delta,
+          pick: () => this.setState({ tier: t.id }),
+          style: `display:flex;align-items:stretch;gap:14px;width:100%;font-family:inherit;color:inherit;text-align:left;background:#fff;border:1px solid ${on ? t.color : '#e8e5e0'};box-shadow:${on ? '0 0 0 2px ' + t.color + '33' : 'none'};border-radius:12px;padding:15px 16px;cursor:pointer`,
+          railStyle: `width:5px;border-radius:3px;background:${t.color};flex-shrink:0`,
+          chipStyle: `font-family:'IBM Plex Mono',monospace;font-size:11px;color:${t.color};background:${t.color}14;border:1px solid ${t.color}33;border-radius:5px;padding:2px 7px;white-space:nowrap`,
+        };
+      }),
+      notice: notices.text,
+      noticeStyle: `margin-top:12px;background:${notices.bg};border:1px solid ${notices.bd};color:${notices.fg};border-radius:9px;padding:11px 13px;font-size:12.5px;line-height:1.55`,
+      selectedPrice: sel.price,
+      summary: [
+        { k: 'Booking ref', v: 'CF-2471' },
+        { k: 'Response tier', v: sel.name + ' · ' + sel.window, style: `font-weight:600;color:${sel.color}` },
+        { k: 'Fault', v: this.state.issue },
+        { k: 'Address', v: 'Havelock Rd, #05-118' },
+        { k: 'Total', v: sel.price, style: 'font-weight:600;font-family:\'IBM Plex Mono\',monospace' },
+      ].map(r => ({ k: r.k, v: r.v, style: (r.style || 'color:#1a1917') + ';text-align:right' })),
+      etaStyle: `font-family:'IBM Plex Mono',monospace;font-size:13px;color:#fff;background:${TIERS[0].color};border-radius:8px;padding:9px 13px`,
+      trackSteps: track.map(t => ({
+        title: t.title, desc: t.desc, hasTech: !!t.hasTech, hasLine: !t.last,
+        weight: t.state === 'todo' ? 400 : 600,
+        mark: t.state === 'done' ? '✓' : '',
+        dotStyle: `width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;color:#fff;flex-shrink:0;background:${t.state === 'done' ? '#15803d' : t.state === 'current' ? '#d0342c' : '#d8d4cd'};${t.state === 'current' ? 'box-shadow:0 0 0 4px #d0342c22;' : ''}`,
+        lineStyle: 'width:2px;flex:1;min-height:22px;background:#e5e2dd;margin:5px 0',
+        bodyStyle: `padding-bottom:20px;opacity:${t.state === 'todo' ? .6 : 1}`,
+      })),
+      messages: [
+        { time: '14:02', text: 'Email — we received your request CF-2471 and are matching a technician.' },
+        { time: '14:05', text: 'Email — Tan Wei Ming assigned, provisional window today 15:00 – 16:30.' },
+        { time: '12:00', text: 'Scheduled — reminder email 3 hours before the visit, once the slot is locked.' },
+      ],
+    };
+  }
+}
+
+</script>
+</body>
+</html>

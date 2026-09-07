@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  body { margin:0; background:#edebe7; }
+  * { box-sizing:border-box; }
+  a { color:#2563eb; text-decoration:none; }
+  a:hover { color:#1d4ed8; }
+  @keyframes blink { 0%,49%{opacity:1} 50%,100%{opacity:0} }
+  @keyframes slidein { from{opacity:0; transform:translateY(6px)} to{opacity:1; transform:none} }
+  ::-webkit-scrollbar { width:10px; height:10px }
+  ::-webkit-scrollbar-thumb { background:#3a3733; border-radius:6px; border:3px solid transparent; background-clip:content-box }
+</style>
+</helmet>
+<div style="min-height:100vh; background:#edebe7; font-family:'IBM Plex Sans',system-ui,sans-serif; color:#1a1917; -webkit-font-smoothing:antialiased">
+
+  <div style="display:flex; align-items:center; justify-content:space-between; gap:20px; padding:0 18px; height:54px; background:#171613; color:#f2f0ec; position:sticky; top:0; z-index:50">
+    <div style="display:flex; align-items:center; gap:11px; min-width:0">
+      <div style="width:20px; height:20px; border-radius:5px; background:#2563eb; flex-shrink:0"></div>
+      <div style="font-weight:600; letter-spacing:-0.01em">CoolFix</div>
+      <div style="font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:#8a857e; border:1px solid #35322d; border-radius:4px; padding:2px 6px; white-space:nowrap">DISPATCH CONSOLE · SG</div>
+    </div>
+    <div style="display:flex; gap:2px; background:#242220; padding:3px; border-radius:8px; flex-shrink:0">
+      <span style="font-size:12.5px; font-weight:500; color:#f2f0ec; background:#3a3733; border-radius:6px; padding:6px 12px">Company</span>
+      <a href="CoolFix Technician.dc.html" style="font-size:12.5px; color:#8a857e; padding:6px 12px; border-radius:6px">Technician</a>
+      <a href="CoolFix Customer.dc.html" style="font-size:12.5px; color:#8a857e; padding:6px 12px; border-radius:6px">Customer</a>
+    </div>
+  </div>
+
+  <div style="display:grid; grid-template-columns:200px minmax(0,1fr); min-height:calc(100vh - 54px)">
+
+    <div style="background:#f6f5f2; border-right:1px solid #e0ddd7; padding:14px 10px; display:flex; flex-direction:column; gap:2px">
+      <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:0.08em; color:#8b8781; padding:6px 10px 8px">OPERATIONS</div>
+      <sc-for list="{{ navItems }}" as="item" hint-placeholder-count="5">
+        <button onClick="{{ item.go }}" style="{{ item.style }}">
+          <span>{{ item.label }}</span>
+          <sc-if value="{{ item.badge }}" hint-placeholder-val="{{ true }}">
+            <span style="font-family:'IBM Plex Mono',monospace; font-size:10.5px; background:#d0342c; color:#fff; border-radius:9px; padding:1px 6px">{{ item.badge }}</span>
+          </sc-if>
+        </button>
+      </sc-for>
+      <div style="margin-top:auto; padding:12px 10px 4px; border-top:1px solid #e0ddd7">
+        <div style="font-size:11.5px; color:#8b8781">Freeze window</div>
+        <div style="font-family:'IBM Plex Mono',monospace; font-size:16px; margin-top:2px">T − {{ freezeHours }}h 00m</div>
+        <div style="font-size:11px; color:#8b8781; line-height:1.45; margin-top:6px">Jobs inside this window cannot be re-planned automatically.</div>
+      </div>
+    </div>
+
+    <div style="padding:22px 26px 56px; min-width:0">
+
+      <!-- ─── Dashboard ─── -->
+      <sc-if value="{{ isDash }}" hint-placeholder-val="{{ true }}">
+      <div>
+        <div style="display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:16px">
+          <div>
+            <h1 style="margin:0; font-size:21px; font-weight:600; letter-spacing:-0.02em">Dispatch overview</h1>
+            <div style="font-size:12.5px; color:#77736d; margin-top:3px">Mon 07 Sep 2026 · 14:05 SGT · 5 technicians on shift</div>
+          </div>
+          <button onClick="{{ rerun }}" style="font-family:inherit; font-size:12.5px; font-weight:500; background:#171613; color:#fff; border:none; border-radius:7px; padding:9px 14px; cursor:pointer">{{ rerunLabel }}</button>
+        </div>
+
+        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:18px">
+          <sc-for list="{{ stats }}" as="s" hint-placeholder-count="4">
+            <div style="background:#fff; border:1px solid #e0ddd7; border-radius:10px; padding:13px 15px">
+              <div style="font-size:11.5px; color:#77736d">{{ s.label }}</div>
+              <div style="display:flex; align-items:baseline; gap:7px; margin-top:5px">
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:25px; font-weight:600; letter-spacing:-0.02em">{{ s.value }}</div>
+                <div style="font-size:11.5px; color:#8b8781">{{ s.sub }}</div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="display:grid; grid-template-columns:minmax(0,1.7fr) minmax(240px,1fr); gap:14px; align-items:start">
+
+          <div style="background:#14130f; border:1px solid #2a2723; border-radius:12px; overflow:hidden">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; padding:11px 15px; border-bottom:1px solid #2a2723">
+              <div style="display:flex; align-items:center; gap:9px">
+                <div style="width:7px; height:7px; border-radius:50%; background:#16a34a; animation:blink 1.6s infinite"></div>
+                <div style="color:#efece7; font-size:13.5px; font-weight:600">Agent reasoning · live</div>
+              </div>
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:#6d6963">click a line to expand the scoring</div>
+            </div>
+            <div style="max-height:600px; overflow:auto; padding:10px 11px; display:flex; flex-direction:column; gap:7px">
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:#a29d95; background:#1c1a16; border:1px solid #2e2b25; border-radius:8px; padding:10px 12px; line-height:1.6">
+                <span style="color:#4ea1ff">[capacity]</span> evaluating emergency buffer for 09 Sep before accepting FLEXIBLE booking<span style="animation:blink 1s infinite">▊</span>
+              </div>
+              <sc-for list="{{ logs }}" as="log" hint-placeholder-count="6">
+                <div style="background:#1c1a16; border:1px solid #2e2b25; border-radius:8px; animation:slidein .25s ease">
+                  <button onClick="{{ log.toggle }}" style="width:100%; text-align:left; background:none; border:none; cursor:pointer; padding:10px 12px; display:flex; gap:9px; align-items:flex-start; font-family:'IBM Plex Mono',monospace; font-size:11.5px; line-height:1.65; color:#c8c3ba">
+                    <span style="{{ log.tagStyle }}">{{ log.tag }}</span>
+                    <span style="flex:1; min-width:0">{{ log.text }}</span>
+                    <span style="color:#5e5a54; flex-shrink:0">{{ log.time }}</span>
+                  </button>
+                  <sc-if value="{{ log.open }}" hint-placeholder-val="{{ false }}">
+                    <div style="border-top:1px solid #2e2b25; padding:12px 14px 14px">
+                      <div style="font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:#6d6963; margin-bottom:10px">{{ log.formula }}</div>
+                      <div style="display:flex; flex-direction:column; gap:7px">
+                        <sc-for list="{{ log.factors }}" as="f" hint-placeholder-count="4">
+                          <div style="display:grid; grid-template-columns:118px minmax(0,1fr) 92px; align-items:center; gap:10px">
+                            <div style="font-size:11.5px; color:#a29d95">{{ f.name }}</div>
+                            <div style="height:7px; background:#2e2b25; border-radius:4px; overflow:hidden"><div style="{{ f.barStyle }}"></div></div>
+                            <div style="font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:#c8c3ba; text-align:right">{{ f.detail }}</div>
+                          </div>
+                        </sc-for>
+                      </div>
+                      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:12px; padding-top:10px; border-top:1px dashed #2e2b25; font-family:'IBM Plex Mono',monospace; color:#efece7">
+                        <span style="font-size:11px; color:#6d6963">{{ log.resultLabel }}</span>
+                        <span style="font-size:16px; font-weight:600">{{ log.result }}</span>
+                      </div>
+                      <sc-if value="{{ log.hasOptions }}" hint-placeholder-val="{{ false }}">
+                        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:8px; margin-top:12px">
+                          <sc-for list="{{ log.options }}" as="o" hint-placeholder-count="2">
+                            <div style="{{ o.style }}">
+                              <div style="font-size:12px; font-weight:600; color:#efece7; margin-bottom:4px">{{ o.title }}</div>
+                              <div style="font-size:11px; color:#a29d95; line-height:1.5">{{ o.body }}</div>
+                              <div style="font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:#6d6963; margin-top:7px">{{ o.cost }}</div>
+                            </div>
+                          </sc-for>
+                        </div>
+                      </sc-if>
+                    </div>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="display:flex; flex-direction:column; gap:14px">
+            <div style="background:#fff; border:1px solid #e0ddd7; border-radius:12px; padding:15px">
+              <div style="font-size:13.5px; font-weight:600; margin-bottom:12px">Capacity by tier · today</div>
+              <div style="display:flex; flex-direction:column; gap:11px">
+                <sc-for list="{{ tierFill }}" as="t" hint-placeholder-count="4">
+                  <div>
+                    <div style="display:flex; justify-content:space-between; font-size:11.5px; margin-bottom:5px">
+                      <span style="display:flex; align-items:center; gap:7px"><span style="{{ t.dot }}"></span>{{ t.name }}</span>
+                      <span style="font-family:'IBM Plex Mono',monospace; color:#77736d">{{ t.label }}</span>
+                    </div>
+                    <div style="height:6px; background:#edebe7; border-radius:3px; overflow:hidden"><div style="{{ t.barStyle }}"></div></div>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="margin-top:13px; padding-top:11px; border-top:1px solid #f0eeea; font-size:11.5px; color:#77736d; line-height:1.55">
+                Emergency buffer left today: <span style="font-family:'IBM Plex Mono',monospace; color:#d0342c; font-weight:600">1 slot</span>. Capacity Agent is holding it back and declining new Flexible bookings for today.
+              </div>
+            </div>
+
+            <div style="background:#fff; border:1px solid #e0ddd7; border-radius:12px; padding:15px">
+              <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px">
+                <div style="font-size:13.5px; font-weight:600">Waiting on you</div>
+                <button onClick="{{ goHitl }}" style="background:none; border:none; color:#2563eb; font-size:12px; cursor:pointer; font-family:inherit; padding:0">Open queue</button>
+              </div>
+              <div style="display:flex; flex-direction:column; gap:8px">
+                <sc-for list="{{ hitlPreview }}" as="h" hint-placeholder-count="2">
+                  <div style="border:1px solid #eeece8; border-radius:8px; padding:10px 11px">
+                    <div style="font-size:11px; color:#8b8781; margin-bottom:3px; font-family:'IBM Plex Mono',monospace">{{ h.reason }}</div>
+                    <div style="font-size:12.5px; font-weight:500; line-height:1.45">{{ h.title }}</div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+
+            <div style="background:#fff; border:1px solid #e0ddd7; border-radius:12px; padding:15px">
+              <div style="font-size:13.5px; font-weight:600; margin-bottom:10px">Pipeline</div>
+              <div style="display:flex; flex-direction:column; gap:8px">
+                <sc-for list="{{ pipeline }}" as="p" hint-placeholder-count="5">
+                  <div style="display:flex; align-items:center; gap:10px">
+                    <span style="{{ p.dot }}"></span>
+                    <span style="font-size:12.5px; flex:1">{{ p.stage }}</span>
+                    <span style="font-family:'IBM Plex Mono',monospace; font-size:12px; color:#77736d">{{ p.count }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ─── Master timeline ─── -->
+      <sc-if value="{{ isTimeline }}" hint-placeholder-val="{{ false }}">
+      <div>
+        <div style="display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:14px">
+          <div>
+            <h1 style="margin:0; font-size:21px; font-weight:600; letter-spacing:-0.02em">Master timeline</h1>
+            <div style="font-size:12.5px; color:#77736d; margin-top:3px">Mon 07 Sep · 08:00 – 20:00 SGT · drag a block to override the agent</div>
+          </div>
+          <div style="display:flex; gap:14px; align-items:center; flex-wrap:wrap; font-size:11.5px; color:#77736d">
+            <span style="display:flex; align-items:center; gap:6px"><span style="width:20px; height:10px; border-radius:3px; background:repeating-linear-gradient(45deg,#c9c5be 0 3px,#e8e5e0 3px 6px)"></span>frozen</span>
+            <sc-for list="{{ tierLegend }}" as="t" hint-placeholder-count="4">
+              <span style="display:flex; align-items:center; gap:6px"><span style="{{ t.dot }}"></span>{{ t.name }}</span>
+            </sc-for>
+          </div>
+        </div>
+
+        <div style="background:#fff; border:1px solid #e0ddd7; border-radius:12px; overflow:hidden">
+          <div style="display:grid; grid-template-columns:170px minmax(0,1fr); border-bottom:1px solid #e0ddd7; background:#f6f5f2">
+            <div style="padding:9px 14px; font-size:11.5px; color:#77736d; border-right:1px solid #e0ddd7">Technician</div>
+            <div style="display:flex">
+              <sc-for list="{{ hours }}" as="h" hint-placeholder-count="12">
+                <div style="flex:1; padding:9px 0 9px 5px; font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:#8b8781; border-left:1px solid #eeece8">{{ h.label }}</div>
+              </sc-for>
+            </div>
+          </div>
+          <sc-for list="{{ ganttRows }}" as="row" hint-placeholder-count="5">
+            <div style="display:grid; grid-template-columns:170px minmax(0,1fr); border-bottom:1px solid #f3f1ee">
+              <div style="padding:10px 14px; border-right:1px solid #e0ddd7; display:flex; align-items:center; gap:10px">
+                <div style="{{ row.avatarStyle }}">{{ row.initials }}</div>
+                <div style="min-width:0">
+                  <div style="font-size:12.5px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">{{ row.name }}</div>
+                  <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; color:#8b8781">{{ row.load }}</div>
+                </div>
+              </div>
+              <div style="position:relative; height:64px">
+                <sc-for list="{{ gridCells }}" as="g" hint-placeholder-count="12">
+                  <div style="{{ g.style }}"></div>
+                </sc-for>
+                <div style="{{ frozenBandStyle }}"></div>
+                <div style="{{ nowLineStyle }}"></div>
+                <sc-for list="{{ row.blocks }}" as="b" hint-placeholder-count="3">
+                  <div style="{{ b.style }}" title="{{ b.tooltip }}">
+                    <div style="font-size:11.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">{{ b.customer }}</div>
+                    <div style="font-family:'IBM Plex Mono',monospace; font-size:9.5px; opacity:.9; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">{{ b.meta }}</div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="font-size:11.5px; color:#8b8781; margin-top:10px; font-family:'IBM Plex Mono',monospace">hatched band = now → now + {{ freezeHours }}h, frozen by policy</div>
+      </div>
+      </sc-if>
+
+      <!-- ─── Technicians ─── -->
+      <sc-if value="{{ isTechMgmt }}" hint-placeholder-val="{{ false }}">
+      <div>
+        <div style="display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:14px">
+          <div>
+            <h1 style="margin:0; font-size:21px; font-weight:600; letter-spacing:-0.02em">Technicians</h1>
+            <div style="font-size:12.5px; color:#77736d; margin-top:3px">Skill tags and licences drive the Assignment Agent's skill match score</div>
+          </div>
+          <button style="font-family:inherit; font-size:12.5px; font-weight:500; background:#171613; color:#fff; border:none; border-radius:7px; padding:9px 14px; cursor:pointer">+ Add technician</button>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(290px,1fr)); gap:11px">
+          <sc-for list="{{ techCards }}" as="t" hint-placeholder-count="5">
+            <div style="background:#fff; border:1px solid #e0ddd7; border-radius:12px; padding:15px">
+              <div style="display:flex; gap:11px; align-items:center; margin-bottom:12px">
+                <div style="{{ t.avatarStyle }}">{{ t.initials }}</div>
+                <div style="min-width:0; flex:1">
+                  <div style="font-size:14.5px; font-weight:600">{{ t.name }}</div>
+                  <div style="font-size:11.5px; color:#77736d">{{ t.area }}</div>
+                </div>
+                <div style="{{ t.statusStyle }}">{{ t.status }}</div>
+              </div>
+              <div style="display:flex; flex-wrap:wrap; gap:5px; margin-bottom:12px">
+                <sc-for list="{{ t.skills }}" as="s" hint-placeholder-count="3">
+                  <span style="{{ s.style }}">{{ s.label }}</span>
+                </sc-for>
+              </div>
+              <div style="display:flex; justify-content:space-between; font-size:11.5px; color:#77736d; margin-bottom:5px">
+                <span>Load today</span><span style="font-family:'IBM Plex Mono',monospace">{{ t.load }}</span>
+              </div>
+              <div style="height:6px; background:#edebe7; border-radius:3px; overflow:hidden"><div style="{{ t.barStyle }}"></div></div>
+              <div style="display:flex; gap:7px; margin-top:13px">
+                <button style="flex:1; font-size:12px; font-family:inherit; background:#f6f5f2; border:1px solid #e0ddd7; border-radius:7px; padding:8px; cursor:pointer">Schedule</button>
+                <button style="flex:1; font-size:12px; font-family:inherit; background:#f6f5f2; border:1px solid #e0ddd7; border-radius:7px; padding:8px; cursor:pointer">Edit profile</button>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="margin-top:18px; background:#fff; border:1px solid #e0ddd7; border-radius:12px; padding:15px 16px">
+          <div style="font-size:13.5px; font-weight:600; margin-bottom:9px">Skill taxonomy</div>
+          <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:9px">
+            <sc-for list="{{ skillTaxonomy }}" as="s" hint-placeholder-count="4">
+              <div style="border:1px solid #eeece8; border-radius:8px; padding:10px 11px">
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:#1a1917">{{ s.tag }}</div>
+                <div style="font-size:11.5px; color:#77736d; line-height:1.5; margin-top:4px">{{ s.desc }}</div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ─── HITL ─── -->
+      <sc-if value="{{ isHitl }}" hint-placeholder-val="{{ false }}">
+      <div style="max-width:840px">
+        <h1 style="margin:0; font-size:21px; font-weight:600; letter-spacing:-0.02em">Approvals</h1>
+        <div style="font-size:12.5px; color:#77736d; margin:3px 0 16px">Agents act alone inside the safe band. Anything that costs a customer their confirmed slot stops here.</div>
+        <div style="display:flex; flex-direction:column; gap:11px">
+          <sc-for list="{{ hitlItems }}" as="h" hint-placeholder-count="3">
+            <div style="{{ h.cardStyle }}">
+              <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:9px">
+                <span style="{{ h.levelStyle }}">{{ h.level }}</span>
+                <span style="font-size:11.5px; color:#77736d">{{ h.reason }}</span>
+                <span style="margin-left:auto; font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:#8b8781">{{ h.age }}</span>
+              </div>
+              <div style="font-size:15px; font-weight:600; margin-bottom:5px">{{ h.title }}</div>
+              <div style="font-size:12.5px; color:#4a4741; line-height:1.6; margin-bottom:11px">{{ h.body }}</div>
+              <div style="background:#f6f5f2; border:1px solid #e5e2dd; border-radius:8px; padding:11px 12px; font-family:'IBM Plex Mono',monospace; font-size:11px; color:#4a4741; line-height:1.7; margin-bottom:13px; white-space:pre-wrap">{{ h.proposal }}</div>
+              <sc-if value="{{ h.pending }}" hint-placeholder-val="{{ true }}">
+                <div style="display:flex; gap:8px; flex-wrap:wrap">
+                  <button onClick="{{ h.approve }}" style="font-size:12.5px; font-weight:500; font-family:inherit; background:#15803d; color:#fff; border:none; border-radius:7px; padding:10px 18px; cursor:pointer">Approve</button>
+                  <button onClick="{{ h.reject }}" style="font-size:12.5px; font-weight:500; font-family:inherit; background:#fff; color:#1a1917; border:1px solid #d8d4cd; border-radius:7px; padding:10px 18px; cursor:pointer">Reject</button>
+                </div>
+              </sc-if>
+              <sc-if value="{{ h.resolved }}" hint-placeholder-val="{{ false }}">
+                <div style="{{ h.doneStyle }}">{{ h.doneLabel }}</div>
+              </sc-if>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ─── Settings ─── -->
+      <sc-if value="{{ isSettings }}" hint-placeholder-val="{{ false }}">
+      <div style="max-width:660px">
+        <h1 style="margin:0; font-size:21px; font-weight:600; letter-spacing:-0.02em">Policy settings</h1>
+        <div style="font-size:12.5px; color:#77736d; margin:3px 0 16px">Every number here is read directly by the agents at decision time.</div>
+        <div style="background:#fff; border:1px solid #e0ddd7; border-radius:12px; padding:17px; margin-bottom:12px">
+          <div style="font-size:13.5px; font-weight:600; margin-bottom:12px">Freeze window</div>
+          <div style="display:flex; align-items:center; gap:14px">
+            <input type="range" min="1" max="6" step="1" value="{{ freezeHours }}" onChange="{{ setFreeze }}" style="flex:1; accent-color:#2563eb">
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:19px; font-weight:600; width:62px; text-align:right">T−{{ freezeHours }}h</div>
+          </div>
+          <div style="font-size:11.5px; color:#77736d; margin-top:9px; line-height:1.55">Inside this window the Disruption Agent may not re-plan. Changes require an Emergency Override with a human approval and an apology notification.</div>
+        </div>
+        <div style="background:#fff; border:1px solid #e0ddd7; border-radius:12px; padding:17px">
+          <div style="font-size:13.5px; font-weight:600; margin-bottom:2px">Tier pricing</div>
+          <div style="font-size:11.5px; color:#8b8781; margin-bottom:6px">Base call-out S$88 · rule-based, no model in the loop</div>
+          <sc-for list="{{ tiers }}" as="t" hint-placeholder-count="4">
+            <div style="display:flex; align-items:center; gap:12px; padding:11px 0; border-bottom:1px solid #f3f1ee">
+              <span style="{{ t.dot }}"></span>
+              <div style="flex:1; min-width:0">
+                <div style="font-size:12.5px; font-weight:500">{{ t.name }}</div>
+                <div style="font-size:11.5px; color:#8b8781">{{ t.window }}</div>
+              </div>
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; color:#77736d">{{ t.delta }}</div>
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:13.5px; font-weight:600; width:90px; text-align:right">{{ t.price }}</div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+    </div>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900}}">
+const TIER = {
+  urgent:   { name: 'Urgent',   color: '#d0342c', window: 'within 24 hours', delta: '+60%',  price: 'S$141' },
+  priority: { name: 'Priority', color: '#e07a1f', window: 'within 3 days',   delta: '+25%',  price: 'S$110' },
+  standard: { name: 'Standard', color: '#2563eb', window: 'within 1 week',   delta: 'base',  price: 'S$88'  },
+  flexible: { name: 'Flexible', color: '#16a34a', window: 'within 2 weeks',  delta: '−15%',  price: 'S$75'  },
+};
+const SKILL = {
+  basic_maintenance:    { color: '#57534d', desc: 'Servicing and periodic maintenance. No gas certificate required.' },
+  refrigerant_handling: { color: '#2563eb', desc: 'Refrigerant faults — leaks, not cooling. Requires gas handling CoC.' },
+  electrical_work:      { color: '#e07a1f', desc: 'Electrical faults and new installs. Requires Licensed Electrical Worker.' },
+  commercial_chiller:   { color: '#7c3aed', desc: 'Large office / plant systems. Requires separate chiller certification.' },
+};
+const H0 = 8, H1 = 20, SPAN = H1 - H0, NOW = 14.08;
+
+class Component extends DCLogic {
+  state = { view: 'dash', open: null, freeze: 3, hitl: {}, rerun: 0 };
+
+  nav(v) { return () => this.setState({ view: v }); }
+
+  pct(h) { return ((h - H0) / SPAN) * 100; }
+
+  avatar(color, size) {
+    const s = size || 30;
+    return `width:${s}px;height:${s}px;border-radius:8px;background:${color};color:#fff;display:flex;align-items:center;justify-content:center;font-size:${s > 32 ? 13 : 11}px;font-weight:600;font-family:'IBM Plex Mono',monospace;flex-shrink:0`;
+  }
+  dot(color) { return `width:9px;height:9px;border-radius:3px;background:${color};display:inline-block;flex-shrink:0`; }
+
+  techs() {
+    return [
+      { name: 'Tan Wei Ming',      initials: 'WM', area: 'Central · Bukit Merah', color: '#2563eb', status: 'On job',    skills: ['basic_maintenance', 'refrigerant_handling'], load: '5 / 6 slots', pct: 83,
+        blocks: [ { c: 'Serene Goh',    a: 'Blk 210 AMK Ave 3',  t: 'urgent',   s: 8.5,  e: 10 },
+                  { c: 'Marcus Lee',    a: 'Tiong Bahru Rd',     t: 'standard', s: 10.5, e: 12 },
+                  { c: 'Priya Raman',   a: 'Redhill Close',      t: 'priority', s: 13,   e: 14.5 },
+                  { c: 'Chen Xiuying',  a: 'Havelock Rd',        t: 'urgent',   s: 15,   e: 16.5 } ] },
+      { name: 'Nur Aisyah Rahim',  initials: 'NA', area: 'East · Tampines',       color: '#e07a1f', status: 'En route',  skills: ['basic_maintenance', 'electrical_work'], load: '4 / 6 slots', pct: 66,
+        blocks: [ { c: 'Daniel Ong',    a: 'Tampines St 45',     t: 'standard', s: 9,    e: 10.5 },
+                  { c: 'Farah Ismail',  a: 'Bedok North Ave 1',  t: 'flexible', s: 11,   e: 12.5 },
+                  { c: 'Jason Sim',     a: 'Simei St 3',         t: 'priority', s: 14.5, e: 16 } ] },
+      { name: 'R. Kumar',          initials: 'RK', area: 'West · Jurong',         color: '#7c3aed', status: 'Available', skills: ['refrigerant_handling', 'commercial_chiller'], load: '3 / 6 slots', pct: 50,
+        blocks: [ { c: 'Sunrise Dental', a: 'Jurong East St 21', t: 'priority', s: 8.5,  e: 11 },
+                  { c: 'Vivian Teo',     a: 'Boon Lay Pl',       t: 'standard', s: 13.5, e: 15 } ] },
+      { name: 'Lim Jia Hui',       initials: 'LJ', area: 'North · Yishun',        color: '#16a34a', status: 'Available', skills: ['basic_maintenance'], load: '2 / 6 slots', pct: 33,
+        blocks: [ { c: 'Aaron Chua',   a: 'Yishun Ring Rd',     t: 'flexible', s: 10,   e: 11.5 },
+                  { c: 'Grace Wong',   a: 'Canberra Cres',      t: 'standard', s: 16,   e: 17.5 } ] },
+      { name: 'Muhammad Faizal',   initials: 'MF', area: 'Central · Toa Payoh',   color: '#d0342c', status: 'Off shift', skills: ['electrical_work', 'commercial_chiller'], load: '4 / 6 slots', pct: 66,
+        blocks: [ { c: 'Novena Clinic', a: 'Thomson Rd',        t: 'urgent',   s: 9,    e: 11.5 },
+                  { c: 'Kelvin Yap',    a: 'Lorong 6 Toa Payoh',t: 'standard', s: 12.5, e: 14 },
+                  { c: 'Siti Nabilah',  a: 'Whampoa Dr',        t: 'priority', s: 16.5, e: 18 } ] },
+    ];
+  }
+
+  logDefs() {
+    return [
+      { tag: 'assignment', color: '#4ea1ff', time: '14:05:12',
+        text: 'JOB-2471 · Chen Xiuying · URGENT → assigned to Tan Wei Ming, 15:00–16:30',
+        formula: 'score = 0.35·proximity + 0.30·skill_match + 0.20·workload_headroom + 0.15·tier_priority',
+        factors: [
+          { name: 'proximity',   v: 0.92, detail: '3.1 km · 0.92' },
+          { name: 'skill match', v: 1.00, detail: 'refrigerant · 1.00' },
+          { name: 'headroom',    v: 0.40, detail: '5/6 slots · 0.40' },
+          { name: 'tier weight', v: 1.00, detail: 'urgent · 1.00' },
+        ],
+        resultLabel: 'weighted score · runner-up R. Kumar 0.71', result: '0.86' },
+      { tag: 'capacity', color: '#a78bfa', time: '14:04:48',
+        text: 'FLEXIBLE booking for 09 Sep → accept-with-warning, emergency buffer down to 1 slot',
+        formula: 'buffer_required = ceil(p95_urgent_arrivals_per_day × avg_urgent_duration / shift_hours)',
+        factors: [
+          { name: 'urgent p95/day', v: 0.75, detail: '3 jobs' },
+          { name: 'free slots',     v: 0.30, detail: '2 of 30' },
+          { name: 'buffer target',  v: 0.66, detail: '2 slots' },
+        ],
+        resultLabel: 'decision', result: 'ACCEPT ⚠' },
+      { tag: 'disruption', color: '#fb923c', time: '14:02:31',
+        text: 'JOB-2470 URGENT arrival · 2 re-plan options compared, escalated to approval',
+        formula: 'cost = customer_impact + travel_delta + sla_risk, only jobs with is_frozen = false are movable',
+        factors: [
+          { name: 'movable jobs', v: 0.5,  detail: '4 of 8' },
+          { name: 'best option',  v: 0.82, detail: 'option B' },
+        ],
+        hasOptions: true,
+        options: [
+          { title: 'A · Move Marcus Lee (Standard)', body: 'Shift 10:30 → 17:00 on the same technician. Customer already confirmed, so this needs approval.', cost: 'cost 0.34 · 1 customer affected' },
+          { title: 'B · Reassign to R. Kumar', body: 'Kumar has headroom and gas CoC, but is 11 km away — adds 24 min of travel.', cost: 'cost 0.18 · 0 customers affected', best: true },
+        ],
+        resultLabel: 'chosen', result: 'B → approval' },
+      { tag: 'intake', color: '#34d399', time: '14:02:04',
+        text: 'JOB-2470 free text parsed → { fault: not_cooling, skill: refrigerant_handling, unit: split_9k, est: 90 min }',
+        formula: 'structured_job = extract(free_text, photos) → validate against skill taxonomy',
+        factors: [
+          { name: 'fault confidence', v: 0.94, detail: '0.94' },
+          { name: 'skill confidence', v: 0.88, detail: '0.88' },
+          { name: 'duration est.',    v: 0.6,  detail: '90 min' },
+        ],
+        resultLabel: 'status', result: 'PARSED' },
+      { tag: 'freeze', color: '#94a3b8', time: '14:00:00',
+        text: 'JOB-2466 · Priya Raman 17:00 → is_frozen = true, T−3h reached',
+        formula: 'is_frozen = (scheduled_start − now) <= freeze_window',
+        factors: [ { name: 'time to start', v: 0.99, detail: '2h 55m' } ],
+        resultLabel: 'state', result: 'FROZEN' },
+      { tag: 'notify', color: '#f0eee9', time: '13:59:58',
+        text: 'Reminder email queued for Priya Raman · SMS + push ack requested from Tan Wei Ming',
+        formula: 'channels = [email(customer), push(technician)] · ack required within 15 min',
+        factors: [ { name: 'delivered', v: 1, detail: '2 / 2' }, { name: 'acked', v: 0.5, detail: '1 / 2' } ],
+        resultLabel: 'status', result: 'SENT' },
+    ];
+  }
+
+  renderVals() {
+    const v = this.state.view, fh = this.state.freeze;
+    const navDef = [
+      ['dash', 'Dashboard', 0], ['timeline', 'Master timeline', 0], ['queue', 'Technicians', 0],
+      ['hitl', 'Approvals', 2], ['settings', 'Settings', 0],
+    ];
+    const navItems = navDef.map(([id, label, badge]) => ({
+      label, badge: badge && !Object.keys(this.state.hitl).length ? badge : (badge - Object.keys(this.state.hitl).length > 0 ? badge - Object.keys(this.state.hitl).length : null),
+      go: id === 'queue' ? this.nav('queue') : this.nav(id),
+      style: `display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;text-align:left;font-family:inherit;font-size:13px;font-weight:${v === id ? 600 : 400};color:${v === id ? '#171613' : '#57534d'};background:${v === id ? '#e6e3dd' : 'transparent'};border:none;border-radius:7px;padding:9px 10px;cursor:pointer`,
+    }));
+
+    const techs = this.techs();
+    const logs = this.logDefs().map((l, i) => ({
+      tag: '[' + l.tag + ']', time: l.time, text: l.text, formula: l.formula,
+      tagStyle: `color:${l.color};flex-shrink:0`,
+      open: this.state.open === i,
+      toggle: () => this.setState(s => ({ open: s.open === i ? null : i })),
+      factors: l.factors.map(f => ({ name: f.name, detail: f.detail,
+        barStyle: `height:100%;width:${Math.round(f.v * 100)}%;background:${l.color};border-radius:4px` })),
+      resultLabel: l.resultLabel, result: l.result,
+      hasOptions: !!l.hasOptions,
+      options: (l.options || []).map(o => ({ title: o.title, body: o.body, cost: o.cost,
+        style: `border:1px solid ${o.best ? '#3f6f4a' : '#2e2b25'};background:${o.best ? '#17251b' : '#191713'};border-radius:8px;padding:11px 12px` })),
+    }));
+
+    const fillDefs = [['urgent', 5, 6], ['priority', 6, 9], ['standard', 9, 12], ['flexible', 3, 8]];
+    const tierFill = fillDefs.map(([k, a, b]) => ({
+      name: TIER[k].name, label: a + ' / ' + b, dot: this.dot(TIER[k].color),
+      barStyle: `height:100%;width:${Math.round((a / b) * 100)}%;background:${TIER[k].color};border-radius:3px`,
+    }));
+
+    const hours = [];
+    for (let h = H0; h < H1; h++) hours.push({ label: (h < 10 ? '0' : '') + h + ':00' });
+    const gridCells = hours.map((h, i) => ({
+      style: `position:absolute;top:0;bottom:0;left:${(i / SPAN) * 100}%;width:${100 / SPAN}%;border-left:1px solid #f3f1ee`,
+    }));
+
+    const ganttRows = techs.map(t => ({
+      name: t.name, initials: t.initials, load: t.load, avatarStyle: this.avatar(t.color),
+      blocks: t.blocks.map(b => {
+        const frozen = b.s < NOW + fh;
+        const c = TIER[b.t].color;
+        return {
+          customer: b.c, meta: b.a + ' · ' + TIER[b.t].name.toLowerCase(),
+          tooltip: `${b.c} — ${b.a} — ${TIER[b.t].name} — ${frozen ? 'frozen' : 'movable'}`,
+          style: `position:absolute;top:7px;bottom:7px;left:${this.pct(b.s)}%;width:${((b.e - b.s) / SPAN) * 100}%;background:${c};color:#fff;border-radius:6px;padding:6px 8px;overflow:hidden;cursor:grab;box-shadow:0 1px 2px rgba(0,0,0,.12);${frozen ? 'outline:2px solid rgba(0,0,0,.28);outline-offset:-2px;' : ''}`,
+        };
+      }),
+    }));
+
+    const techCards = techs.map(t => ({
+      name: t.name, initials: t.initials, area: t.area, status: t.status, load: t.load,
+      avatarStyle: this.avatar(t.color, 38),
+      statusStyle: `font-size:11px;font-family:'IBM Plex Mono',monospace;padding:3px 8px;border-radius:20px;white-space:nowrap;background:${t.status === 'Available' ? '#e8f5ec' : t.status === 'Off shift' ? '#f0eeea' : '#fdf0e3'};color:${t.status === 'Available' ? '#15803d' : t.status === 'Off shift' ? '#77736d' : '#b45309'}`,
+      skills: t.skills.map(s => ({ label: s, style: `font-family:'IBM Plex Mono',monospace;font-size:10.5px;background:#f4f2ef;border:1px solid #e5e2dd;border-left:3px solid ${SKILL[s].color};border-radius:5px;padding:3px 7px;color:#4a4741` })),
+      barStyle: `height:100%;width:${t.pct}%;background:${t.pct > 80 ? '#d0342c' : t.pct > 60 ? '#e07a1f' : '#16a34a'};border-radius:3px`,
+    }));
+
+    const hitlDefs = [
+      { id: 'h1', level: 'LEVEL 2 · OVERRIDE', color: '#d0342c', reason: 'change inside the freeze window',
+        age: '2 min ago',
+        title: 'Muhammad Faizal reported sick — 16:30 job for Siti Nabilah is already frozen',
+        body: 'The appointment starts in 2h 25m, inside the T−3h freeze window. No agent may move it automatically. Approving sends an apology notification and a S$20 service credit alongside the new slot.',
+        proposal: 'proposed  → reassign JOB-2465 to Nur Aisyah Rahim, 16:45–18:15\ntravel    → +18 min, arrives 15 min later than promised\nnotify    → customer: apology + credit · technician: push with ack\nreject    → job stays unassigned, coordinator handles by phone' },
+      { id: 'h2', level: 'LEVEL 1 · BUMP', color: '#e07a1f', reason: 'moves a confirmed lower-tier job',
+        age: '5 min ago',
+        title: 'Urgent JOB-2470 needs the 10:30 slot held by a Standard booking',
+        body: 'Disruption Agent prefers option B (reassign to R. Kumar, no customer affected) but option A frees the closest technician. Both stay outside the freeze window.',
+        proposal: 'option A → move Marcus Lee 10:30 → 17:00, same technician   cost 0.34\noption B → assign JOB-2470 to R. Kumar, +24 min travel      cost 0.18  ← agent pick\nsla      → both keep the 24h urgent promise' },
+      { id: 'h3', level: 'LEVEL 1 · CAPACITY', color: '#2563eb', reason: 'buffer would drop below target',
+        age: '11 min ago',
+        title: 'Accept a Flexible booking on 09 Sep with only 1 emergency slot left?',
+        body: 'Historical arrivals suggest 3 urgent jobs on a Wednesday. Accepting now earns S$75 but risks turning away an S$141 job later in the week.',
+        proposal: 'accept       → revenue +S$75, buffer 2 → 1 slot\nsuggest alt  → offer 11 Sep instead, buffer stays at 2\nexpected value difference: −S$31 if a third urgent job arrives' },
+    ];
+    const hitlItems = hitlDefs.map(h => {
+      const st = this.state.hitl[h.id];
+      return {
+        level: h.level, reason: h.reason, age: h.age, title: h.title, body: h.body, proposal: h.proposal,
+        cardStyle: `background:#fff;border:1px solid ${st ? '#e0ddd7' : '#e0ddd7'};border-left:4px solid ${st === 'rejected' ? '#a8a49c' : h.color};border-radius:12px;padding:16px 18px;opacity:${st ? .72 : 1}`,
+        levelStyle: `font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.04em;color:#fff;background:${h.color};border-radius:4px;padding:3px 7px`,
+        pending: !st, resolved: !!st,
+        approve: () => this.setState(s => ({ hitl: { ...s.hitl, [h.id]: 'approved' } })),
+        reject: () => this.setState(s => ({ hitl: { ...s.hitl, [h.id]: 'rejected' } })),
+        doneLabel: st === 'approved' ? '✓ Approved — Notification Agent has sent the update and is waiting for the technician ack' : '✗ Rejected — handed back to the coordinator, no message sent',
+        doneStyle: `font-size:12px;font-family:'IBM Plex Mono',monospace;color:${st === 'approved' ? '#15803d' : '#77736d'};background:${st === 'approved' ? '#eef7f1' : '#f4f2ef'};border-radius:7px;padding:9px 11px`,
+      };
+    });
+
+    const pending = hitlDefs.filter(h => !this.state.hitl[h.id]).length;
+
+    return {
+      isDash: v === 'dash', isTimeline: v === 'timeline', isTechMgmt: v === 'queue',
+      isHitl: v === 'hitl', isSettings: v === 'settings',
+      navItems: navItems.map(n => n.label === 'Approvals' ? { ...n, badge: pending || null } : n),
+      goHitl: this.nav('hitl'),
+      freezeHours: fh,
+      setFreeze: e => { const val = +e.target.value; this.setState({ freeze: val }); },
+      rerunLabel: this.state.rerun ? 'Re-planning…' : 'Re-run scheduling',
+      rerun: () => { this.setState(s => ({ rerun: s.rerun + 1 })); setTimeout(() => this.setState({ rerun: 0 }), 1400); },
+      stats: [
+        { label: 'Jobs today', value: '18', sub: '4 urgent' },
+        { label: 'Awaiting assignment', value: '3', sub: 'in pipeline' },
+        { label: 'Needs approval', value: String(pending), sub: pending ? 'blocking' : 'clear' },
+        { label: 'Frozen next ' + fh + 'h', value: '6', sub: 'locked' },
+      ],
+      logs, tierFill, hitlItems,
+      hitlPreview: hitlDefs.filter(h => !this.state.hitl[h.id]).slice(0, 2).map(h => ({ reason: h.level, title: h.title })),
+      pipeline: [
+        { stage: 'Intake parsing', count: '1', dot: this.dot('#34d399') },
+        { stage: 'Capacity check', count: '1', dot: this.dot('#a78bfa') },
+        { stage: 'Scoring', count: '1', dot: this.dot('#4ea1ff') },
+        { stage: 'Awaiting approval', count: String(pending), dot: this.dot('#e07a1f') },
+        { stage: 'Assigned today', count: '18', dot: this.dot('#c9c5be') },
+      ],
+      hours, gridCells, ganttRows, techCards,
+      nowLineStyle: `position:absolute;top:0;bottom:0;left:${this.pct(NOW)}%;width:2px;background:#171613;z-index:3`,
+      frozenBandStyle: `position:absolute;top:0;bottom:0;left:${this.pct(NOW)}%;width:${(fh / SPAN) * 100}%;background:repeating-linear-gradient(45deg,rgba(120,115,108,.16) 0 4px,rgba(120,115,108,.05) 4px 8px);z-index:2;pointer-events:none`,
+      tierLegend: Object.keys(TIER).map(k => ({ name: TIER[k].name, dot: this.dot(TIER[k].color) })),
+      tiers: Object.keys(TIER).map(k => ({ name: TIER[k].name, window: TIER[k].window, delta: TIER[k].delta, price: TIER[k].price, dot: this.dot(TIER[k].color) })),
+      skillTaxonomy: Object.keys(SKILL).map(k => ({ tag: k, desc: SKILL[k].desc })),
+    };
+  }
+}
+
+</script>
+</body>
+</html>

@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  body { margin:0; background:#edebe7; }
+  * { box-sizing:border-box; }
+  a { color:#2563eb; text-decoration:none; }
+  a:hover { color:#1d4ed8; }
+  @keyframes blink { 0%,49%{opacity:1} 50%,100%{opacity:0} }
+  @keyframes slidein { from{opacity:0; transform:translateY(-6px)} to{opacity:1; transform:none} }
+</style>
+</helmet>
+<div style="min-height:100vh; background:#edebe7; font-family:'IBM Plex Sans',system-ui,sans-serif; color:#1a1917; -webkit-font-smoothing:antialiased">
+
+  <div style="display:flex; align-items:center; justify-content:space-between; gap:20px; padding:0 18px; height:54px; background:#171613; color:#f2f0ec; position:sticky; top:0; z-index:50">
+    <div style="display:flex; align-items:center; gap:11px; min-width:0">
+      <div style="width:20px; height:20px; border-radius:5px; background:#2563eb; flex-shrink:0"></div>
+      <div style="font-weight:600; letter-spacing:-0.01em">CoolFix</div>
+      <div style="font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:#8a857e; border:1px solid #35322d; border-radius:4px; padding:2px 6px; white-space:nowrap">TECHNICIAN · SG</div>
+    </div>
+    <div style="display:flex; gap:2px; background:#242220; padding:3px; border-radius:8px; flex-shrink:0">
+      <a href="CoolFix Admin.dc.html" style="font-size:12.5px; color:#8a857e; padding:6px 12px; border-radius:6px">Company</a>
+      <span style="font-size:12.5px; font-weight:500; color:#f2f0ec; background:#3a3733; border-radius:6px; padding:6px 12px">Technician</span>
+      <a href="CoolFix Customer.dc.html" style="font-size:12.5px; color:#8a857e; padding:6px 12px; border-radius:6px">Customer</a>
+    </div>
+  </div>
+
+  <div style="max-width:560px; margin:0 auto; padding:16px 14px 64px">
+
+    <!-- notification -->
+    <sc-if value="{{ showToast }}" hint-placeholder-val="{{ true }}">
+      <div style="background:#171613; color:#f2f0ec; border-radius:11px; padding:13px 14px; display:flex; gap:12px; align-items:flex-start; margin-bottom:14px; animation:slidein .3s ease">
+        <div style="width:8px; height:8px; border-radius:50%; background:#e07a1f; margin-top:6px; flex-shrink:0; animation:blink 1.4s infinite"></div>
+        <div style="flex:1; min-width:0">
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:#8a857e; letter-spacing:.04em">SCHEDULE CHANGED · 14:02</div>
+          <div style="font-size:13.5px; line-height:1.5; margin-top:4px">Urgent job added at 15:00 — Chen Xiuying, Havelock Rd. Your 16:00 service was moved to tomorrow 09:00.</div>
+        </div>
+        <button onClick="{{ ack }}" style="font-family:inherit; font-size:12px; font-weight:500; background:#f2f0ec; color:#171613; border:none; border-radius:7px; padding:8px 12px; cursor:pointer; flex-shrink:0">Acknowledge</button>
+      </div>
+    </sc-if>
+    <sc-if value="{{ acked }}" hint-placeholder-val="{{ false }}">
+      <div style="background:#eef7f1; border:1px solid #cfe6d8; color:#15803d; border-radius:11px; padding:11px 14px; font-size:12.5px; margin-bottom:14px; font-family:'IBM Plex Mono',monospace">✓ acknowledged 14:06 · dispatch notified</div>
+    </sc-if>
+
+    <sc-if value="{{ listView }}" hint-placeholder-val="{{ true }}">
+    <div>
+      <!-- header -->
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px">
+        <div style="width:42px; height:42px; border-radius:11px; background:#2563eb; color:#fff; display:flex; align-items:center; justify-content:center; font-family:'IBM Plex Mono',monospace; font-size:14px; font-weight:600">WM</div>
+        <div style="flex:1; min-width:0">
+          <div style="font-size:16px; font-weight:600">Tan Wei Ming</div>
+          <div style="font-size:12px; color:#77736d">Central · Bukit Merah · gas CoC</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:17px; font-weight:600">2 / 5</div>
+          <div style="font-size:11px; color:#77736d">done today</div>
+        </div>
+      </div>
+
+      <!-- next 3 hours -->
+      <div style="{{ nextCardStyle }}">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px">
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.06em; color:rgba(255,255,255,.75)">NEXT 3 HOURS · URGENT</div>
+          <div style="font-size:11px; font-family:'IBM Plex Mono',monospace; background:rgba(0,0,0,.22); border-radius:5px; padding:3px 8px">🔒 locked</div>
+        </div>
+        <div style="display:flex; align-items:flex-end; justify-content:space-between; gap:14px; flex-wrap:wrap">
+          <div style="min-width:0">
+            <div style="font-size:21px; font-weight:600; letter-spacing:-0.02em">Chen Xiuying</div>
+            <div style="font-size:13.5px; opacity:.92; margin-top:3px">Blk 12 Havelock Rd, #05-118</div>
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:12.5px; opacity:.85; margin-top:7px">15:00 – 16:30 · not cooling · split 9k</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:32px; font-weight:600; letter-spacing:-0.03em">{{ countdown }}</div>
+            <div style="font-size:11px; opacity:.8">until start</div>
+          </div>
+        </div>
+        <div style="display:flex; gap:8px; margin-top:14px; flex-wrap:wrap">
+          <button onClick="{{ openJob }}" style="flex:1; min-width:130px; font-family:inherit; font-size:13px; font-weight:600; background:#fff; color:#1a1917; border:none; border-radius:8px; padding:12px; cursor:pointer">Open job</button>
+          <button style="flex:1; min-width:130px; font-family:inherit; font-size:13px; font-weight:500; background:rgba(0,0,0,.22); color:#fff; border:none; border-radius:8px; padding:12px; cursor:pointer">Navigate</button>
+        </div>
+        <div style="margin-top:12px; padding-top:11px; border-top:1px solid rgba(255,255,255,.22); font-size:12px; line-height:1.55; opacity:.92">
+          Bring: R32 gauge set, drain pump. Customer notes the unit smells damp — check the drain pan first.
+        </div>
+      </div>
+
+      <!-- week -->
+      <div style="display:flex; align-items:center; justify-content:space-between; margin:20px 0 10px">
+        <div style="font-size:15px; font-weight:600">This week</div>
+        <div style="font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:#77736d">07 – 13 Sep</div>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:8px">
+        <sc-for list="{{ days }}" as="d" hint-placeholder-count="7">
+          <div style="{{ d.cardStyle }}">
+            <div style="display:flex; align-items:center; gap:10px; padding:11px 13px">
+              <div style="{{ d.dateStyle }}">
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; opacity:.7">{{ d.dow }}</div>
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:15px; font-weight:600">{{ d.date }}</div>
+              </div>
+              <div style="flex:1; min-width:0; font-size:12.5px; color:#77736d">{{ d.summary }}</div>
+              <div style="display:flex; gap:4px">
+                <sc-for list="{{ d.pips }}" as="p" hint-placeholder-count="3">
+                  <span style="{{ p.style }}"></span>
+                </sc-for>
+              </div>
+            </div>
+            <sc-if value="{{ d.hasJobs }}" hint-placeholder-val="{{ true }}">
+              <div style="border-top:1px solid #f0eeea; padding:6px; display:flex; flex-direction:column; gap:4px">
+                <sc-for list="{{ d.jobs }}" as="j" hint-placeholder-count="3">
+                  <button onClick="{{ j.open }}" style="{{ j.style }}">
+                    <span style="font-family:'IBM Plex Mono',monospace; font-size:12px; color:#57534d; flex-shrink:0">{{ j.time }}</span>
+                    <span style="{{ j.bar }}"></span>
+                    <span style="flex:1; min-width:0; text-align:left; font-size:13px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">{{ j.customer }}</span>
+                    <span style="font-size:11.5px; color:#8b8781; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:38%">{{ j.place }}</span>
+                    <span style="{{ j.lockStyle }}">{{ j.lock }}</span>
+                  </button>
+                </sc-for>
+              </div>
+            </sc-if>
+          </div>
+        </sc-for>
+      </div>
+
+      <!-- next week preview -->
+      <div style="margin-top:18px; background:#f4f2ef; border:1px dashed #d8d4cd; border-radius:12px; padding:14px">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:11px">
+          <div style="font-size:13.5px; font-weight:600; color:#57534d">Next week · provisional</div>
+          <span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:#8b8781">14 – 20 Sep</span>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(7,1fr); gap:6px">
+          <sc-for list="{{ nextWeek }}" as="n" hint-placeholder-count="7">
+            <div style="text-align:center; background:#fff; border:1px solid #e5e2dd; border-radius:8px; padding:8px 4px">
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; color:#8b8781">{{ n.dow }}</div>
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:15px; font-weight:600; margin:3px 0 5px">{{ n.count }}</div>
+              <div style="display:flex; justify-content:center; gap:3px">
+                <sc-for list="{{ n.pips }}" as="p" hint-placeholder-count="2">
+                  <span style="{{ p.style }}"></span>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="font-size:11.5px; color:#8b8781; margin-top:10px; line-height:1.5">Flexible jobs may still move until 3 hours before the appointment.</div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ─── Job detail ─── -->
+    <sc-if value="{{ detailView }}" hint-placeholder-val="{{ false }}">
+    <div>
+      <button onClick="{{ back }}" style="font-family:inherit; font-size:13px; color:#57534d; background:none; border:none; padding:0 0 12px; cursor:pointer">← Back to schedule</button>
+
+      <div style="background:#fff; border:1px solid #e0ddd7; border-radius:12px; overflow:hidden">
+        <div style="{{ detailHeadStyle }}">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:10px">
+            <span style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.06em">JOB-2471 · URGENT</span>
+            <span style="font-family:'IBM Plex Mono',monospace; font-size:11px; background:rgba(0,0,0,.22); border-radius:5px; padding:3px 8px">🔒 frozen · T−0h 52m</span>
+          </div>
+          <div style="font-size:22px; font-weight:600; margin-top:9px; letter-spacing:-0.02em">Chen Xiuying</div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; opacity:.9; margin-top:3px">Today 15:00 – 16:30 · 90 min est.</div>
+        </div>
+
+        <div style="padding:16px">
+          <div style="display:flex; flex-direction:column; gap:14px">
+            <div>
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:#8b8781; letter-spacing:.05em; margin-bottom:5px">ADDRESS</div>
+              <div style="font-size:14px; line-height:1.5">Blk 12 Havelock Road, #05-118<br>Singapore 160012</div>
+              <button style="margin-top:9px; font-family:inherit; font-size:12.5px; font-weight:500; background:#f6f5f2; border:1px solid #e0ddd7; border-radius:7px; padding:9px 13px; cursor:pointer">Open in Maps · 3.1 km</button>
+            </div>
+            <div>
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:#8b8781; letter-spacing:.05em; margin-bottom:5px">CUSTOMER DESCRIPTION</div>
+              <div style="font-size:13.5px; line-height:1.6; color:#3d3a35">Bedroom unit stopped cooling since last night. Still blows air but not cold, and there is a damp smell near the vent. Unit is about 4 years old.</div>
+            </div>
+            <div>
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:#8b8781; letter-spacing:.05em; margin-bottom:6px">PHOTOS FROM CUSTOMER</div>
+              <div style="display:flex; gap:8px">
+                <sc-for list="{{ photos }}" as="p" hint-placeholder-count="2">
+                  <div style="{{ p.style }}"><span style="font-family:'IBM Plex Mono',monospace; font-size:10px; color:#8b8781">{{ p.label }}</span></div>
+                </sc-for>
+              </div>
+            </div>
+            <div>
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:#8b8781; letter-spacing:.05em; margin-bottom:6px">AGENT NOTES</div>
+              <div style="background:#f6f5f2; border:1px solid #e5e2dd; border-radius:8px; padding:11px 12px; font-family:'IBM Plex Mono',monospace; font-size:11.5px; line-height:1.7; color:#4a4741; white-space:pre-wrap">skill required → refrigerant_handling (you hold gas CoC)
+parsed fault  → not_cooling + suspected drain blockage
+assigned      → score 0.86 · closest qualified technician
+frozen at     → 12:00, no further changes expected</div>
+            </div>
+          </div>
+        </div>
+
+        <div style="border-top:1px solid #e0ddd7; padding:14px 16px; background:#faf9f7">
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:#8b8781; letter-spacing:.05em; margin-bottom:9px">UPDATE STATUS</div>
+          <div style="display:flex; gap:7px">
+            <sc-for list="{{ statusBtns }}" as="b" hint-placeholder-count="3">
+              <button onClick="{{ b.go }}" style="{{ b.style }}">{{ b.label }}</button>
+            </sc-for>
+          </div>
+          <div style="font-size:11.5px; color:#8b8781; margin-top:10px; line-height:1.5">{{ statusNote }}</div>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:600,&quot;height&quot;:900}}">
+const TIER = {
+  urgent:   { name: 'Urgent',   color: '#d0342c' },
+  priority: { name: 'Priority', color: '#e07a1f' },
+  standard: { name: 'Standard', color: '#2563eb' },
+  flexible: { name: 'Flexible', color: '#16a34a' },
+};
+
+class Component extends DCLogic {
+  state = { view: 'list', acked: false, status: 0, secs: 52 * 60 + 14 };
+
+  componentDidMount() {
+    this.timer = setInterval(() => this.setState(s => ({ secs: s.secs > 0 ? s.secs - 1 : 0 })), 1000);
+  }
+  componentWillUnmount() { clearInterval(this.timer); }
+
+  pip(tier, dim) {
+    return `width:7px;height:7px;border-radius:2px;background:${TIER[tier].color};opacity:${dim ? .45 : 1};display:inline-block`;
+  }
+
+  dayDefs() {
+    return [
+      { dow: 'MON', date: '07', today: true, jobs: [
+        { time: '08:30', customer: 'Serene Goh',   place: 'AMK Ave 3',    tier: 'urgent',   done: true },
+        { time: '10:30', customer: 'Marcus Lee',   place: 'Tiong Bahru',  tier: 'standard', done: true },
+        { time: '13:00', customer: 'Priya Raman',  place: 'Redhill Cl',   tier: 'priority', frozen: true },
+        { time: '15:00', customer: 'Chen Xiuying', place: 'Havelock Rd',  tier: 'urgent',   frozen: true, next: true },
+      ] },
+      { dow: 'TUE', date: '08', jobs: [
+        { time: '09:00', customer: 'Alvin Teo',    place: 'Queenstown',   tier: 'standard' },
+        { time: '11:00', customer: 'Hafiz Rahman', place: 'Bukit Merah',  tier: 'flexible' },
+        { time: '14:30', customer: 'Ng Bee Hoon',  place: 'Alexandra Rd', tier: 'priority' },
+      ] },
+      { dow: 'WED', date: '09', jobs: [
+        { time: '10:00', customer: 'Clara Sim',    place: 'Bukit Timah',  tier: 'standard' },
+        { time: '15:30', customer: 'Ridzuan Ali',  place: 'Depot Rd',     tier: 'flexible' },
+      ] },
+      { dow: 'THU', date: '10', jobs: [
+        { time: '08:30', customer: 'Lee Kah Meng', place: 'Outram Pk',    tier: 'priority' },
+        { time: '11:30', customer: 'Amanda Foo',   place: 'Telok Blangah',tier: 'standard' },
+        { time: '16:00', customer: 'Tan Boon Kiat',place: 'Kampong Bahru',tier: 'flexible' },
+      ] },
+      { dow: 'FRI', date: '11', jobs: [
+        { time: '09:30', customer: 'Sheela Devi',  place: 'Jalan Bukit Merah', tier: 'standard' },
+        { time: '13:30', customer: 'Wong Mei Ling',place: 'Kim Tian Rd',  tier: 'priority' },
+      ] },
+      { dow: 'SAT', date: '12', jobs: [
+        { time: '10:00', customer: 'Ashley Lau',   place: 'Everton Pk',   tier: 'flexible' },
+      ] },
+      { dow: 'SUN', date: '13', jobs: [] },
+    ];
+  }
+
+  renderVals() {
+    const s = this.state;
+    const m = Math.floor(s.secs / 60), sec = s.secs % 60;
+    const days = this.dayDefs().map(d => {
+      const total = d.jobs.length;
+      return {
+        dow: d.dow, date: d.date,
+        cardStyle: `background:#fff;border:1px solid ${d.today ? '#171613' : '#e0ddd7'};border-radius:11px;overflow:hidden`,
+        dateStyle: `width:44px;text-align:center;border-radius:8px;padding:5px 0;background:${d.today ? '#171613' : '#f4f2ef'};color:${d.today ? '#fff' : '#57534d'};flex-shrink:0`,
+        summary: total ? total + (total > 1 ? ' jobs' : ' job') + (d.today ? ' · 2 done, 1 in freeze window' : '') : 'Rest day',
+        pips: d.jobs.map(j => ({ style: this.pip(j.tier, j.done) })),
+        hasJobs: total > 0,
+        jobs: d.jobs.map(j => ({
+          time: j.time, customer: j.customer, place: j.place,
+          open: () => this.setState({ view: 'detail' }),
+          style: `display:flex;align-items:center;gap:9px;width:100%;font-family:inherit;text-align:left;background:${j.next ? '#fdf1f0' : 'transparent'};border:none;border-radius:8px;padding:8px 9px;cursor:pointer;opacity:${j.done ? .5 : 1}`,
+          bar: `width:3px;height:22px;border-radius:2px;background:${TIER[j.tier].color};flex-shrink:0`,
+          lock: j.done ? '✓' : j.frozen ? '🔒' : '',
+          lockStyle: 'font-size:11px;color:#8b8781;width:14px;text-align:right;flex-shrink:0',
+        })),
+      };
+    });
+
+    const nw = [
+      ['MON', 3, ['standard', 'flexible']], ['TUE', 2, ['priority']], ['WED', 4, ['standard', 'flexible']],
+      ['THU', 2, ['standard']], ['FRI', 3, ['priority', 'flexible']], ['SAT', 1, ['flexible']], ['SUN', 0, []],
+    ];
+    const statusLabels = ['On the way', 'Arrived', 'Completed'];
+    const notes = [
+      'Tapping a status pushes it straight back to dispatch — the Technician-State Agent uses it to re-score the rest of your day.',
+      'Dispatch sees you are en route. The customer got an arrival window update.',
+      'Arrival logged at 14:58. Two minutes early.',
+      'Job closed. Your 16:00 slot is now free and back in the planning pool.',
+    ];
+
+    return {
+      listView: s.view === 'list',
+      detailView: s.view === 'detail',
+      showToast: !s.acked,
+      acked: s.acked,
+      ack: () => this.setState({ acked: true }),
+      openJob: () => this.setState({ view: 'detail' }),
+      back: () => this.setState({ view: 'list' }),
+      countdown: '0:' + (m < 10 ? '0' : '') + m + ':' + (sec < 10 ? '0' : '') + sec,
+      nextCardStyle: `background:${TIER.urgent.color};color:#fff;border-radius:14px;padding:16px 17px;box-shadow:0 2px 10px rgba(208,52,44,.22)`,
+      detailHeadStyle: `background:${TIER.urgent.color};color:#fff;padding:15px 16px`,
+      days,
+      nextWeek: nw.map(([dow, count, tiers]) => ({
+        dow, count: count || '—',
+        pips: tiers.map(t => ({ style: this.pip(t, true) })),
+      })),
+      photos: [
+        { label: 'indoor unit', style: 'width:96px;height:76px;border-radius:8px;border:1px solid #e0ddd7;background:repeating-linear-gradient(135deg,#f4f2ef 0 6px,#eae7e2 6px 12px);display:flex;align-items:center;justify-content:center' },
+        { label: 'water stain', style: 'width:96px;height:76px;border-radius:8px;border:1px solid #e0ddd7;background:repeating-linear-gradient(135deg,#f4f2ef 0 6px,#eae7e2 6px 12px);display:flex;align-items:center;justify-content:center' },
+      ],
+      statusBtns: statusLabels.map((label, i) => ({
+        label,
+        go: () => this.setState({ status: i + 1 }),
+        style: `flex:1;font-family:inherit;font-size:12.5px;font-weight:${s.status === i + 1 ? 600 : 500};background:${s.status > i ? '#171613' : '#fff'};color:${s.status > i ? '#fff' : '#1a1917'};border:1px solid ${s.status > i ? '#171613' : '#d8d4cd'};border-radius:8px;padding:11px 6px;cursor:pointer`,
+      })),
+      statusNote: notes[s.status],
+    };
+  }
+}
+
+</script>
+</body>
+</html>

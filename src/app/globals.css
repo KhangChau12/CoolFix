@@ -1,0 +1,213 @@
+/* ── CoolFix design system ──────────────────────────────────────────
+   Tokens follow the Claude Design mockups in
+   "CoolFix platform design overview/*.dc.html" (Admin / Customer /
+   Technician). Kept in one file so all three interfaces stay consistent.
+*/
+
+:root {
+  /* Brand */
+  --bg: #edebe7;
+  --bg-customer: #faf9f6;
+  --surface: #ffffff;
+  --surface-2: #f6f5f2;
+  --border: #e0ddd7;
+  --border-strong: #c9c5be;
+  --text: #1a1917;
+  --text-muted: #77736d;
+  --text-faint: #8b8781;
+  --brand: #2563eb; /* accent / links */
+  --brand-ink: #1d4ed8;
+  --brand-tint: #eff6ff;
+
+  /* Dark "ink" surfaces — top bar, dark agent-feed panel */
+  --ink: #171613;
+  --ink-2: #1c1a16;
+  --ink-3: #14130f;
+  --ink-border: #2e2b25;
+  --ink-text: #f2f0ec;
+  --ink-text-muted: #a29d95;
+  --ink-text-faint: #6d6963;
+
+  /* Tier colours */
+  --tier-urgent: #d0342c;   /* 🔴 Urgent (24h) */
+  --tier-priority: #e07a1f; /* 🟠 Priority (3 days) */
+  --tier-standard: #2563eb; /* 🔵 Standard (1 week) */
+  --tier-flexible: #16a34a; /* 🟢 Flexible (2 weeks) */
+  --tier-urgent-bg: #fdf1f0;
+  --tier-priority-bg: #fdf6ee;
+  --tier-standard-bg: #eff6ff;
+  --tier-flexible-bg: #eef7f1;
+
+  /* Job status colours */
+  --status-pending: #8b8781;      /* Grey = pending */
+  --status-soon: #e07a1f;         /* Amber = upcoming */
+  --status-frozen: #15803d;       /* Dark green = schedule locked (frozen) */
+  --status-disrupting: #d0342c;   /* Red = agent considering a reschedule */
+
+  /* Agent accent colours for the feed (dark-panel palette) */
+  --agent-pricing: #a78bfa;
+  --agent-intake: #34d399;
+  --agent-capacity: #a78bfa;
+  --agent-techstate: #94a3b8;
+  --agent-assignment: #4ea1ff;
+  --agent-disruption: #fb923c;
+  --agent-notification: #f0eee9;
+  --agent-orchestrator: #f2f0ec;
+
+  /* Promoted one-off hex values (previously hardcoded inline) */
+  --success: #15803d;
+  --success-bg: #eef7f1;
+  --success-border: #cfe6d8;
+  --danger-strong: #991b1b;
+  --llm-tint: #f5f3ff;
+  --llm-ink: #6d28d9;
+  --llm-border: #ddd6fe;
+  --frozen-border: #052e16;
+  --disrupted-border: #7f1d1d;
+  --skill-chip-border: #a5f3fc;
+
+  --radius: 10px;
+  --radius-sm: 7px;
+  --shadow-sm: 0 1px 2px rgba(26, 25, 23, 0.06);
+  --shadow: 0 4px 16px rgba(26, 25, 23, 0.08);
+  --shadow-lg: 0 12px 40px rgba(26, 25, 23, 0.16);
+  --font: 'IBM Plex Sans', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: 'IBM Plex Mono', "SF Mono", "Roboto Mono", Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+html, body { padding: 0; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--brand); text-decoration: none; }
+a:hover { color: var(--brand-ink); text-decoration: underline; }
+button { font-family: inherit; cursor: pointer; }
+input, select, textarea { font-family: inherit; font-size: 14px; }
+h1, h2, h3, h4 { margin: 0 0 0.4em; line-height: 1.25; }
+::selection { background: var(--brand-tint); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; border: 3px solid transparent; background-clip: content-box; }
+
+/* ── Reusable primitives ────────────────────────────────────────── */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+  font-size: 13px;
+  transition: background 0.12s, border-color 0.12s, transform 0.05s;
+}
+.btn:hover { background: var(--surface-2); }
+.btn:active { transform: translateY(1px); }
+.btn-primary {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: #fff;
+}
+.btn-primary:hover { background: #242220; }
+.btn-approve { background: var(--success); border-color: var(--success); color: #fff; }
+.btn-approve:hover { background: #116932; }
+.btn-danger { background: var(--tier-urgent); border-color: var(--tier-urgent); color: #fff; }
+.btn-danger:hover { background: #b32b24; }
+.btn-ghost { border-color: transparent; background: transparent; }
+.btn-lg { padding: 13px 22px; font-size: 15px; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.tier-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.tier-badge.urgent { background: var(--tier-urgent-bg); color: var(--tier-urgent); }
+.tier-badge.priority { background: var(--tier-priority-bg); color: var(--tier-priority); }
+.tier-badge.standard { background: var(--tier-standard-bg); color: var(--tier-standard); }
+.tier-badge.flexible { background: var(--tier-flexible-bg); color: var(--tier-flexible); }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.chip.skill { background: var(--brand-tint); color: var(--brand-ink); border-color: var(--skill-chip-border); }
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex: none;
+}
+.status-dot.pending { background: var(--status-pending); }
+.status-dot.assigned { background: var(--status-soon); }
+.status-dot.frozen { background: var(--status-frozen); }
+.status-dot.in_progress { background: var(--brand); }
+.status-dot.completed { background: var(--text-faint); }
+.status-dot.disrupted { background: var(--status-disrupting); }
+
+.muted { color: var(--text-muted); }
+.faint { color: var(--text-faint); }
+.mono { font-family: var(--mono); font-size: 12px; }
+.pill-count {
+  display: inline-flex; min-width: 20px; height: 20px; padding: 0 6px;
+  align-items: center; justify-content: center;
+  border-radius: 999px; background: var(--tier-urgent); color: #fff;
+  font-size: 11px; font-weight: 700;
+}
+
+/* ── Layout scaffolding ─────────────────────────────────────────── */
+.container { max-width: 1400px; margin: 0 auto; padding: 0 24px; }
+.stack { display: flex; flex-direction: column; gap: 16px; }
+.row { display: flex; gap: 12px; align-items: center; }
+.spread { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.grid { display: grid; gap: 16px; }
+
+/* ── Animations ─────────────────────────────────────────────────── */
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+@keyframes blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+.live-dot {
+  width: 8px; height: 8px; border-radius: 999px;
+  background: #16a34a;
+  animation: pulse 1.6s ease-in-out infinite;
+}
