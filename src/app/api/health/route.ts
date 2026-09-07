@@ -8,9 +8,24 @@ import * as repo from "@/lib/repo";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
+  const mode = process.env.LLM_MODE ?? "stub";
   const out: Record<string, unknown> = {
     ok: true,
-    llm_mode: process.env.LLM_MODE ?? "stub",
+    llm_mode: mode,
+    llm_provider_ready:
+      mode === "stub"
+        ? true
+        : mode === "bedrock"
+          ? Boolean(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY)
+          : mode === "openai"
+            ? Boolean(process.env.OPENAI_API_KEY)
+            : false,
+    llm_model:
+      mode === "bedrock"
+        ? process.env.BEDROCK_MODEL_ID ?? "apac.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        : mode === "openai"
+          ? process.env.OPENAI_MODEL ?? "gpt-4o-mini"
+          : null,
     supabase_env: hasSupabaseEnv(),
     llm: llmStats(),
   };

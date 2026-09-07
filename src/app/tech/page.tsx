@@ -6,7 +6,7 @@ import { useRealtime } from "@/components/useRealtime";
 import { TopBar } from "@/components/TopBar";
 import { TierBadge } from "@/components/ui";
 import { TIER_META, type Job, type NotificationRecord, type Technician } from "@/lib/types";
-import { hoursBetween, isFrozen, nowISO } from "@/lib/time";
+import { fmtSGDateTime, hoursBetween, isFrozen, nowISO } from "@/lib/time";
 
 export default function TechApp() {
   const [techs, setTechs] = useState<Technician[]>([]);
@@ -48,6 +48,10 @@ export default function TechApp() {
     return h >= -1 && h <= 3;
   });
   const unackNotes = notes.filter((n) => !n.acknowledged);
+  const recentAcked = notes
+    .filter((n) => n.acknowledged)
+    .sort((a, b) => (b.acknowledged_at ?? "").localeCompare(a.acknowledged_at ?? ""))
+    .slice(0, 3);
 
   async function ack(id: string) {
     await apiSend(`/api/notifications/${id}/ack`, "POST");
@@ -94,7 +98,7 @@ export default function TechApp() {
       </div>
 
       <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 16 }}>
-        {/* notifications */}
+        {/* notifications — awaiting acknowledgement */}
         {unackNotes.length > 0 && (
           <div className="stack" style={{ gap: 8 }}>
             {unackNotes.map((n) => (
@@ -108,6 +112,41 @@ export default function TechApp() {
                 <button className="btn btn-primary" style={{ fontSize: 12, padding: "6px 12px" }} onClick={() => ack(n.notification_id)}>
                   ✓ Seen
                 </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* acknowledged — keep a short trail so it's clear the tap registered
+            (the coordinator sees the same acknowledgement on their side) */}
+        {recentAcked.length > 0 && (
+          <div className="stack" style={{ gap: 6 }}>
+            <div className="faint" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+              Acknowledged
+            </div>
+            {recentAcked.map((n) => (
+              <div
+                key={n.notification_id}
+                className="row"
+                style={{
+                  gap: 8,
+                  fontSize: 11.5,
+                  color: "var(--text-muted)",
+                  padding: "7px 10px",
+                  border: "1px solid var(--border)",
+                  borderRadius: 8,
+                  background: "var(--success-bg)",
+                }}
+              >
+                <span style={{ color: "var(--success)", fontWeight: 700 }}>✓</span>
+                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {n.subject}
+                </span>
+                {n.acknowledged_at && (
+                  <span className="mono faint" style={{ fontSize: 10 }}>
+                    {fmtSGDateTime(n.acknowledged_at)}
+                  </span>
+                )}
               </div>
             ))}
           </div>

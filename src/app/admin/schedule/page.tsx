@@ -40,7 +40,7 @@ export default function SchedulePage() {
   const [techs, setTechs] = useState<Technician[]>([]);
   const [dayOffset, setDayOffset] = useState(0);
   const [hover, setHover] = useState<Job | null>(null);
-  const [freezeHours, setFreezeHours] = useState(3);
+  const [freezeHours, setFreezeHours] = useState(2);
 
   const load = useCallback(async () => {
     const [j, t] = await Promise.all([

@@ -28,6 +28,15 @@ export function serviceClient(): SupabaseClient {
   if (!_service) {
     _service = createClient(URL, SERVICE, {
       auth: { persistSession: false, autoRefreshToken: false },
+      // Next.js patches global fetch and caches responses inside route
+      // handlers. Supabase makes its calls through that fetch, so without
+      // this a table that was queried once (e.g. notifications, before any
+      // row existed) keeps serving the stale empty result even though the
+      // route is `dynamic`. Force every DB round-trip to bypass the cache.
+      global: {
+        fetch: (input: RequestInfo | URL, init?: RequestInit) =>
+          fetch(input, { ...init, cache: "no-store" }),
+      },
     });
   }
   return _service;

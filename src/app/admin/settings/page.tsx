@@ -142,9 +142,9 @@ export default function SettingsPage() {
         </div>
       </Section>
 
-      <Section title="LLM mode" hint="stub = deterministic fixtures, no AWS calls. bedrock = live Claude Sonnet 4.5 on AWS Bedrock.">
+      <Section title="LLM mode" hint="stub = deterministic fixtures, no API calls. bedrock = live Claude Sonnet 4.5 on AWS Bedrock. openai = OpenAI Chat Completions.">
         <div className="row" style={{ gap: 8 }}>
-          {(["stub", "bedrock"] as const).map((m) => (
+          {(["stub", "bedrock", "openai"] as const).map((m) => (
             <button
               key={m}
               className="chip"

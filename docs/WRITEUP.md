@@ -31,17 +31,24 @@ human approved.
 Customer booking
    │
    ▼
-Pricing Engine ........... rule      deterministic price from skill × tier
-   ▼
 Job-Intake Agent ......... LLM       free-text → {skill_required, urgency, window}
    ▼
-Capacity/Yield Agent ..... rule      hard daily thresholds from config
+Pricing Engine ........... rule      deterministic price from skill × tier (priced once, on the real skills)
+   ▼
+Capacity/Yield Agent ..... rule      daily thresholds + per-skill saturation forecast
    ▼
 Technician-State Agent ... rule      roster + location + load (state store)
    ▼
 Assignment/Scoring Agent . rule      transparent formula, skill = hard filter
+   ▼
+Assignment Tie-break ..... LLM       ambiguity-only: close scores / one strained
+   │                                 candidate / urgent with no strong fit. Picks
+   │                                 within the eligible top-3; the pick is
+   │                                 re-scored against live state before commit.
+   │                                 Unambiguous ranking → this agent never runs.
    ├─ no conflict ───────────────→ auto-commit → Notification Agent (LLM)
-   └─ conflict (must bump) ──────→ Disruption Agent (LLM: narrate + rank re-plans)
+   ├─ no eligible technician ────→ Assignment Edge-case Agent (LLM: widen / split / pair / escalate)
+   └─ conflict (must bump) ──────→ Disruption Agent (LLM: designs the re-plan)
                                      ├─ low impact ─────────→ auto-commit
                                      └─ customer impact OR
                                         frozen job touched ─→ HITL Approval Gate
@@ -55,26 +62,42 @@ order at the end. The reasoning loop's state is explicit and inspectable, not
 smeared across ad-hoc queries.
 
 **Why some agents are not LLMs — a deliberate decision.** Pricing, capacity,
-and technician-state are pure rules / bookkeeping. Putting an LLM there would
-add latency, cost, and non-determinism for zero benefit, and would make the
-system *less* trustworthy. LLMs are used only where genuine natural-language
-reasoning is needed:
+technician-state and the core scoring formula are pure rules / bookkeeping.
+Putting an LLM there would add latency, cost, and non-determinism for zero
+benefit, and would make the system *less* trustworthy. LLMs are used only
+where genuine judgement is needed — and even then, the rule layer bounds
+what the LLM can choose from and re-checks what it picked:
 
-| Agent | LLM? | Why |
+| Agent | LLM? | Why / how it's bounded |
 |---|---|---|
-| Pricing | no | `base_price[skill] × tier_multiplier` — must be exact and free |
 | Job-Intake | **yes** | interpreting a customer's free-text symptom description |
-| Capacity | no | threshold comparison against config |
+| Pricing | no | `base_price[skill] × tier_multiplier` — must be exact and free |
+| Capacity | no | threshold + per-skill saturation, both deterministic |
 | Technician-State | no | a database query |
-| Assignment/Scoring | no (LLM reserved for flagged edge cases) | the formula is transparent and auditable by design |
-| Disruption | **yes** | narrating and ranking trade-offs for a human reader |
+| Assignment/Scoring | no | the formula is transparent and auditable by design |
+| Assignment Tie-break | **yes**, ambiguity-only | runs only when the formula is a coin-flip; picks within the eligible top-3, and the pick is re-scored against live state before commit — it can re-order the eligible set, never reach past it |
+| Assignment Edge-case | **yes**, no-candidate-only | picks one pre-validated lever (widen window / split visit / supervised pair / escalate) |
+| Disruption | **yes** | designs the re-plan inside a pre-verified legal slot space; every move is cross-checked and the plan re-simulated against live state |
 | Notification | **yes** | writing a natural message for a customer / technician |
 
-The stub mode (`LLM_MODE=stub`) returns deterministic fixtures so the demo
-runs offline and never touches AWS credit; `LLM_MODE=bedrock` calls the real
-Claude Sonnet 4.5 model per the hackathon infra rules. A per-process call
-budget hard-stops runaway loops. Results are cached by input hash so
-re-running a demo step is free.
+The pattern is the same everywhere an LLM has authority: **the rule layer
+enumerates a legal space, the LLM chooses within it, the rule layer
+re-validates the choice.** The LLM never produces a value that could bypass a
+hard constraint, and every fallback is deterministic.
+
+The LLM client (`src/lib/llm.ts`) has one entry point (`callLlm`) and three
+interchangeable modes behind the same prompt frame and JSON contract, so
+switching providers touches no agent code:
+
+- `LLM_MODE=stub` (default) — deterministic fixtures; the demo runs offline
+  and never spends credit.
+- `LLM_MODE=bedrock` — Claude Sonnet 4.5 on AWS Bedrock (`InvokeModel`).
+- `LLM_MODE=openai` — OpenAI Chat Completions over plain `fetch` (no extra
+  SDK), `response_format: json_object` to hold the contract.
+
+A per-process call budget hard-stops runaway loops, and results are cached by
+input hash so re-running a demo step is free. `/api/health` reports the
+active mode and whether its credentials are present.
 
 ## 3. Tool use & typed schemas
 
@@ -147,10 +170,11 @@ off. That table is:
   Disruption Agent's options side by side;
 - the **observability artifact** for this submission.
 
-`scripts/eval.ts` runs **23 assertions** across 7 scenarios — golden-path
-(clean assignment, bump→HITL→approve, reject-keeps-schedule) and adversarial
-(prompt injection, oversized input, invalid tier, no-certified-technician).
-All green.
+`scripts/eval.ts` runs a golden-path + adversarial suite — clean assignment,
+ambiguous-score tie-break, bump→HITL→approve, reject-keeps-schedule,
+edge-case widen-window, and adversarial cases (prompt injection, oversized
+input, invalid tier, no-certified-technician). Each scenario re-seeds first
+so cases are independent; the run exits non-zero on any failed assertion.
 
 ## 7. Platform & tooling
 
@@ -167,6 +191,7 @@ All green.
 - Routing uses straight-line (haversine) distance, not real drive times — kept
   offline-safe and cost-free for the demo; a maps API is a drop-in behind
   `geo.ts`.
-- The Capacity Agent is threshold-based; a historical-yield model is the
-  documented next step.
+- The Capacity Agent combines fleet-wide caps with a per-skill saturation
+  forecast (certified technicians × slots/day, and the tight window around the
+  requested time); a historical-yield model is the documented next step.
 - Manual drag-drop override on the Gantt is not yet wired (view + hover only).

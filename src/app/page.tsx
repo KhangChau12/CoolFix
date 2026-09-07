@@ -31,11 +31,11 @@ const CARDS = [
 ];
 
 const PIPELINE = [
-  { name: "Pricing", kind: "RULE", color: "var(--agent-pricing)" },
   { name: "Job-Intake", kind: "LLM", color: "var(--agent-intake)" },
+  { name: "Pricing", kind: "RULE", color: "var(--agent-pricing)" },
   { name: "Capacity", kind: "RULE", color: "var(--agent-capacity)" },
   { name: "Tech-State", kind: "RULE", color: "var(--agent-techstate)" },
-  { name: "Assignment", kind: "RULE", color: "var(--agent-assignment)" },
+  { name: "Assignment", kind: "LLM/RULE", color: "var(--agent-assignment)" },
   { name: "Disruption", kind: "LLM", color: "var(--agent-disruption)" },
   { name: "Notification", kind: "LLM", color: "#77736d" },
 ];
@@ -106,7 +106,7 @@ export default function Home() {
           className="muted"
           style={{ fontSize: 15.5, lineHeight: 1.65, marginTop: 16, maxWidth: 620 }}
         >
-          Customer bookings flow through pricing, intake, capacity and scoring
+          Customer bookings flow through intake, pricing, capacity and scoring
           agents that auto-assign a certified technician — and stop for a
           coordinator's approval the moment a re-plan would touch a real
           customer or a locked appointment.

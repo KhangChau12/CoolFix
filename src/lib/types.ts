@@ -195,7 +195,8 @@ export type PipelineStage =
   | "awaiting_approval"
   | "done";
 
-/** Single source of truth for pipeline-stage order + labels (Queue page, Dashboard). */
+/** Single source of truth for pipeline-stage order + labels (Queue page, Dashboard).
+ * Order matches the orchestrator: intake first, then pricing on the real skills. */
 export const PIPELINE_STAGES: { key: PipelineStage; label: string }[] = [
   { key: "intake", label: "Intake" },
   { key: "pricing", label: "Pricing" },
@@ -223,6 +224,8 @@ export type AgentName =
   | "CapacityAgent"
   | "TechnicianStateAgent"
   | "AssignmentAgent"
+  | "AssignmentTiebreakAgent"
+  | "AssignmentEdgecaseAgent"
   | "DisruptionAgent"
   | "NotificationAgent"
   | "Orchestrator";
@@ -274,6 +277,10 @@ export interface ReplanOption {
   option_id: string;
   label: string;
   summary: string;
+  /** For LLM-designed plans: the model's own one-sentence justification for
+   * THIS plan (distinct from `summary`, which describes the trade-off
+   * numbers). Absent on mechanical fallback options. */
+  plan_rationale?: string;
   moves: {
     job_id: string;
     customer_name: string;
@@ -286,6 +293,13 @@ export interface ReplanOption {
     total_added_travel_km: number;
     sla_breaches: number;
     frozen_jobs_touched: number;
+    /** Total hours every moved job is pushed away from its original slot
+     * (sum of |from − to| across moves). Lower is less disruptive. */
+    total_shift_hours?: number;
+    /** Smallest gap, in hours, between any moved job's new slot and the
+     * nearest OTHER job on the same technician. A small value means the job
+     * was squeezed in tight; a comfortable re-plan keeps this large. */
+    tightest_gap_hours?: number;
   };
   recommended: boolean;
 }
@@ -345,7 +359,7 @@ export interface RuntimeConfig {
   capacityTotalPerDay: number;
   /** Base price (SGD) per required skill. */
   basePrice: Record<SkillTag, number>;
-  llmMode: "stub" | "bedrock";
+  llmMode: "stub" | "bedrock" | "openai";
 }
 
 export const DEFAULT_CONFIG: RuntimeConfig = {

@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { apiSend } from "@/lib/client";
+import { apiGet, apiSend } from "@/lib/client";
+import { useRealtime } from "@/components/useRealtime";
 import { TopBar } from "@/components/TopBar";
 import { SG_LANDMARKS } from "@/lib/geo";
+import { hoursBetween, nowISO } from "@/lib/time";
 import {
   PROBLEM_CATEGORIES,
   TIER_META,
@@ -12,6 +14,8 @@ import {
   TIER_SLA_TEXT,
   DEFAULT_CONFIG,
   CATEGORY_HINT_SKILL,
+  type Job,
+  type Technician,
   type Tier,
 } from "@/lib/types";
 import type { PipelineResult } from "@/agents/orchestrator";
@@ -232,7 +236,7 @@ export default function BookPage() {
               </button>
             </div>
             <p className="faint" style={{ fontSize: 11, marginTop: 10 }}>
-              On submit, the multi-agent pipeline runs: pricing → intake → capacity →
+              On submit, the multi-agent pipeline runs: intake → pricing → capacity →
               scoring → assignment (and disruption handling if needed).
             </p>
           </div>
@@ -289,18 +293,69 @@ function Stepper({ step }: { step: Step }) {
   );
 }
 
+function fmtWhen(iso: string): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Singapore",
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(iso));
+}
+
+/** "in ~3h" / "in ~40 min" / "started" — a friendly ETA from now. */
+function etaText(iso: string): string {
+  const h = hoursBetween(nowISO(), iso);
+  if (h <= 0) return "now / in progress";
+  if (h < 1) return `in ~${Math.round(h * 60)} min`;
+  if (h < 24) return `in ~${Math.round(h)}h`;
+  return `in ~${Math.round(h / 24)} day${Math.round(h / 24) > 1 ? "s" : ""}`;
+}
+
 function TrackView({ result }: { result: PipelineResult }) {
-  const j = result.job;
+  // Start from the pipeline's own result, then keep it live: the booking
+  // may be rescheduled by the Disruption Agent or a coordinator after this
+  // page loads, and the customer should see that without a refresh.
+  const [job, setJob] = useState<Job>(result.job);
+  const [tech, setTech] = useState<Technician | null>(null);
+  const jobId = result.job.job_id;
+
+  const load = useCallback(async () => {
+    try {
+      const { job, technician } = await apiGet<{ job: Job; technician: Technician | null }>(
+        `/api/jobs/${jobId}`,
+      );
+      setJob(job);
+      setTech(technician);
+    } catch {
+      /* keep last-known */
+    }
+  }, [jobId]);
+
+  const conn = useRealtime("jobs", load);
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const j = job;
+  const freezeHours = Math.max(
+    0,
+    Math.round(hoursBetween(j.freeze_point, j.scheduled_time)),
+  );
+  const rescheduled = j.reschedule_history.length > 0;
+
   const milestones = [
     { key: "received", label: "Request received", done: true },
     {
       key: "assigned",
-      label: "Technician assigned",
+      label: tech ? `Technician assigned — ${tech.name}` : "Technician assigned",
       done: ["assigned", "frozen", "in_progress", "completed"].includes(j.status),
     },
     {
       key: "locked",
-      label: "Schedule locked (T−3h)",
+      label: `Schedule locked (T−${freezeHours}h)`,
       done: ["frozen", "in_progress", "completed"].includes(j.status),
     },
     { key: "done", label: "Completed", done: j.status === "completed" },
@@ -313,6 +368,36 @@ function TrackView({ result }: { result: PipelineResult }) {
         <span className="chip">{TIER_META[j.tier].emoji} {TIER_META[j.tier].label}</span>
       </div>
       <p className="muted" style={{ fontSize: 13 }}>{result.message}</p>
+
+      {/* live technician + ETA card, once assigned */}
+      {tech && ["assigned", "frozen", "in_progress"].includes(j.status) && (
+        <div
+          className="row"
+          style={{
+            gap: 12,
+            marginTop: 12,
+            padding: "12px 14px",
+            borderRadius: 10,
+            background: "var(--surface-2)",
+            border: "1px solid var(--border)",
+          }}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={tech.photo_url}
+            alt={tech.name}
+            width={44}
+            height={44}
+            style={{ borderRadius: 999, flexShrink: 0 }}
+          />
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>{tech.name}</div>
+            <div className="muted" style={{ fontSize: 12 }}>
+              {tech.experience_level} · arriving {etaText(j.scheduled_time)} ({fmtWhen(j.scheduled_time)})
+            </div>
+          </div>
+        </div>
+      )}
 
       <div style={{ display: "grid", gap: 0, marginTop: 12 }}>
         {milestones.map((m, i) => (
@@ -343,33 +428,35 @@ function TrackView({ result }: { result: PipelineResult }) {
 
       <dl style={{ fontSize: 12, display: "grid", gridTemplateColumns: "110px 1fr", gap: "4px 12px", marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
         <dt className="muted">Scheduled</dt>
-        <dd style={{ margin: 0 }}>
-          {new Intl.DateTimeFormat("en-GB", {
-            timeZone: "Asia/Singapore",
-            weekday: "short",
-            day: "2-digit",
-            month: "short",
-            hour: "2-digit",
-            minute: "2-digit",
-            hour12: false,
-          }).format(new Date(j.scheduled_time))}
-        </dd>
+        <dd style={{ margin: 0 }}>{fmtWhen(j.scheduled_time)}</dd>
         <dt className="muted">Price</dt>
         <dd style={{ margin: 0 }}>{j.price} SGD</dd>
         <dt className="muted">Status</dt>
-        <dd style={{ margin: 0 }}>{result.status.replace(/_/g, " ")}</dd>
+        <dd style={{ margin: 0 }}>{j.status.replace(/_/g, " ")}</dd>
       </dl>
 
-      {result.status === "awaiting_approval" && (
+      {rescheduled && (
         <p style={{ fontSize: 12, color: "var(--tier-priority)", marginTop: 10 }}>
-          Your urgent request needs a coordinator to approve a small schedule change.
-          You'll be notified shortly.
+          Your appointment was moved to fit an urgent job nearby (last change:{" "}
+          {j.reschedule_history.at(-1)?.reason}). The new time is shown above.
         </p>
       )}
 
-      <Link href="/book" className="btn" style={{ marginTop: 16 }} onClick={() => location.reload()}>
-        Make another booking
-      </Link>
+      {result.status === "awaiting_approval" && !rescheduled && (
+        <p style={{ fontSize: 12, color: "var(--tier-priority)", marginTop: 10 }}>
+          Your urgent request needs a coordinator to approve a small schedule change.
+          This page updates automatically when it&apos;s confirmed.
+        </p>
+      )}
+
+      <div className="row" style={{ gap: 8, marginTop: 16, flexWrap: "wrap" }}>
+        <Link href="/book" className="btn" onClick={() => location.reload()}>
+          Make another booking
+        </Link>
+        <span className="faint" style={{ fontSize: 10.5, alignSelf: "center" }}>
+          {conn === "live" ? "● live" : conn === "polling" ? "○ auto-refreshing" : "connecting…"}
+        </span>
+      </div>
     </div>
   );
 }

@@ -4,7 +4,11 @@
 
 import { AgentContext } from "./context";
 import { logDecision } from "./log";
-import { applyReplan, notifyReschedule } from "./orchestrator";
+import {
+  applyReplan,
+  incomingJobClashAfterReplan,
+  notifyReschedule,
+} from "./orchestrator";
 import { runNotificationAgent } from "./notification";
 import * as repo from "@/lib/repo";
 import { computeFreezePoint, isFrozen, nowISO } from "@/lib/time";
@@ -69,6 +73,50 @@ export async function resolveApproval(input: ResolveInput): Promise<ResolveResul
     };
   }
 
+  // ── Proposal-type approval (edge-case split visit / supervised pair) ──
+  // These carry no re-plan options — the agent proposed a non-standard
+  // dispatch and the coordinator is confirming it will be run by hand.
+  // Nothing is moved automatically; the job returns to the queue tagged
+  // as coordinator-owned, with a full audit line.
+  if (approval.options.length === 0) {
+    const acknowledged: Job = {
+      ...incoming,
+      status: "pending",
+      pipeline_stage: "awaiting_approval",
+    };
+    ctx.stageJob(acknowledged);
+    await repo.resolveApproval(approval.approval_id, {
+      status: "approved",
+      resolved_by: input.coordinatorName,
+      resolved_at: nowISO(),
+    });
+    await repo.updateDecisionApproval(
+      approval.disruption_log_id,
+      input.coordinatorName,
+      "approved",
+    );
+    logDecision(ctx, {
+      agent: "Orchestrator",
+      jobId: approval.job_id,
+      reasoningKind: "rule",
+      input: { approval_id: approval.approval_id, decision: "approve", kind: "proposal" },
+      output: { result: "proposal_acknowledged" },
+      headline: `${input.coordinatorName} ACCEPTED the edge-case proposal — will dispatch manually`,
+      outcome: "approved",
+      approvedBy: input.coordinatorName,
+      guardrailNotes: [
+        "Non-standard dispatch: the agent proposes, the coordinator confirms and executes — no automatic schedule change.",
+      ],
+    });
+    await ctx.flush();
+    return {
+      ok: true,
+      message:
+        "Proposal accepted. The job stays in the queue for you to dispatch manually as agreed.",
+      decisionLogIds: ctx.decisions.map((d) => d.log_id),
+    };
+  }
+
   // approve
   const optionId = input.chosenOptionId ?? approval.options.find((o) => o.recommended)?.option_id;
   const chosen = approval.options.find((o) => o.option_id === optionId);
@@ -80,6 +128,31 @@ export async function resolveApproval(input: ResolveInput): Promise<ResolveResul
       : "Re-plan approved by the coordinator";
 
   applyReplan(ctx, chosen.option_id, approval.options, input.coordinatorName, reason);
+
+  // Last-line integrity check: after the moves are applied, the incoming
+  // job's slot must be clear on its technician. If the chosen option would
+  // leave a collision, refuse to commit rather than double-book.
+  const clash = incomingJobClashAfterReplan(ctx, approval.job_id);
+  if (clash) {
+    logDecision(ctx, {
+      agent: "Orchestrator",
+      jobId: approval.job_id,
+      reasoningKind: "rule",
+      input: { approval_id: approval.approval_id, decision: "approve", option: chosen.option_id },
+      output: { result: "rejected_integrity_check", clashing_job: clash },
+      headline: `Re-plan blocked — it would still leave ${incoming.customer_name} double-booked with job ${clash}`,
+      outcome: "rejected",
+      guardrailNotes: [
+        "Post-apply safety check: the incoming job's slot was not clear after the re-plan — nothing was committed.",
+      ],
+    });
+    await ctx.flush();
+    return {
+      ok: false,
+      message: `That plan would still double-book the technician (clash with job ${clash}). Pick another option or reject.`,
+      decisionLogIds: ctx.decisions.map((d) => d.log_id),
+    };
+  }
 
   // Commit the incoming job onto its technician.
   const now = nowISO();

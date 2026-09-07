@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { apiGet } from "@/lib/client";
 import { useRealtime } from "@/components/useRealtime";
 import { TierBadge, StatusDot, EmptyState } from "@/components/ui";
@@ -95,6 +96,13 @@ export default function QueuePage() {
                     {j.assigned_technician_id && ` · → ${j.assigned_technician_id}`}
                   </div>
                 </div>
+                <Link
+                  href={`/admin/jobs/${j.job_id}`}
+                  className="btn btn-ghost"
+                  style={{ fontSize: 11.5, flexShrink: 0 }}
+                >
+                  View pipeline →
+                </Link>
               </div>
 
               {/* pipeline progress */}

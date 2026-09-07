@@ -43,9 +43,11 @@ on the Admin dashboard and the observability artifact for the submission.
 - **Next.js 14** (App Router) + TypeScript — one app, all three UIs + agent API
 - **Supabase** (Postgres + Realtime) — data store; the Reasoning Feed subscribes
   to `agent_decision_log` inserts
-- **AWS Bedrock — Claude Sonnet 4.5** for LLM calls (`LLM_MODE=bedrock`), with a
-  deterministic **stub mode** (`LLM_MODE=stub`, the default) so the demo runs
-  offline and never burns AWS credit
+- **LLM calls** via one client (`src/lib/llm.ts`) with three interchangeable modes —
+  same prompt frame + JSON contract, so no agent code changes:
+  - `LLM_MODE=stub` (default) — deterministic fixtures, no network, no credit burned
+  - `LLM_MODE=bedrock` — Claude Sonnet 4.5 on AWS Bedrock
+  - `LLM_MODE=openai` — OpenAI Chat Completions (`OPENAI_MODEL`, default `gpt-4o-mini`)
 
 ## Local setup
 
@@ -79,4 +81,6 @@ npm run dev                     # http://localhost:3000
 
 ## Environment variables
 
-See `.env.example`. `LLM_MODE=stub` needs no AWS credentials.
+See `.env.example`. `LLM_MODE=stub` needs no LLM credentials.
+`LLM_MODE=openai` needs `OPENAI_API_KEY`; `LLM_MODE=bedrock` needs AWS credentials.
+Check `/api/health` — `llm_provider_ready` tells you whether the selected mode has its credentials.

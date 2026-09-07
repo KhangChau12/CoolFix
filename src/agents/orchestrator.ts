@@ -3,10 +3,13 @@
 // booking, wiring typed outputs from each agent into the next, deciding
 // auto-commit vs. HITL, and flushing all state + logs at the end.
 //
-//   Pricing → Intake → Capacity → Technician-State → Assignment
+//   Intake → Pricing → Capacity → Technician-State → Assignment
 //     ├─ no conflict ─────────────→ commit + notify
 //     └─ conflict ─→ Disruption ─→ auto-commit + notify
 //                              └─→ HITL approval gate (stop here)
+//
+// Pricing runs AFTER intake (on the real required skills), not before —
+// there is no provisional price pass on the dropdown hint.
 
 import { AgentContext } from "./context";
 import { logDecision } from "./log";
@@ -15,7 +18,16 @@ import { runJobIntakeAgent } from "./jobIntake";
 import { runCapacityAgent } from "./capacity";
 import { runTechnicianStateAgent } from "./technicianState";
 import { runAssignmentAgent } from "./assignment";
+import {
+  detectAmbiguity,
+  loneCandidateIsStrained,
+  runAssignmentTiebreakAgent,
+} from "./assignmentTiebreak";
 import { runDisruptionAgent } from "./disruption";
+import {
+  buildEdgecaseSpace,
+  runAssignmentEdgecaseAgent,
+} from "./assignmentEdgecase";
 import { runNotificationAgent } from "./notification";
 import {
   validateBookingRequest,
@@ -24,11 +36,12 @@ import {
 import {
   addHours,
   computeFreezePoint,
+  findTimeClash,
   isFrozen,
   nowISO,
   snapToServiceHours,
 } from "@/lib/time";
-import { CATEGORY_HINT_SKILL, type ApprovalRequest, type Job } from "@/lib/types";
+import type { ApprovalRequest, Job } from "@/lib/types";
 
 export interface PipelineResult {
   job: Job;
@@ -64,20 +77,14 @@ export async function runBookingPipeline(
     guardrailNotes: ["Booking passed schema validation (least-privilege, oversize-guarded)."],
   });
 
-  // ── 1. Pricing (rule) ───────────────────────────────────────────
-  // Skill not known yet → price on the dropdown hint, re-price after intake.
-  const hintSkill = CATEGORY_HINT_SKILL[booking.problem_category] ?? "basic_maintenance";
-  let pricing = runPricingEngine(ctx, {
-    jobId,
-    skillRequired: [hintSkill],
-    tier: booking.tier,
-  });
-
-  // ── 2. Job-Intake (LLM) ─────────────────────────────────────────
+  // ── 1. Job-Intake (LLM) ─────────────────────────────────────────
   const intake = await runJobIntakeAgent(ctx, jobId, booking);
 
-  // Re-price now that we know the real required skills.
-  pricing = runPricingEngine(ctx, {
+  // ── 2. Pricing (rule) ───────────────────────────────────────────
+  // Priced once, after intake, on the real required skills — no
+  // provisional pass on the dropdown hint (it never reached the customer
+  // and only added noise to the activity feed).
+  const pricing = runPricingEngine(ctx, {
     jobId,
     skillRequired: intake.skill_required,
     tier: booking.tier,
@@ -90,6 +97,7 @@ export async function runBookingPipeline(
     jobId,
     tier: booking.tier,
     proposedSlotHours: slotHours,
+    skillRequired: intake.skill_required,
   });
 
   if (capacity.decision === "suggest_alternative_slot" && capacity.alternative_slot_hours) {
@@ -148,8 +156,179 @@ export async function runBookingPipeline(
 
   const decisionLogIds = () => ctx.decisions.map((d) => d.log_id);
 
-  // 5a. Unassignable — needs human / edge-case handling.
+  // ── 5·½. Assignment tie-break (LLM, ambiguity-only) ────────────
+  // The formula gives a clean, deterministic ranking. But when the top
+  // pick is effectively a coin-flip, or the only eligible technician is
+  // strained, a coordinator would weigh things the formula does not — so
+  // we ask the LLM. It picks within the eligible top-3 and its choice is
+  // re-scored against live state; otherwise the formula's pick stands.
+  // This never runs on an unambiguous ranking (the common case).
+  if (assignment.assigned_technician_id && !assignment.conflict) {
+    const eligible = assignment.candidates
+      .filter((c) => c.eligible && c.breakdown)
+      .sort((a, b) => b.breakdown!.total - a.breakdown!.total);
+
+    let trigger = detectAmbiguity(assignment.candidates, { tier: booking.tier });
+    if (!trigger && eligible.length === 1) {
+      trigger = loneCandidateIsStrained(
+        ctx,
+        eligible[0].technician_id,
+        booking.location,
+      );
+    }
+
+    if (trigger) {
+      const tb = await runAssignmentTiebreakAgent(ctx, {
+        input: {
+          jobId,
+          jobLocation: booking.location,
+          address: booking.address,
+          skillRequired: intake.skill_required,
+          tier: booking.tier,
+          urgencyHint: intake.urgency_hint,
+          scheduledTime,
+        },
+        trigger,
+        formulaTopId: assignment.assigned_technician_id,
+        shortlistIds: eligible.slice(0, 3).map((c) => c.technician_id),
+      });
+      // Adopt the tie-breaker's (re-validated) choice for every downstream
+      // branch. If it kept the formula's pick this is a no-op.
+      assignment.assigned_technician_id = tb.technicianId;
+      assignment.score_breakdown = tb.scoreBreakdown;
+    }
+  }
+
+  // 5a. No technician from the formula — try the LLM edge-case levers
+  // before giving up, then escalate if nothing safe fits.
   if (!assignment.assigned_technician_id) {
+    if (assignment.needs_llm_edgecase) {
+      const edgeInput = {
+        jobId,
+        jobLocation: booking.location,
+        skillRequired: intake.skill_required,
+        urgencyHint: intake.urgency_hint,
+        scheduledTime,
+      };
+      const space = buildEdgecaseSpace(ctx, edgeInput);
+      const edge = await runAssignmentEdgecaseAgent(ctx, { input: edgeInput, space });
+
+      // Lever 1: widen_window → commit like a clean assignment, new slot.
+      if (edge.action === "widen_window" && edge.resolvedAssignment) {
+        const newTime = edge.resolvedAssignment.scheduled_time;
+        const newFreeze = computeFreezePoint(newTime, ctx.config.freezeWindowHours);
+        job = {
+          ...job,
+          scheduled_time: newTime,
+          freeze_point: newFreeze,
+          status: isFrozen(newFreeze, now) ? "frozen" : "assigned",
+          assigned_technician_id: edge.resolvedAssignment.technician_id,
+          score_breakdown: edge.resolvedAssignment.score_breakdown,
+          pipeline_stage: "assigned",
+        };
+        ctx.stageJob(job);
+        ctx.stageWorkload(edge.resolvedAssignment.technician_id, +1);
+        await notifyAssignment(ctx, jobId);
+        logDecision(ctx, {
+          agent: "Orchestrator",
+          jobId,
+          reasoningKind: "rule",
+          input: { eligible: 0, edgecase_action: "widen_window" },
+          output: { result: "assigned_auto", technician: edge.resolvedAssignment.technician_id },
+          headline: "Auto-commit: assigned via edge-case (widened time window)",
+          outcome: "auto_commit",
+          guardrailNotes: [
+            "Formula found no slot, but a certified technician was free nearby — the LLM's pick was re-scored against live state before commit.",
+          ],
+        });
+        await ctx.flush();
+        return {
+          job,
+          status: "assigned_auto",
+          decisionLogIds: decisionLogIds(),
+          notificationsSent: ctx.notifications.length,
+          llmCalls: countLlm(ctx),
+          message: `Assigned ${ctx.getTechnician(edge.resolvedAssignment.technician_id)?.name} at ${newTime} — ${edge.rationale}`,
+        };
+      }
+
+      // Levers 2/3: split_visit or pair — a proposal for the coordinator.
+      if (
+        (edge.action === "split_visit" || edge.action === "pair_junior_senior") &&
+        edge.proposalForHuman
+      ) {
+        const approval: ApprovalRequest = {
+          approval_id: `apr_${Date.now().toString(36)}`,
+          created_at: nowISO(),
+          kind: "standard",
+          job_id: jobId,
+          reason: `The scoring formula found no single technician. The edge-case agent proposes: ${edge.proposalForHuman}`,
+          disruption_log_id: edge.logId,
+          options: [],
+          chosen_option_id: null,
+          status: "pending",
+          resolved_by: null,
+          resolved_at: null,
+          frozen_jobs_impacted: [],
+        };
+        ctx.bufferApproval(approval);
+        job = { ...job, status: "pending", pipeline_stage: "awaiting_approval" };
+        ctx.stageJob(job);
+        logDecision(ctx, {
+          agent: "Orchestrator",
+          jobId,
+          reasoningKind: "rule",
+          input: { eligible: 0, edgecase_action: edge.action },
+          output: { result: "awaiting_approval", approval_id: approval.approval_id },
+          headline: "⏸ Paused — edge-case proposal needs coordinator approval",
+          outcome: "requires_approval",
+          requiresApproval: true,
+          guardrailNotes: [
+            "The agent proposes a non-standard dispatch (split visit / supervised pair); a human decides whether to run it.",
+          ],
+        });
+        await ctx.flush();
+        return {
+          job,
+          status: "awaiting_approval",
+          approval,
+          decisionLogIds: decisionLogIds(),
+          notificationsSent: 0,
+          llmCalls: countLlm(ctx),
+          message: `Edge-case proposal awaiting coordinator approval: ${edge.rationale}`,
+        };
+      }
+
+      // Lever 4 (or fallthrough): escalate — carry the agent's reasoning.
+      job = { ...job, status: "pending", pipeline_stage: "awaiting_approval" };
+      ctx.stageJob(job);
+      logDecision(ctx, {
+        agent: "Orchestrator",
+        jobId,
+        reasoningKind: "rule",
+        input: { eligible: 0, edgecase_action: "escalate" },
+        output: { result: "unassignable" },
+        headline: "No technician found — escalated to the coordinator",
+        outcome: "requires_approval",
+        requiresApproval: true,
+        guardrailNotes: [
+          "Stops at the right point: never forces a job onto an uncertified technician.",
+          "The edge-case agent checked every lever first and found none safe.",
+        ],
+      });
+      await ctx.flush();
+      return {
+        job,
+        status: "unassignable",
+        decisionLogIds: decisionLogIds(),
+        notificationsSent: 0,
+        llmCalls: countLlm(ctx),
+        message: edge.rationale,
+      };
+    }
+
+    // needs_llm_edgecase is false (a conflict path handled elsewhere, or a
+    // structural no-op) — plain escalation.
     job = { ...job, status: "pending", pipeline_stage: "awaiting_approval" };
     ctx.stageJob(job);
     logDecision(ctx, {
@@ -211,6 +390,21 @@ export async function runBookingPipeline(
   }
 
   // 5c. Conflict → Disruption Agent.
+  // Stage the incoming job onto its intended technician + slot FIRST, so
+  // every clash check inside the Disruption Agent (candidate-space
+  // generation and plan re-validation) treats it as a real obstacle. Without
+  // this the bumped job can be re-planned into a slot that still collides
+  // with the incoming job, because the incoming job was still unassigned in
+  // the schedule the agent reasoned over.
+  job = {
+    ...job,
+    status: "assigned",
+    assigned_technician_id: assignment.assigned_technician_id,
+    score_breakdown: assignment.score_breakdown,
+    pipeline_stage: "disruption_review",
+  };
+  ctx.stageJob(job);
+
   const disruption = await runDisruptionAgent(ctx, {
     incomingJobId: jobId,
     assignment,
@@ -257,6 +451,39 @@ export async function runBookingPipeline(
       "auto",
       "Urgent job took priority",
     );
+
+    // Last-line integrity check before auto-committing — if the re-plan
+    // somehow leaves the incoming job clashing, escalate to a human
+    // instead of double-booking.
+    const clash = incomingJobClashAfterReplan(ctx, jobId);
+    if (clash) {
+      job = { ...job, status: "pending", pipeline_stage: "awaiting_approval" };
+      ctx.stageJob(job);
+      logDecision(ctx, {
+        agent: "Orchestrator",
+        jobId,
+        reasoningKind: "rule",
+        input: { conflict: true, approval: false, auto_commit_blocked: true },
+        output: { result: "unassignable", clashing_job: clash },
+        headline: `Auto-commit blocked — the re-plan would still double-book the technician (job ${clash})`,
+        outcome: "requires_approval",
+        requiresApproval: true,
+        guardrailNotes: [
+          "Post-apply safety check failed — the pipeline refused to auto-commit a double-booking and handed the job to a coordinator.",
+        ],
+      });
+      await ctx.flush();
+      return {
+        job,
+        status: "unassignable",
+        decisionLogIds: decisionLogIds(),
+        notificationsSent: 0,
+        llmCalls: countLlm(ctx),
+        message:
+          "The automatic re-plan could not place this job cleanly. Escalated to the coordinator.",
+      };
+    }
+
     job = {
       ...job,
       status: "assigned",
@@ -385,6 +612,28 @@ export function applyReplan(
       ctx.stageWorkload(move.technician_id, +1);
     }
   }
+}
+
+/**
+ * Last-line integrity check before an incoming job is committed onto its
+ * technician: after the re-plan moves have been applied, the incoming job's
+ * slot must be clear of every other job on that technician (±90 min). The
+ * Disruption Agent's space generation and re-validation already enforce
+ * this, but this is cheap defence-in-depth against a state drift or a bad
+ * option reaching commit. Returns the clashing job id, or null if clean.
+ */
+export function incomingJobClashAfterReplan(
+  ctx: AgentContext,
+  incomingJobId: string,
+): string | null {
+  const job = ctx.getJob(incomingJobId);
+  if (!job || !job.assigned_technician_id) return null;
+  return findTimeClash(
+    ctx.jobs,
+    job.assigned_technician_id,
+    job.scheduled_time,
+    incomingJobId,
+  );
 }
 
 // ── Notification helpers ──────────────────────────────────────────

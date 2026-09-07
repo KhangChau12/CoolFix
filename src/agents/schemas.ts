@@ -154,49 +154,214 @@ export interface AssignmentResult {
 }
 
 // ── Disruption Agent output ──────────────────────────────────────
-// The LLM is only ever allowed to CHOOSE among option_ids we already
-// generated mechanically — it never returns moves/trade-offs itself, and
-// every id it returns is cross-checked against the shortlist we actually
-// offered (`knownOptionIds`). This is the first of two independent gates;
-// the second is disruption.ts's revalidateCandidate(), which re-checks
-// live constraint state regardless of what passes here.
+// The LLM DESIGNS the re-plan — it is not picking from a menu — but it may
+// only compose moves out of the pre-verified legal space we handed it
+// (`ReplanSpace`). Every move it emits is cross-checked here: the job must
+// be the bumped job or a declared movable soft job, the technician must be
+// one we listed, and the target slot must appear verbatim in that job's
+// allowed-slot list for that technician. This is the first of two
+// independent gates; the second is disruption.ts's revalidatePlan(), which
+// re-simulates the whole plan against live schedule state.
 
-export interface DisruptionLlmChoice {
-  ranked_option_ids: string[];
-  summaries: Record<string, string>;
-  recommended_option_id: string;
+/** Minimal shape of the space needed to cross-check a plan. Kept structural
+ * so schemas.ts doesn't import from disruption.ts (avoids a cycle). */
+export interface ReplanSpaceView {
+  bumpedJobId: string;
+  allowedSlotsByTech: Record<string, string[]>;
+  movableSoftJobs: {
+    job_id: string;
+    allowed_slots_by_tech: Record<string, string[]>;
+  }[];
+}
+
+export interface LlmPlanMove {
+  job_id: string;
+  to_tech_id: string;
+  to_slot_iso: string;
+}
+
+export interface LlmPlan {
+  plan_id: string;
+  moves: LlmPlanMove[];
+  rationale: string;
+}
+
+export interface DisruptionPlans {
+  plans: LlmPlan[];
+  recommended_plan_id: string;
   injection_attempt: boolean;
 }
 
-export function validateDisruptionLlmChoice(
+export function validateDisruptionPlans(
   x: unknown,
-  knownOptionIds: string[],
-): DisruptionLlmChoice {
+  space: ReplanSpaceView,
+): DisruptionPlans {
   const r = x as Record<string, unknown>;
-  assert(Array.isArray(r.ranked_option_ids), "disruption", "ranked_option_ids must be array");
+  assert(Array.isArray(r.plans), "disruption", "plans must be an array");
 
-  const known = new Set(knownOptionIds);
-  const rankedIds = (r.ranked_option_ids as unknown[]).filter(
-    (id): id is string => typeof id === "string" && known.has(id),
-  );
-  assert(rankedIds.length >= 1, "disruption", "no valid option_id survived cross-check against known candidates");
+  // Build the lookup of what each job is allowed to do.
+  const allowedByJob = new Map<string, Record<string, string[]>>();
+  allowedByJob.set(space.bumpedJobId, space.allowedSlotsByTech);
+  for (const m of space.movableSoftJobs) {
+    allowedByJob.set(m.job_id, m.allowed_slots_by_tech);
+  }
+
+  const moveIsLegal = (m: LlmPlanMove): boolean => {
+    if (
+      typeof m?.job_id !== "string" ||
+      typeof m?.to_tech_id !== "string" ||
+      typeof m?.to_slot_iso !== "string"
+    ) {
+      return false;
+    }
+    const allowed = allowedByJob.get(m.job_id);
+    if (!allowed) return false; // not the bumped job and not a declared movable soft job
+    const slots = allowed[m.to_tech_id];
+    if (!slots) return false; // technician not offered for this job
+    return slots.includes(m.to_slot_iso); // exact ISO string, no "close enough"
+  };
+
+  const plans: LlmPlan[] = [];
+  for (const raw of r.plans as unknown[]) {
+    const p = raw as Record<string, unknown>;
+    if (!Array.isArray(p?.moves) || p.moves.length === 0) continue;
+    const moves = (p.moves as unknown[]).filter((mv) =>
+      moveIsLegal(mv as LlmPlanMove),
+    ) as LlmPlanMove[];
+    if (moves.length === 0) continue; // no legal move survived → drop the plan
+    // A job may only be moved once per plan.
+    const jobsMoved = new Set(moves.map((m) => m.job_id));
+    if (jobsMoved.size !== moves.length) continue;
+    // The bumped job MUST be moved (that is the whole point).
+    if (!jobsMoved.has(space.bumpedJobId)) continue;
+    plans.push({
+      plan_id: String(p.plan_id ?? `p${plans.length + 1}`).slice(0, 40),
+      moves,
+      rationale: String(p.rationale ?? "").slice(0, 300),
+    });
+  }
+
   assert(
-    typeof r.recommended_option_id === "string" && known.has(r.recommended_option_id as string),
+    plans.length >= 1,
     "disruption",
-    "recommended_option_id must be one of the offered candidates",
+    "no plan survived the legal-space cross-check",
   );
 
-  const rawSummaries =
-    r.summaries && typeof r.summaries === "object" ? (r.summaries as Record<string, unknown>) : {};
+  // Order so the recommended plan is first; fall back to plan 0.
+  const recId =
+    typeof r.recommended_plan_id === "string" ? r.recommended_plan_id : null;
+  const recIdx = plans.findIndex((p) => p.plan_id === recId);
+  if (recIdx > 0) {
+    const [rec] = plans.splice(recIdx, 1);
+    plans.unshift(rec);
+  }
 
   return {
-    ranked_option_ids: rankedIds,
-    summaries: Object.fromEntries(
-      rankedIds.map((id) => [id, String(rawSummaries[id] ?? "").slice(0, 400)]),
-    ),
-    recommended_option_id: r.recommended_option_id as string,
+    plans,
+    recommended_plan_id: plans[0].plan_id,
     injection_attempt: Boolean(r.injection_attempt),
   };
+}
+
+// ── Assignment Tie-break Agent output ───────────────────────────
+// Runs only when the scoring formula is ambiguous. The LLM is handed the
+// top-3 eligible candidates (all already past every hard constraint) and
+// picks one, with a rationale. Its pick is cross-checked here (must be one
+// of the offered ids) and then re-scored against live state in the agent
+// before commit. Anything invalid falls back to the formula's top pick.
+
+export interface TiebreakChoice {
+  chosen_technician_id: string | null;
+  rationale: string;
+  injection_attempt: boolean;
+}
+
+export function validateTiebreakChoice(
+  x: unknown,
+  offeredTechIds: string[],
+): TiebreakChoice {
+  const r = x as Record<string, unknown>;
+  const id =
+    typeof r.chosen_technician_id === "string" ? r.chosen_technician_id : null;
+  assert(
+    id === null || offeredTechIds.includes(id),
+    "tiebreak",
+    "chosen_technician_id is not one of the offered candidates",
+  );
+  return {
+    chosen_technician_id: id,
+    rationale: String(r.rationale ?? "").slice(0, 300),
+    injection_attempt: Boolean(r.injection_attempt),
+  };
+}
+
+// ── Assignment Edge-case Agent output ───────────────────────────
+// The LLM may only pick one of the pre-validated levers the rule layer
+// enumerated. Its choice is cross-checked here (the technician/slot pair
+// must appear verbatim in widenWindow; an index must be in range) and,
+// for widen_window, re-scored against live state in the agent before it is
+// committed. Anything invalid degrades to "escalate", which is always safe.
+
+export interface EdgecaseSpaceView {
+  widenWindow: { tech_id: string; slot_iso: string }[];
+  splitVisit: unknown[];
+  pairJuniorSenior: unknown[];
+}
+
+export interface EdgecaseChoice {
+  action: "widen_window" | "split_visit" | "pair_junior_senior" | "escalate";
+  chosen_tech_id: string | null;
+  chosen_slot_iso: string | null;
+  chosen_index: number | null;
+  rationale: string;
+  injection_attempt: boolean;
+}
+
+export function validateEdgecaseChoice(
+  x: unknown,
+  space: EdgecaseSpaceView,
+): EdgecaseChoice {
+  const r = x as Record<string, unknown>;
+  const action = r.action as EdgecaseChoice["action"];
+  assert(
+    ["widen_window", "split_visit", "pair_junior_senior", "escalate"].includes(action),
+    "edgecase",
+    "bad action",
+  );
+
+  const rationale = String(r.rationale ?? "").slice(0, 300);
+  const base: EdgecaseChoice = {
+    action: "escalate",
+    chosen_tech_id: null,
+    chosen_slot_iso: null,
+    chosen_index: null,
+    rationale,
+    injection_attempt: Boolean(r.injection_attempt),
+  };
+
+  if (action === "widen_window") {
+    const techId = typeof r.chosen_tech_id === "string" ? r.chosen_tech_id : null;
+    const slotIso = typeof r.chosen_slot_iso === "string" ? r.chosen_slot_iso : null;
+    const legal =
+      !!techId &&
+      !!slotIso &&
+      space.widenWindow.some((w) => w.tech_id === techId && w.slot_iso === slotIso);
+    assert(legal, "edgecase", "widen_window pick is not one of the offered (tech, slot) pairs");
+    return { ...base, action, chosen_tech_id: techId, chosen_slot_iso: slotIso };
+  }
+
+  if (action === "split_visit" || action === "pair_junior_senior") {
+    const list = action === "split_visit" ? space.splitVisit : space.pairJuniorSenior;
+    const idx = typeof r.chosen_index === "number" ? r.chosen_index : -1;
+    assert(
+      Number.isInteger(idx) && idx >= 0 && idx < list.length,
+      "edgecase",
+      `${action} chosen_index out of range`,
+    );
+    return { ...base, action, chosen_index: idx };
+  }
+
+  return base; // escalate
 }
 
 // ── Notification Agent output ────────────────────────────────────

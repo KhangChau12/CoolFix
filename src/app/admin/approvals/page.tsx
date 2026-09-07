@@ -1,27 +1,31 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { apiGet, apiSend } from "@/lib/client";
 import { useRealtime } from "@/components/useRealtime";
 import { EmptyState, Toast } from "@/components/ui";
 import { fmtSGDateTime } from "@/lib/time";
-import type { ApprovalRequest, Job } from "@/lib/types";
+import type { AgentDecisionLog, ApprovalRequest, Job } from "@/lib/types";
 
 export default function ApprovalsPage() {
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [jobs, setJobs] = useState<Record<string, Job>>({});
+  const [decisions, setDecisions] = useState<AgentDecisionLog[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [choice, setChoice] = useState<Record<string, string>>({});
   const [toast, setToast] = useState<{ msg: string; kind: "success" | "error" } | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [a, j] = await Promise.all([
+      const [a, j, d] = await Promise.all([
         apiGet<{ approvals: ApprovalRequest[] }>("/api/approvals"),
         apiGet<{ jobs: Job[] }>("/api/bookings"),
+        apiGet<{ decisions: AgentDecisionLog[] }>("/api/decisions?limit=120"),
       ]);
       setApprovals(a.approvals);
       setJobs(Object.fromEntries(j.jobs.map((x) => [x.job_id, x])));
+      setDecisions(d.decisions);
     } catch {
       /* keep */
     }
@@ -77,6 +81,7 @@ export default function ApprovalsPage() {
         const selected = choice[a.approval_id] ?? a.options.find((o) => o.recommended)?.option_id;
         const isEmergency = a.kind === "emergency_override";
         const levelColor = isEmergency ? "var(--tier-urgent)" : "var(--agent-disruption)";
+        const disruptionRow = decisions.find((d) => d.log_id === a.disruption_log_id);
         return (
           <div
             key={a.approval_id}
@@ -119,6 +124,34 @@ export default function ApprovalsPage() {
                 ` — frozen jobs impacted: ${a.frozen_jobs_impacted.join(", ")}`}
             </div>
 
+            {disruptionRow && a.options.length > 0 && (
+              <AgentReasoningPanel row={disruptionRow} jobId={a.job_id} />
+            )}
+
+            {a.options.length === 0 ? (
+              <div
+                style={{
+                  padding: "11px 12px",
+                  borderRadius: 8,
+                  border: "1px solid var(--border)",
+                  background: "var(--surface-2)",
+                  fontSize: 12.5,
+                  color: "#4a4741",
+                  lineHeight: 1.6,
+                  marginBottom: 13,
+                }}
+              >
+                <strong style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--agent-disruption)" }}>
+                  Edge-case proposal
+                </strong>
+                <div style={{ marginTop: 5 }}>{a.reason}</div>
+                <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+                  Approving records that you will run this dispatch by hand — nothing on the
+                  schedule is moved automatically.
+                </div>
+              </div>
+            ) : (
+              <>
             <div className="faint" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
               Choose a re-plan
             </div>
@@ -151,6 +184,19 @@ export default function ApprovalsPage() {
                       </span>
                     )}
                   </div>
+                  {o.plan_rationale && (
+                    <div
+                      style={{
+                        marginTop: 6,
+                        fontSize: 11,
+                        fontStyle: "italic",
+                        color: "#5a564e",
+                        lineHeight: 1.6,
+                      }}
+                    >
+                      “{o.plan_rationale}”
+                    </div>
+                  )}
                   <div
                     className="mono"
                     style={{
@@ -175,10 +221,22 @@ export default function ApprovalsPage() {
                   <div className="mono faint" style={{ fontSize: 10, marginTop: 8, display: "grid", gap: 1 }}>
                     <span>{o.trade_offs.customers_affected} customers affected · +{o.trade_offs.total_added_travel_km} km</span>
                     <span>{o.trade_offs.sla_breaches} SLA breach · {o.trade_offs.frozen_jobs_touched} frozen touched</span>
+                    {(o.trade_offs.total_shift_hours != null || o.trade_offs.tightest_gap_hours != null) && (
+                      <span>
+                        {o.trade_offs.total_shift_hours != null && `shifted ${o.trade_offs.total_shift_hours}h`}
+                        {o.trade_offs.tightest_gap_hours != null && (
+                          <span style={{ color: o.trade_offs.tightest_gap_hours < 2 ? "var(--tier-urgent)" : undefined }}>
+                            {" · "}{o.trade_offs.tightest_gap_hours}h gap to next job{o.trade_offs.tightest_gap_hours < 2 ? " ⚠ tight" : ""}
+                          </span>
+                        )}
+                      </span>
+                    )}
                   </div>
                 </label>
               ))}
             </div>
+              </>
+            )}
 
             <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
               <button
@@ -233,6 +291,120 @@ export default function ApprovalsPage() {
       )}
 
       {toast && <Toast message={toast.msg} kind={toast.kind} onClose={() => setToast(null)} />}
+    </div>
+  );
+}
+
+// ── How the agent decided ──────────────────────────────────────────
+// Surfaces, on the approval card itself, what the Disruption Agent's log
+// row already records: whether the LLM designed the plan or we fell back
+// to the mechanical option, whether the rule layer re-ranked the LLM's
+// stated preference, and why any candidate plan was thrown out on
+// re-validation. Without this the coordinator only sees the final option
+// list and has to open the feed to learn how it was chosen.
+
+function AgentReasoningPanel({
+  row,
+  jobId,
+}: {
+  row: AgentDecisionLog;
+  jobId: string;
+}) {
+  const llmDesigned = row.output_summary?.llm_choice_accepted === true;
+  const notes = row.guardrail_notes ?? [];
+
+  // Classify the notes the pipeline writes (disruption.ts `rejectionNotes`).
+  const reranked = notes.filter((n) =>
+    /stated preference scored worse|lower-cost plan is recommended/i.test(n),
+  );
+  const rejected = notes.filter((n) =>
+    /rejected on re-validation|failed the plan-space cross-check|no LLM plan survived/i.test(n),
+  );
+  const fellBack = notes.some((n) => /best mechanical option instead|Fell back to the best/i.test(n));
+
+  return (
+    <div
+      style={{
+        border: "1px solid var(--border)",
+        borderRadius: 8,
+        background: "var(--surface-2)",
+        padding: "10px 12px",
+        marginBottom: 12,
+      }}
+    >
+      <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+        <span
+          className="faint"
+          style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.04em" }}
+        >
+          How the agent decided
+        </span>
+        <span
+          style={{
+            fontSize: 8.5,
+            padding: "1px 6px",
+            borderRadius: 999,
+            fontWeight: 700,
+            background: llmDesigned ? "var(--llm-tint)" : "var(--surface)",
+            border: `1px solid ${llmDesigned ? "var(--llm-border)" : "var(--border)"}`,
+            color: llmDesigned ? "var(--llm-ink)" : "var(--text-faint)",
+          }}
+        >
+          {llmDesigned ? "LLM-DESIGNED PLAN" : "MECHANICAL FALLBACK"}
+        </span>
+        <Link href={`/admin/jobs/${jobId}`} style={{ fontSize: 10.5, marginLeft: "auto" }}>
+          full pipeline →
+        </Link>
+      </div>
+
+      <div style={{ fontSize: 11.5, color: "var(--text-muted)", lineHeight: 1.55, marginTop: 6 }}>
+        {llmDesigned ? (
+          <>
+            The LLM composed the re-plan inside the legal slot space; the rule
+            layer then re-scored every plan on the shared cost formula (SLA
+            breach &gt; tight squeeze &gt; customers moved &gt; time shift &gt;
+            travel) and the ★ option below is the objective winner.
+          </>
+        ) : (
+          <>
+            No LLM plan survived validation — the ★ option below is the best
+            pre-computed mechanical re-plan, with every hard constraint still
+            enforced.
+          </>
+        )}
+      </div>
+
+      {reranked.length > 0 && (
+        <div
+          style={{
+            marginTop: 7,
+            fontSize: 11,
+            color: "var(--llm-ink)",
+            background: "var(--llm-tint)",
+            border: "1px solid var(--llm-border)",
+            borderRadius: 6,
+            padding: "6px 8px",
+          }}
+        >
+          ⚖ Rule overrode the LLM: {reranked.join(" ")}
+        </div>
+      )}
+
+      {(rejected.length > 0 || fellBack) && (
+        <div style={{ marginTop: 7 }}>
+          <div className="faint" style={{ fontSize: 9.5, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+            Plans thrown out
+          </div>
+          <ul style={{ margin: "3px 0 0", paddingLeft: 15, fontSize: 10.5, color: "var(--text-muted)" }}>
+            {rejected.map((n, i) => (
+              <li key={i}>{n}</li>
+            ))}
+            {fellBack && rejected.length === 0 && (
+              <li>The LLM&apos;s plan(s) failed re-validation — fell back to the mechanical option.</li>
+            )}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

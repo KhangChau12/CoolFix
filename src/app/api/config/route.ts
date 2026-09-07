@@ -41,7 +41,8 @@ export async function PATCH(req: Request) {
   if (typeof b.capacityTotalPerDay === "number")
     patch.capacityTotalPerDay = clamp(b.capacityTotalPerDay, 1, 500);
   if (b.basePrice) patch.basePrice = b.basePrice;
-  if (b.llmMode === "stub" || b.llmMode === "bedrock") patch.llmMode = b.llmMode;
+  if (b.llmMode === "stub" || b.llmMode === "bedrock" || b.llmMode === "openai")
+    patch.llmMode = b.llmMode;
 
   const config = await repo.updateConfig(patch);
   return NextResponse.json({ config });

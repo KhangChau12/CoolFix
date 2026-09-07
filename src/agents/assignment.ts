@@ -11,7 +11,13 @@
 // candidates are still returned so the feed shows *why*.
 
 import { distanceKm } from "@/lib/geo";
-import { findTimeClash, hoursBetween, isFrozen, nowISO } from "@/lib/time";
+import {
+  findTimeClash,
+  hoursBetween,
+  isFrozen,
+  isWithinWorkingHours,
+  nowISO,
+} from "@/lib/time";
 import { logDecision } from "./log";
 import type { AssignmentResult, IntakeResult, TechStateResult } from "./schemas";
 import type { CandidateScore, ScoreBreakdown, SkillTag, Tier } from "@/lib/types";
@@ -22,6 +28,49 @@ const URGENCY_WEIGHT: Record<IntakeResult["urgency_hint"], number> = {
   medium: 1.0,
   high: 2.0,
 };
+
+/**
+ * Score one technician for a job using the transparent formula. Returns
+ * null if the technician fails a hard constraint (skill, working hours,
+ * schedule clash) at `scheduledTime`. Extracted so the Assignment Edge-case
+ * Agent can re-use the exact same scoring when it evaluates alternative
+ * slots — no second, drifting copy of the formula.
+ */
+export function scoreOneTech(
+  ctx: AgentContext,
+  args: {
+    technicianId: string;
+    jobLocation: { lat: number; lng: number };
+    skillRequired: SkillTag[];
+    urgencyHint: IntakeResult["urgency_hint"];
+    scheduledTime: string;
+    ignoreJobId: string;
+  },
+): ScoreBreakdown | null {
+  const t = ctx.getTechnician(args.technicianId);
+  if (!t) return null;
+  const { w1, w2, w3, w4 } = ctx.config.scoreWeights;
+
+  if (!args.skillRequired.every((s) => t.skill_tags.includes(s))) return null;
+  if (!isWithinWorkingHours(t.working_hours, args.scheduledTime)) return null;
+  if (findTimeClash(ctx.jobs, t.technician_id, args.scheduledTime, args.ignoreJobId)) {
+    return null;
+  }
+
+  const dist = Math.max(distanceKm(t.location, args.jobLocation), 0.3);
+  const workload = Math.max(t.current_workload, 0.5);
+  const bd: ScoreBreakdown = {
+    distance: round(w1 * (1 / dist)),
+    skill_match: round(
+      w2 * skillMatchBonus(args.skillRequired, t.skill_tags, t.experience_level),
+    ),
+    urgency: round(w3 * URGENCY_WEIGHT[args.urgencyHint]),
+    workload: round(w4 * (1 / workload)),
+    total: 0,
+  };
+  bd.total = round(bd.distance + bd.skill_match + bd.urgency + bd.workload);
+  return bd;
+}
 
 export interface AssignmentInput {
   jobId: string;

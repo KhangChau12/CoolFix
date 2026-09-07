@@ -5,8 +5,10 @@
 //  • Only Job-Intake, Disruption, and Notification agents call this.
 //    Pricing + Technician-State are pure rule/bookkeeping — never here.
 //  • LLM_MODE=stub returns deterministic fixture output so the demo runs
-//    offline and never burns AWS credit. LLM_MODE=bedrock calls the real
-//    Claude Sonnet 4.5 model per hackathon infra rules.
+//    offline and never burns API credit. LLM_MODE=bedrock calls the real
+//    Claude Sonnet 4.5 model on AWS Bedrock (hackathon default).
+//    LLM_MODE=openai calls the OpenAI Chat Completions API instead — same
+//    prompt frame, same JSON contract, so no agent code changes.
 //  • A per-process call budget hard-stops runaway loops.
 //  • Every prompt is wrapped with an injection-resistant system frame:
 //    customer free-text is delimited and the model is told to treat it
@@ -14,7 +16,12 @@
 
 import { createHash } from "node:crypto";
 
-export type LlmTask = "job_intake" | "disruption_replan" | "notification_compose";
+export type LlmTask =
+  | "job_intake"
+  | "disruption_replan"
+  | "notification_compose"
+  | "assignment_edgecase"
+  | "assignment_tiebreak";
 
 export interface LlmRequest {
   task: LlmTask;
@@ -36,10 +43,12 @@ export interface LlmRequest {
   maxAttempts?: number;
 }
 
+export type LlmMode = "stub" | "bedrock" | "openai";
+
 export interface LlmResponse<T = unknown> {
   data: T;
   raw: string;
-  mode: "stub" | "bedrock";
+  mode: LlmMode;
   cached: boolean;
   latency_ms: number;
   guardrail_notes: string[];
@@ -86,8 +95,7 @@ function frameUntrusted(text: string): { framed: string; notes: string[] } {
 }
 
 export async function callLlm<T = unknown>(req: LlmRequest): Promise<LlmResponse<T>> {
-  const mode: "stub" | "bedrock" =
-    (process.env.LLM_MODE as "stub" | "bedrock") ?? "stub";
+  const mode: LlmMode = (process.env.LLM_MODE as LlmMode) ?? "stub";
 
   const k = keyFor(req);
   if (cache.has(k)) {
@@ -121,7 +129,9 @@ export async function callLlm<T = unknown>(req: LlmRequest): Promise<LlmResponse
       const out: LlmResponse<T> =
         mode === "bedrock"
           ? await callBedrock<T>(systemPrompt, userBlock, guardrail_notes, started)
-          : await callStub<T>(req, guardrail_notes, started);
+          : mode === "openai"
+            ? await callOpenAI<T>(systemPrompt, userBlock, guardrail_notes, started)
+            : await callStub<T>(req, guardrail_notes, started);
       cache.set(k, out as LlmResponse);
       return out;
     } catch (e) {
@@ -186,6 +196,65 @@ async function callBedrock<T>(
     cached: false,
     latency_ms: Date.now() - started,
     guardrail_notes: notes,
+  };
+}
+
+async function callOpenAI<T>(
+  system: string,
+  user: string,
+  notes: string[],
+  started: number,
+): Promise<LlmResponse<T>> {
+  if (callCount >= BUDGET) {
+    throw new Error(`LLM call budget (${BUDGET}) exhausted — refusing to call OpenAI.`);
+  }
+  callCount += 1;
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error("LLM_MODE=openai but OPENAI_API_KEY is not set.");
+  }
+  const model = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
+  const baseUrl = process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1";
+
+  // Plain fetch — no SDK dependency, mirroring the lazy Bedrock path.
+  // response_format json_object forces a parseable object back, same
+  // contract every agent already validates.
+  const resp = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0,
+      max_tokens: 1024,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    }),
+  });
+
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => "");
+    throw new Error(`OpenAI API ${resp.status}: ${detail.slice(0, 200)}`);
+  }
+
+  const payload = (await resp.json()) as {
+    choices?: { message?: { content?: string } }[];
+  };
+  const raw: string = payload?.choices?.[0]?.message?.content ?? "";
+  const data = safeParse<T>(raw);
+  return {
+    data,
+    raw,
+    mode: "openai",
+    cached: false,
+    latency_ms: Date.now() - started,
+    guardrail_notes: [...notes, `OpenAI model: ${model}`],
   };
 }
 

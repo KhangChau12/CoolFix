@@ -6,7 +6,14 @@ import { apiGet } from "@/lib/client";
 import { useRealtime } from "@/components/useRealtime";
 import { AgentFeed } from "@/components/AgentFeed";
 import { Metric } from "@/components/ui";
-import { PIPELINE_STAGES, TIER_META, TIERS, type ApprovalRequest, type Job } from "@/lib/types";
+import {
+  PIPELINE_STAGES,
+  TIER_META,
+  TIERS,
+  type ApprovalRequest,
+  type Job,
+  type NotificationRecord,
+} from "@/lib/types";
 import { hoursBetween, nowISO } from "@/lib/time";
 
 const STAGE_DOT: Record<string, string> = {
@@ -23,21 +30,25 @@ const STAGE_DOT: Record<string, string> = {
 export default function Dashboard() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
+  const [notifications, setNotifications] = useState<NotificationRecord[]>([]);
 
   const load = useCallback(async () => {
     try {
-      const [j, a] = await Promise.all([
+      const [j, a, n] = await Promise.all([
         apiGet<{ jobs: Job[] }>("/api/bookings"),
         apiGet<{ approvals: ApprovalRequest[] }>("/api/approvals"),
+        apiGet<{ notifications: NotificationRecord[] }>("/api/notifications"),
       ]);
       setJobs(j.jobs);
       setApprovals(a.approvals);
+      setNotifications(n.notifications);
     } catch {
       /* keep */
     }
   }, []);
 
   useRealtime("jobs", load);
+  useRealtime("notifications", load);
   useEffect(() => {
     load();
   }, [load]);
@@ -50,6 +61,7 @@ export default function Dashboard() {
   const pendingAssign = jobs.filter((j) => j.status === "pending").length;
   const pendingApprovals = approvals.filter((a) => a.status === "pending").length;
   const frozen = jobs.filter((j) => j.status === "frozen").length;
+  const awaitingAck = notifications.filter((n) => !n.acknowledged).length;
 
   const tierFill = TIERS.map((t) => ({
     tier: t,
@@ -105,6 +117,12 @@ export default function Dashboard() {
           hint={pendingApprovals > 0 ? "Go to Approvals (HITL)" : "all clear"}
         />
         <Metric label="Frozen (locked)" value={frozen} accent="var(--status-frozen)" />
+        <Metric
+          label="Notifications un-acked"
+          value={awaitingAck}
+          accent={awaitingAck > 0 ? "var(--tier-priority)" : undefined}
+          hint={awaitingAck > 0 ? "technician / customer hasn't tapped Seen" : "all acknowledged"}
+        />
       </div>
 
       <div className="grid" style={{ gridTemplateColumns: "1.4fr 1fr", alignItems: "start", gap: 20 }}>
@@ -177,7 +195,12 @@ export default function Dashboard() {
                 .sort((a, b) => a.scheduled_time.localeCompare(b.scheduled_time))
                 .slice(0, 6)
                 .map((j) => (
-                  <div key={j.job_id} className="row" style={{ gap: 8, fontSize: 12 }}>
+                  <Link
+                    key={j.job_id}
+                    href={`/admin/jobs/${j.job_id}`}
+                    className="row"
+                    style={{ gap: 8, fontSize: 12, color: "var(--text)" }}
+                  >
                     <span className={`status-dot ${j.status}`} />
                     <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {j.customer_name}
@@ -192,7 +215,7 @@ export default function Dashboard() {
                         hour12: false,
                       }).format(new Date(j.scheduled_time))}
                     </span>
-                  </div>
+                  </Link>
                 ))}
             </div>
           </div>
