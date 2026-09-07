@@ -349,7 +349,7 @@ export interface RuntimeConfig {
 }
 
 export const DEFAULT_CONFIG: RuntimeConfig = {
-  freezeWindowHours: 3,
+  freezeWindowHours: 2,
   scoreWeights: { w1: 1.0, w2: 2.0, w3: 1.5, w4: 1.0 },
   // 0 = every re-plan that moves a customer's appointment goes to the
   // coordinator. CoolFix positions on reliability, so any customer-visible

@@ -5,27 +5,10 @@
 // skill hard-constraint and soft scoring belong to the Assignment Agent
 // so the whole candidate set (including rejects) is visible in the feed.
 
-import { nowISO } from "@/lib/time";
+import { isWithinWorkingHours, nowISO } from "@/lib/time";
 import { logDecision } from "./log";
 import type { TechCandidate, TechStateResult } from "./schemas";
 import type { AgentContext } from "./context";
-
-function withinWorkingHours(
-  scheduledISO: string,
-  wh: { start: string; end: string },
-): boolean {
-  const local = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Singapore",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(scheduledISO));
-  const [h, m] = local.split(":").map(Number);
-  const mins = h * 60 + m;
-  const [sh, sm] = wh.start.split(":").map(Number);
-  const [eh, em] = wh.end.split(":").map(Number);
-  return mins >= sh * 60 + sm && mins <= eh * 60 + em;
-}
 
 export function runTechnicianStateAgent(
   ctx: AgentContext,
@@ -40,7 +23,7 @@ export function runTechnicianStateAgent(
     experience_level: t.experience_level,
     location: t.location,
     current_workload: t.current_workload,
-    within_working_hours: withinWorkingHours(args.scheduledTime, t.working_hours),
+    within_working_hours: isWithinWorkingHours(t.working_hours, args.scheduledTime),
   }));
 
   const result: TechStateResult = { candidates, as_of: nowISO() };

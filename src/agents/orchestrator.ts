@@ -216,6 +216,38 @@ export async function runBookingPipeline(
     assignment,
   });
 
+  // 5c-i. Freeze window is absolute: if every mechanical option would
+  // touch a frozen job, no re-plan is proposed at all. Report unassignable
+  // so the customer/coordinator can pick a different time instead of the
+  // pipeline ever offering to break a locked appointment.
+  if (disruption.noCleanOption) {
+    job = { ...job, status: "pending", pipeline_stage: "awaiting_approval" };
+    ctx.stageJob(job);
+    logDecision(ctx, {
+      agent: "Orchestrator",
+      jobId,
+      reasoningKind: "rule",
+      input: { conflict: true, no_clean_option: true },
+      output: { result: "unassignable_frozen" },
+      headline: "No technician available today — every option would touch a locked appointment",
+      outcome: "requires_approval",
+      requiresApproval: true,
+      guardrailNotes: [
+        "Freeze window treated as absolute — the pipeline never proposes touching a frozen job, even under an urgent request.",
+      ],
+    });
+    await ctx.flush();
+    return {
+      job,
+      status: "unassignable",
+      decisionLogIds: decisionLogIds(),
+      notificationsSent: 0,
+      llmCalls: countLlm(ctx),
+      message:
+        "No technician available for this time slot — every nearby slot would move a locked appointment. Please choose a different time.",
+    };
+  }
+
   if (!disruption.needsApproval && disruption.autoChosenOptionId) {
     // Low impact → auto-commit the recommended re-plan.
     applyReplan(
@@ -259,23 +291,22 @@ export async function runBookingPipeline(
     };
   }
 
-  // 5d. High impact or frozen job → HITL approval gate. STOP here.
+  // 5d. High impact → HITL approval gate. STOP here.
+  // (Freeze window can never be the reason we land here — that case
+  // already returned above as "unassignable".)
   const approval: ApprovalRequest = {
     approval_id: `apr_${Date.now().toString(36)}`,
     created_at: nowISO(),
-    kind: disruption.approvalKind,
+    kind: "standard",
     job_id: jobId,
-    reason:
-      disruption.approvalKind === "emergency_override"
-        ? "The re-plan touches a job past its freeze point (schedule locked). Coordinator approval is mandatory."
-        : "The re-plan exceeds the allowed impact threshold (customers affected / added travel / SLA breach).",
+    reason: "The re-plan exceeds the allowed impact threshold (customers affected / added travel / SLA breach).",
     disruption_log_id: disruption.logId,
     options: disruption.options,
     chosen_option_id: null,
     status: "pending",
     resolved_by: null,
     resolved_at: null,
-    frozen_jobs_impacted: disruption.frozenJobsImpacted,
+    frozen_jobs_impacted: [],
   };
   ctx.bufferApproval(approval);
 
@@ -293,12 +324,9 @@ export async function runBookingPipeline(
     agent: "Orchestrator",
     jobId,
     reasoningKind: "rule",
-    input: { conflict: true, approval: true, kind: disruption.approvalKind },
+    input: { conflict: true, approval: true },
     output: { result: "awaiting_approval", approval_id: approval.approval_id },
-    headline:
-      disruption.approvalKind === "emergency_override"
-        ? "⛔ Paused for approval — Emergency Override (frozen job)"
-        : "⏸ Paused — coordinator must approve the re-plan",
+    headline: "⏸ Paused — coordinator must approve the re-plan",
     outcome: "requires_approval",
     requiresApproval: true,
     guardrailNotes: [
@@ -314,10 +342,7 @@ export async function runBookingPipeline(
     decisionLogIds: decisionLogIds(),
     notificationsSent: 0,
     llmCalls: countLlm(ctx),
-    message:
-      disruption.approvalKind === "emergency_override"
-        ? "Emergency Override required: the re-plan touches a frozen job. Awaiting approval."
-        : "The re-plan needs coordinator approval. Awaiting.",
+    message: "The re-plan needs coordinator approval. Awaiting.",
   };
 }
 
@@ -381,7 +406,7 @@ async function notifyAssignment(ctx: AgentContext, jobId: string): Promise<void>
 
 async function notifyReschedule(
   ctx: AgentContext,
-  disruption: { options: ApprovalRequest["options"]; recommendedOptionId?: string },
+  disruption: { options: ApprovalRequest["options"]; recommendedOptionId?: string | null },
   reason: string,
 ): Promise<void> {
   const opt =

@@ -1,6 +1,8 @@
 /** Time helpers. All internal timestamps are ISO strings in UTC; the UI
  * renders them in Asia/Singapore. */
 
+import type { Job } from "./types";
+
 export const SG_TZ = "Asia/Singapore";
 
 export function nowISO(): string {
@@ -79,4 +81,52 @@ export function snapToServiceHours(
     t = new Date(t.getTime() + 3600_000);
   }
   return t.toISOString();
+}
+
+/**
+ * Does `technicianId` already have a job within ±90 min of `scheduledISO`?
+ * Ignores `ignoreJobId` (the job being moved/scored itself) and jobs that
+ * are completed or already disrupted. Single source of truth for the
+ * no-double-booking hard constraint — shared by the Assignment Agent and
+ * the Disruption Agent's candidate search / re-validation so the rule is
+ * never re-derived differently in two places.
+ */
+export function findTimeClash(
+  jobs: Job[],
+  technicianId: string,
+  scheduledISO: string,
+  ignoreJobId: string,
+): string | null {
+  const clash = jobs.find(
+    (j) =>
+      j.job_id !== ignoreJobId &&
+      j.assigned_technician_id === technicianId &&
+      j.status !== "completed" &&
+      j.status !== "disrupted" &&
+      Math.abs(hoursBetween(j.scheduled_time, scheduledISO)) < 1.5,
+  );
+  return clash ? clash.job_id : null;
+}
+
+/**
+ * Is `scheduledISO` (in SGT local time) within `workingHours` ("HH:mm"
+ * start/end, inclusive)? Single source of truth — shared by the
+ * Technician-State Agent (pre-computes it per candidate) and the
+ * Disruption Agent's candidate search / re-validation.
+ */
+export function isWithinWorkingHours(
+  workingHours: { start: string; end: string },
+  scheduledISO: string,
+): boolean {
+  const local = new Intl.DateTimeFormat("en-GB", {
+    timeZone: SG_TZ,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(scheduledISO));
+  const [h, m] = local.split(":").map(Number);
+  const mins = h * 60 + m;
+  const [sh, sm] = workingHours.start.split(":").map(Number);
+  const [eh, em] = workingHours.end.split(":").map(Number);
+  return mins >= sh * 60 + sm && mins <= eh * 60 + em;
 }

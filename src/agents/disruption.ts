@@ -1,32 +1,72 @@
 // ── Disruption Agent ────────────────────────────────────────────────
 // LLM call. Triggered when a new job needs a slot already held by an
-// existing job. We mechanically generate 2-3 candidate re-plans (slot
-// math is deterministic and must be), then the LLM narrates + ranks the
-// trade-offs for the coordinator.
+// existing job.
+//
+// We mechanically search a real space of candidate re-plans — every
+// skilled technician × a ladder of candidate time offsets, not a handful
+// of hardcoded formulas — with every hard constraint (skill, freeze
+// window, no double-booking, working hours) enforced AT GENERATION TIME,
+// so nothing illegal ever enters the pool. The LLM is then handed a
+// pre-filtered top-N shortlist and asked only to pick/rank by option_id +
+// write summaries — it is never allowed to return its own moves or
+// trade-off numbers, closing off the main way an LLM could "invent" a
+// slot. Whatever it picks is INDEPENDENTLY re-validated against live
+// constraints one more time before being offered to the coordinator or
+// auto-committed; if that fails (or the LLM response is malformed), the
+// pipeline falls back to the best pre-computed mechanical option. No
+// retry loop beyond one bounded retry for malformed JSON — a safe
+// deterministic answer is always available.
+//
+// Freeze window is an ABSOLUTE hard constraint, enforced the same way the
+// skill-certification check is: a candidate move is dropped entirely if
+// its destination slot would land on — or bump — a job that is already
+// past its freeze point. There is no "Emergency Override" escape hatch in
+// the automatic pipeline; the freeze window is treated as already having
+// happened, full stop. (A coordinator can still hand-edit a frozen job
+// outside this pipeline in a genuine emergency, but the agents never
+// propose it.)
 //
 // Risk-calibrated autonomy (CLAUDE.md §3.2, §4):
-//   • low impact & no frozen job touched  → auto-commit
-//   • impact over threshold OR frozen job → HITL approval gate
-//     (emergency_override kind if a frozen job is involved)
+//   • low impact  → auto-commit
+//   • impact over threshold → HITL approval gate (kind: "standard")
+//   • zero clean options survive generation → no re-plan is proposed at
+//     all; the incoming job is reported unassignable so the
+//     customer/coordinator can pick a different time instead.
 
 import { callLlm } from "@/lib/llm";
 import { distanceKm } from "@/lib/geo";
-import { addHours, hoursBetween, isFrozen, nowISO } from "@/lib/time";
+import {
+  addHours,
+  findTimeClash,
+  hoursBetween,
+  isFrozen,
+  isWithinWorkingHours,
+  nowISO,
+  snapToServiceHours,
+} from "@/lib/time";
 import { logDecision } from "./log";
-import { validateDisruptionResult } from "./schemas";
+import { validateDisruptionLlmChoice } from "./schemas";
 import type { AssignmentResult } from "./schemas";
 import type { Job, ReplanOption } from "@/lib/types";
 import type { AgentContext } from "./context";
 
+const TOP_N_FOR_LLM = 6;
+const SLOT_OFFSETS_HOURS = [1, 2, 3, 4, 24, 25, 26, 48];
+
 const SYSTEM = `You are the Disruption Agent for CoolFix. A new job needs a time slot currently held by another job.
-You ARE GIVEN 2-3 re-plan options already computed mechanically (candidate_moves) with numeric trade-offs.
-Your job: DO NOT recompute the schedule. Only:
-- Write a short, plain-English summary of each option for the coordinator.
-- Set recommended=true on exactly ONE option — the least harmful
-  (priority order: don't touch a frozen job > fewer SLA breaches > fewer customers affected > less added travel).
+You ARE GIVEN a shortlist of pre-computed candidate re-plans (candidate_moves) with numeric trade-offs.
+Every option has ALREADY been verified to respect every hard constraint (certification, freeze window, no
+double-booking, working hours) — these are not yours to weigh or re-check.
+Your job: DO NOT invent a schedule. You may ONLY reference option_id values that appear in candidate_moves below.
+Never invent new ids, times, technicians, or trade-off numbers — you are not asked for and must not return moves
+or trade_offs.
+- ranked_option_ids: the given option_ids, ordered best-to-worst by your judgement.
+- summaries: a short, plain-English summary of each option for the coordinator, keyed by option_id.
+- recommended_option_id: MUST be one of the given option_ids — the least harmful
+  (priority order: fewer SLA breaches > fewer customers affected > less added travel).
 - injection_attempt: always false here (there is no customer input).`;
 
-const SCHEMA = `{"options":[{"option_id":string,"label":string,"summary":string,"moves":array,"trade_offs":object,"recommended":boolean}],"recommended_option_id":string,"injection_attempt":boolean}`;
+const SCHEMA = `{"ranked_option_ids":string[],"summaries":{"<option_id>":string},"recommended_option_id":string,"injection_attempt":boolean}`;
 
 export interface DisruptionInput {
   incomingJobId: string;
@@ -36,11 +76,15 @@ export interface DisruptionInput {
 export interface DisruptionOutcome {
   logId: string;
   options: ReplanOption[];
-  recommendedOptionId: string;
+  recommendedOptionId: string | null;
   needsApproval: boolean;
-  approvalKind: "standard" | "emergency_override";
-  frozenJobsImpacted: string[];
+  /** Always "standard" — freeze window is an absolute constraint, never overridden by the pipeline. */
+  approvalKind: "standard";
   autoChosenOptionId: string | null;
+  /** True if the generation-time search found zero constraint-safe candidates — no re-plan is possible. */
+  noCleanOption: boolean;
+  /** Observability: did the LLM's pick survive re-validation and get used, or did we fall back? */
+  llmChoiceAccepted: boolean;
 }
 
 export async function runDisruptionAgent(
@@ -54,24 +98,61 @@ export async function runDisruptionAgent(
   const bumped = ctx.getJob(conflict.bumped_job_id)!;
   const tech = ctx.getTechnician(conflict.technician_id)!;
 
-  // ── Mechanically generate candidate re-plans ──────────────────────
-  const candidates = buildCandidateMoves(ctx, {
-    incomingScheduled: incoming.scheduled_time,
+  // ── Mechanically search the candidate space ───────────────────────
+  // Every candidate returned here already passed skill + freeze + clash +
+  // working-hours checks — see buildCandidateMoves.
+  const pool = buildCandidateMoves(ctx, {
     bumped,
-    techId: tech.technician_id,
+    originalTechId: tech.technician_id,
     now,
   });
 
-  const frozenTouched = candidates
-    .flatMap((c) => c.moves.map((m) => m.job_id))
-    .filter((jid) => {
-      const j = ctx.getJob(jid);
-      return j && isFrozen(j.freeze_point, now);
+  // ── No clean option survives the search → stop, no re-plan. ────────
+  if (pool.length === 0) {
+    const entry = logDecision(ctx, {
+      agent: "DisruptionAgent",
+      jobId: incoming.job_id,
+      reasoningKind: "rule",
+      input: {
+        incoming_job: incoming.job_id,
+        bumped_job: bumped.job_id,
+        technician: tech.name,
+      },
+      output: { result: "no_clean_option" },
+      headline: "No re-plan possible — every technician/slot combination fails a hard constraint",
+      outcome: "requires_approval",
+      requiresApproval: true,
+      guardrailNotes: [
+        "Freeze window, certification, clash and working-hours are absolute constraints — none were relaxed to find a slot.",
+        "No Emergency Override was proposed: the pipeline never offers to touch a frozen job automatically.",
+      ],
     });
+    return {
+      logId: entry.log_id,
+      options: [],
+      recommendedOptionId: null,
+      needsApproval: false,
+      approvalKind: "standard",
+      autoChosenOptionId: null,
+      noCleanOption: true,
+      llmChoiceAccepted: false,
+    };
+  }
 
-  // ── LLM narrates + ranks ─────────────────────────────────────────
-  const resp = await callLlm({
-    task: "disruption_replan",
+  const ranked = [...pool].sort((a, b) => a.heuristic_cost - b.heuristic_cost);
+  const shortlist = ranked.slice(0, TOP_N_FOR_LLM);
+  const bestMechanical = ranked[0];
+
+  // ── LLM picks/ranks from the shortlist — never invents moves ──────
+  const shortlistForLlm = shortlist.map((c) => ({
+    option_id: c.option_id,
+    label: c.label,
+    moves: c.moves,
+    trade_offs: c.trade_offs,
+  }));
+
+  const llmCallArgs = {
+    task: "disruption_replan" as const,
     system: SYSTEM,
     structuredInput: {
       incoming_job: {
@@ -80,33 +161,71 @@ export async function runDisruptionAgent(
         tier: incoming.tier,
       },
       conflict,
-      candidate_moves: candidates,
+      candidate_moves: shortlistForLlm,
     },
     expectedSchema: SCHEMA,
-  });
+    // Retry once, but ONLY for malformed-JSON responses (handled inside
+    // callLlm itself) — never for a semantically-invalid-but-parseable
+    // response, which is caught below and falls back immediately instead.
+    maxAttempts: 2,
+  };
 
-  const parsed = validateDisruptionResult(resp.data);
-  const options: ReplanOption[] = parsed.options.map((o) => ({
-    option_id: o.option_id,
-    label: o.label,
-    summary: o.summary,
-    moves: o.moves,
-    trade_offs: o.trade_offs,
-    recommended: o.option_id === parsed.recommended_option_id,
+  let chosen: CandidateMove = bestMechanical;
+  let llmAccepted = false;
+  let summaries: Record<string, string> = {};
+  const rejectionNotes: string[] = [];
+  let resp: Awaited<ReturnType<typeof callLlm>> | null = null;
+
+  try {
+    resp = await callLlm(llmCallArgs);
+  } catch {
+    rejectionNotes.push("LLM call failed after retry (malformed JSON) — using best mechanical option instead.");
+  }
+
+  if (resp) {
+    try {
+      const llmChoice = validateDisruptionLlmChoice(
+        resp.data,
+        shortlist.map((c) => c.option_id),
+      );
+      summaries = llmChoice.summaries;
+      // Membership in the shortlist is already guaranteed by the validator.
+      const candidate = shortlist.find((c) => c.option_id === llmChoice.recommended_option_id)!;
+      const revalidation = revalidateCandidate(ctx, candidate, now);
+      if (revalidation.ok) {
+        chosen = candidate;
+        llmAccepted = true;
+      } else {
+        rejectionNotes.push(
+          `LLM-recommended option ${candidate.option_id} rejected on re-validation (${revalidation.reason}) — using best mechanical option instead.`,
+        );
+      }
+    } catch {
+      // Parseable JSON but it references an id we never offered, or fails
+      // shape validation — a logic error, not a JSON error. No retry:
+      // fall back immediately to the pre-verified mechanical best.
+      rejectionNotes.push("LLM response referenced an option we did not offer or failed schema validation — using best mechanical option instead.");
+    }
+  }
+
+  const options: ReplanOption[] = shortlist.map((c) => ({
+    option_id: c.option_id,
+    label: c.label,
+    summary: summaries[c.option_id] ?? summariseOption(c),
+    moves: c.moves,
+    trade_offs: c.trade_offs,
+    recommended: c.option_id === chosen.option_id,
   }));
 
   // ── Risk calibration ────────────────────────────────────────────
-  const rec = options.find((o) => o.recommended) ?? options[0];
-  const anyFrozen = frozenTouched.length > 0;
+  // Freeze window is already guaranteed clean by generation-time filtering
+  // — the only thing left to calibrate is customer/travel/SLA impact.
   const overThreshold =
-    rec.trade_offs.customers_affected > cfg.hitlMaxCustomersAffected ||
-    rec.trade_offs.total_added_travel_km > cfg.hitlMaxAddedTravelKm ||
-    rec.trade_offs.sla_breaches > 0;
+    chosen.trade_offs.customers_affected > cfg.hitlMaxCustomersAffected ||
+    chosen.trade_offs.total_added_travel_km > cfg.hitlMaxAddedTravelKm ||
+    chosen.trade_offs.sla_breaches > 0;
 
-  const needsApproval = anyFrozen || overThreshold;
-  const approvalKind: "standard" | "emergency_override" = anyFrozen
-    ? "emergency_override"
-    : "standard";
+  const needsApproval = overThreshold;
 
   const entry = logDecision(ctx, {
     agent: "DisruptionAgent",
@@ -116,50 +235,116 @@ export async function runDisruptionAgent(
       incoming_job: incoming.job_id,
       bumped_job: bumped.job_id,
       technician: tech.name,
-      candidate_count: candidates.length,
-      llm_mode: resp.mode,
-      cached: resp.cached,
+      pool_size: pool.length,
+      shortlist_size: shortlist.length,
+      llm_mode: resp?.mode ?? "failed",
+      cached: resp?.cached ?? false,
     },
     output: {
-      recommended_option_id: rec.option_id,
+      chosen_option_id: chosen.option_id,
       needs_approval: needsApproval,
-      approval_kind: approvalKind,
-      frozen_jobs_impacted: frozenTouched,
+      llm_choice_accepted: llmAccepted,
     },
     headline: needsApproval
-      ? approvalKind === "emergency_override"
-        ? `⚠️ Emergency Override needs approval — a frozen job is affected`
-        : `Approval needed: re-plan affects ${rec.trade_offs.customers_affected} customer(s)`
-      : `Auto-commit re-plan: ${rec.label}`,
+      ? `Approval needed: re-plan affects ${chosen.trade_offs.customers_affected} customer(s)`
+      : `Auto-commit re-plan: ${chosen.label}`,
     outcome: needsApproval ? "requires_approval" : "auto_commit",
     requiresApproval: needsApproval,
     replanOptions: options,
-    latencyMs: resp.latency_ms,
+    latencyMs: resp?.latency_ms ?? 0,
     guardrailNotes: [
-      ...resp.guardrail_notes,
-      "Schedule math is computed mechanically; the LLM only narrates and ranks (it never invents slots).",
-      anyFrozen
-        ? "A job is past its freeze point — Emergency Override is mandatory, no automatic exception."
-        : overThreshold
-          ? "Impact exceeds the config threshold — routing to HITL."
-          : "Low impact — eligible for auto-commit.",
+      ...(resp?.guardrail_notes ?? []),
+      `Searched ${pool.length} technician/slot combination(s), all pre-verified against every hard constraint before reaching this point.`,
+      ...rejectionNotes,
+      llmAccepted
+        ? "LLM's pick passed independent re-validation and was used."
+        : "Fell back to the best pre-computed mechanical option.",
+      overThreshold
+        ? "Impact exceeds the config threshold — routing to HITL."
+        : "Low impact — eligible for auto-commit.",
     ],
   });
 
   return {
     logId: entry.log_id,
     options,
-    recommendedOptionId: rec.option_id,
+    recommendedOptionId: chosen.option_id,
     needsApproval,
-    approvalKind,
-    frozenJobsImpacted: Array.from(new Set(frozenTouched)),
-    autoChosenOptionId: needsApproval ? null : rec.option_id,
+    approvalKind: "standard",
+    autoChosenOptionId: needsApproval ? null : chosen.option_id,
+    noCleanOption: false,
+    llmChoiceAccepted: llmAccepted,
   };
 }
 
-// ── Deterministic slot math ────────────────────────────────────────
+// ── Post-LLM re-validation — never trust the LLM's pick blindly ──────
 
-interface CandidateMove {
+interface RevalidationResult {
+  ok: boolean;
+  reason?: string;
+}
+
+/**
+ * Independently re-checks a candidate's moves against LIVE constraint
+ * state (skill, freeze, clash, working hours) using the exact same
+ * predicates as generation time. This is deliberate defense-in-depth, not
+ * redundant with generation-time filtering: the LLM's response is never
+ * trusted just because it referenced a known option_id.
+ */
+function revalidateCandidate(ctx: AgentContext, candidate: CandidateMove, now: string): RevalidationResult {
+  for (const move of candidate.moves) {
+    const job = ctx.getJob(move.job_id);
+    if (!job) return { ok: false, reason: `move references unknown job ${move.job_id}` };
+
+    const moveTech = ctx.getTechnician(move.technician_id);
+    if (!moveTech) return { ok: false, reason: `move references unknown technician ${move.technician_id}` };
+
+    const hasSkill = job.skill_required.every((s) => moveTech.skill_tags.includes(s));
+    if (!hasSkill) return { ok: false, reason: `${moveTech.name} lacks required skill` };
+
+    if (!moveIsFreezeSafe(ctx, move, now)) {
+      return { ok: false, reason: "move touches a frozen job" };
+    }
+
+    const clashJobId = findTimeClash(ctx.jobs, moveTech.technician_id, move.to_time, move.job_id);
+    if (clashJobId) return { ok: false, reason: `would clash with job ${clashJobId}` };
+
+    if (!isWithinWorkingHours(moveTech.working_hours, move.to_time)) {
+      return { ok: false, reason: `outside ${moveTech.name}'s working hours` };
+    }
+  }
+  return { ok: true };
+}
+
+/**
+ * True if `move.to_time` on `move.technician_id` does not collide with a
+ * DIFFERENT job that is already frozen, and the moved job itself is not
+ * already frozen at its old slot. Shared by generation-time filtering and
+ * post-LLM re-validation — single source of truth for "freeze is absolute."
+ */
+function moveIsFreezeSafe(
+  ctx: AgentContext,
+  move: { job_id: string; to_time: string; technician_id: string },
+  now: string,
+): boolean {
+  const collision = ctx.jobs.find(
+    (j) =>
+      j.job_id !== move.job_id &&
+      j.assigned_technician_id === move.technician_id &&
+      j.status !== "completed" &&
+      j.status !== "disrupted" &&
+      Math.abs(hoursBetween(j.scheduled_time, move.to_time)) < 1.5 &&
+      isFrozen(j.freeze_point, now),
+  );
+  if (collision) return false;
+
+  const movedJob = ctx.getJob(move.job_id);
+  return !movedJob || !isFrozen(movedJob.freeze_point, now);
+}
+
+// ── Deterministic candidate search (rule-based, no LLM) ───────────────
+
+export interface CandidateMove {
   option_id: string;
   label: string;
   moves: {
@@ -175,77 +360,82 @@ interface CandidateMove {
     sla_breaches: number;
     frozen_jobs_touched: number;
   };
+  heuristic_cost: number;
 }
 
+/** Cheap, shared cost formula: lower is better. Reused by the mechanical
+ * pre-filter, the LLM's stated priority order, and stubDisruption(). */
+export function heuristicCost(t: CandidateMove["trade_offs"]): number {
+  return (
+    t.frozen_jobs_touched * 1000 + // should never be >0 post-filter; huge penalty if it ever is
+    t.sla_breaches * 40 +
+    t.customers_affected * 10 +
+    t.total_added_travel_km
+  );
+}
+
+/**
+ * Real search over technicians × candidate time slots for the bumped job.
+ * Every (technician, slot) pair is hard-filtered (skill, freeze, clash,
+ * working hours) BEFORE a candidate is created — nothing illegal ever
+ * enters the returned pool.
+ */
 function buildCandidateMoves(
   ctx: AgentContext,
-  args: {
-    incomingScheduled: string;
-    bumped: Job;
-    techId: string;
-    now: string;
-  },
+  args: { bumped: Job; originalTechId: string; now: string },
 ): CandidateMove[] {
-  const { bumped, techId, now } = args;
+  const { bumped, originalTechId, now } = args;
   const out: CandidateMove[] = [];
 
-  // Option A: push the bumped job later same day on the same tech (+2h).
-  const laterTime = addHours(bumped.scheduled_time, 2);
-  out.push({
-    option_id: "opt_push_2h",
-    label: "Delay 2 hours (same technician)",
-    moves: [
-      {
+  const skilledTechs = ctx.technicians.filter((t) =>
+    bumped.skill_required.every((s) => t.skill_tags.includes(s)),
+  );
+
+  const seenSlots = new Set<string>();
+
+  for (const t of skilledTechs) {
+    for (const offset of SLOT_OFFSETS_HOURS) {
+      const rawSlot = addHours(bumped.scheduled_time, offset);
+      const slot = snapToServiceHours(rawSlot, 0);
+      const dedupeKey = `${t.technician_id}|${slot}`;
+      if (seenSlots.has(dedupeKey)) continue;
+      seenSlots.add(dedupeKey);
+
+      // Skip the no-op (same tech, same slot it's already in).
+      if (t.technician_id === originalTechId && slot === bumped.scheduled_time) continue;
+
+      const move = {
         job_id: bumped.job_id,
         customer_name: bumped.customer_name,
         from_time: bumped.scheduled_time,
-        to_time: laterTime,
-        technician_id: techId,
-      },
-    ],
-    trade_offs: tradeOffs(ctx, { bumped, newTime: laterTime, reassignTechId: null, now }),
-  });
+        to_time: slot,
+        technician_id: t.technician_id,
+      };
 
-  // Option B: reassign the bumped job to another skilled, free technician.
-  const alt = findAlternativeTech(ctx, bumped, techId);
-  if (alt) {
-    out.push({
-      option_id: "opt_reassign",
-      label: `Reassign to ${alt.name}`,
-      moves: [
-        {
-          job_id: bumped.job_id,
-          customer_name: bumped.customer_name,
-          from_time: bumped.scheduled_time,
-          to_time: bumped.scheduled_time,
-          technician_id: alt.technician_id,
-        },
-      ],
-      trade_offs: tradeOffs(ctx, {
+      if (!moveIsFreezeSafe(ctx, move, now)) continue;
+      const clash = findTimeClash(ctx.jobs, t.technician_id, slot, bumped.job_id);
+      if (clash) continue;
+      if (!isWithinWorkingHours(t.working_hours, slot)) continue;
+
+      const isSameTech = t.technician_id === originalTechId;
+      const trade_offs = tradeOffs(ctx, {
         bumped,
-        newTime: bumped.scheduled_time,
-        reassignTechId: alt.technician_id,
+        newTime: slot,
+        reassignTechId: isSameTech ? null : t.technician_id,
         now,
-      }),
-    });
-  }
+      });
 
-  // Option C: move to next day, first slot (safe fallback).
-  const nextDay = addHours(bumped.scheduled_time, 24);
-  out.push({
-    option_id: "opt_next_day",
-    label: "Move to the next day",
-    moves: [
-      {
-        job_id: bumped.job_id,
-        customer_name: bumped.customer_name,
-        from_time: bumped.scheduled_time,
-        to_time: nextDay,
-        technician_id: techId,
-      },
-    ],
-    trade_offs: tradeOffs(ctx, { bumped, newTime: nextDay, reassignTechId: null, now }),
-  });
+      out.push({
+        option_id: `opt_${isSameTech ? "delay" : "reassign"}_${t.technician_id}_${offset}h`,
+        label: isSameTech
+          ? `Delay ${offset}h (same technician)`
+          : `Reassign to ${t.name}, ${offset}h slot`,
+        moves: [move],
+        trade_offs,
+        heuristic_cost: heuristicCost(trade_offs),
+      });
+    }
+  }
 
   return out;
 }
@@ -283,21 +473,20 @@ function tradeOffs(
     customers_affected: 1,
     total_added_travel_km: Math.round(addedKm * 10) / 10,
     sla_breaches: slaBreach,
+    // Always 0 here — moveIsFreezeSafe already excluded unsafe candidates
+    // from the pool. Field kept for schema stability and because
+    // heuristicCost still weights it defensively.
     frozen_jobs_touched: isFrozen(bumped.freeze_point, now) ? 1 : 0,
   };
 }
 
-function findAlternativeTech(ctx: AgentContext, bumped: Job, excludeTechId: string) {
-  return ctx.technicians.find((t) => {
-    if (t.technician_id === excludeTechId) return false;
-    const hasSkill = bumped.skill_required.every((s) => t.skill_tags.includes(s));
-    if (!hasSkill) return false;
-    const clash = ctx.jobs.some(
-      (j) =>
-        j.assigned_technician_id === t.technician_id &&
-        j.status !== "completed" &&
-        Math.abs(hoursBetween(j.scheduled_time, bumped.scheduled_time)) < 1.5,
-    );
-    return !clash;
-  });
+/** Deterministic fallback summary when the LLM's summary isn't usable. */
+export function summariseOption(c: { trade_offs: CandidateMove["trade_offs"]; moves: unknown[] }): string {
+  const t = c.trade_offs;
+  return (
+    `${c.moves.length} job moved · ${t.customers_affected} customer(s) affected · ` +
+    `+${t.total_added_travel_km} km travel · ` +
+    `${t.sla_breaches} SLA breach(es) · ${t.frozen_jobs_touched} frozen job(s) touched`
+  );
 }
+

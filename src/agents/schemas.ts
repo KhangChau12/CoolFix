@@ -154,36 +154,49 @@ export interface AssignmentResult {
 }
 
 // ── Disruption Agent output ──────────────────────────────────────
+// The LLM is only ever allowed to CHOOSE among option_ids we already
+// generated mechanically — it never returns moves/trade-offs itself, and
+// every id it returns is cross-checked against the shortlist we actually
+// offered (`knownOptionIds`). This is the first of two independent gates;
+// the second is disruption.ts's revalidateCandidate(), which re-checks
+// live constraint state regardless of what passes here.
 
-export interface DisruptionResult {
-  options: {
-    option_id: string;
-    label: string;
-    summary: string;
-    moves: {
-      job_id: string;
-      customer_name: string;
-      from_time: string;
-      to_time: string;
-      technician_id: string;
-    }[];
-    trade_offs: {
-      customers_affected: number;
-      total_added_travel_km: number;
-      sla_breaches: number;
-      frozen_jobs_touched: number;
-    };
-    recommended: boolean;
-  }[];
+export interface DisruptionLlmChoice {
+  ranked_option_ids: string[];
+  summaries: Record<string, string>;
   recommended_option_id: string;
   injection_attempt: boolean;
 }
 
-export function validateDisruptionResult(x: unknown): DisruptionResult {
+export function validateDisruptionLlmChoice(
+  x: unknown,
+  knownOptionIds: string[],
+): DisruptionLlmChoice {
   const r = x as Record<string, unknown>;
-  assert(Array.isArray(r.options) && (r.options as unknown[]).length >= 2, "disruption", "need >=2 options");
-  assert(typeof r.recommended_option_id === "string", "disruption", "recommended_option_id required");
-  return r as unknown as DisruptionResult;
+  assert(Array.isArray(r.ranked_option_ids), "disruption", "ranked_option_ids must be array");
+
+  const known = new Set(knownOptionIds);
+  const rankedIds = (r.ranked_option_ids as unknown[]).filter(
+    (id): id is string => typeof id === "string" && known.has(id),
+  );
+  assert(rankedIds.length >= 1, "disruption", "no valid option_id survived cross-check against known candidates");
+  assert(
+    typeof r.recommended_option_id === "string" && known.has(r.recommended_option_id as string),
+    "disruption",
+    "recommended_option_id must be one of the offered candidates",
+  );
+
+  const rawSummaries =
+    r.summaries && typeof r.summaries === "object" ? (r.summaries as Record<string, unknown>) : {};
+
+  return {
+    ranked_option_ids: rankedIds,
+    summaries: Object.fromEntries(
+      rankedIds.map((id) => [id, String(rawSummaries[id] ?? "").slice(0, 400)]),
+    ),
+    recommended_option_id: r.recommended_option_id as string,
+    injection_attempt: Boolean(r.injection_attempt),
+  };
 }
 
 // ── Notification Agent output ────────────────────────────────────

@@ -11,7 +11,7 @@
 // candidates are still returned so the feed shows *why*.
 
 import { distanceKm } from "@/lib/geo";
-import { hoursBetween, isFrozen, nowISO } from "@/lib/time";
+import { findTimeClash, hoursBetween, isFrozen, nowISO } from "@/lib/time";
 import { logDecision } from "./log";
 import type { AssignmentResult, IntakeResult, TechStateResult } from "./schemas";
 import type { CandidateScore, ScoreBreakdown, SkillTag, Tier } from "@/lib/types";
@@ -53,7 +53,7 @@ export function runAssignmentAgent(
       return reject(c, "Outside working hours at the appointment time");
     }
     // HARD CONSTRAINT 3: no double-booking within ±90 min.
-    const clash = hasTimeClash(ctx, c.technician_id, input.scheduledTime, input.jobId);
+    const clash = findTimeClash(ctx.jobs, c.technician_id, input.scheduledTime, input.jobId);
     if (clash) {
       return reject(c, `Schedule clash with job ${clash} (±90 min)`);
     }
@@ -181,23 +181,6 @@ function skillMatchBonus(
   const extra = techSkills.filter((s) => !required.includes(s)).length;
   if (extra === 0) bonus += 0.25;
   return bonus;
-}
-
-function hasTimeClash(
-  ctx: AgentContext,
-  techId: string,
-  scheduledISO: string,
-  ignoreJobId: string,
-): string | null {
-  const clash = ctx.jobs.find(
-    (j) =>
-      j.job_id !== ignoreJobId &&
-      j.assigned_technician_id === techId &&
-      j.status !== "completed" &&
-      j.status !== "disrupted" &&
-      Math.abs(hoursBetween(j.scheduled_time, scheduledISO)) < 1.5,
-  );
-  return clash ? clash.job_id : null;
 }
 
 function tryFindBumpTarget(

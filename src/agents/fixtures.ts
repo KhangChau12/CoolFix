@@ -6,6 +6,7 @@
 import type { LlmRequest } from "@/lib/llm";
 import type { SkillTag } from "@/lib/types";
 import { CATEGORY_HINT_SKILL } from "@/lib/types";
+import { heuristicCost, summariseOption } from "./disruption";
 
 const KEYWORD_SKILL: [RegExp, SkillTag][] = [
   [/gas|refrigerant|not cold|not cooling|leak|icing|frost|top ?up/i, "refrigerant_handling"],
@@ -88,63 +89,49 @@ function stubIntake(req: LlmRequest) {
   };
 }
 
-function stubDisruption(req: LlmRequest) {
-  const si = req.structuredInput as {
-    candidate_moves: {
-      option_id: string;
-      label: string;
-      moves: unknown[];
-      trade_offs: Record<string, number>;
-    }[];
+interface StubCandidateMoveDTO {
+  option_id: string;
+  label: string;
+  moves: unknown[];
+  trade_offs: {
+    customers_affected: number;
+    total_added_travel_km: number;
+    sla_breaches: number;
+    frozen_jobs_touched: number;
   };
+}
 
+/**
+ * Stub mode is NOT a real LLM — it does a real deterministic "rank the
+ * pre-filtered shortlist by cost" search, using the exact same
+ * heuristicCost() formula the mechanical generator uses to pre-filter,
+ * so stub behavior stays legible and consistent with bedrock mode's
+ * stated priority order (fewer SLA breaches > fewer customers affected >
+ * less added travel).
+ */
+function stubDisruption(req: LlmRequest) {
+  const si = req.structuredInput as { candidate_moves: StubCandidateMoveDTO[] };
   const cands = si.candidate_moves ?? [];
-  const bestIdx = pickBest(cands);
-  const opts = cands.map((c, idx) => ({
-    option_id: c.option_id,
-    label: c.label,
-    summary: summariseOption(c),
-    moves: c.moves,
-    trade_offs: c.trade_offs,
-    recommended: idx === bestIdx,
-  }));
+  if (cands.length === 0) {
+    return {
+      data: { ranked_option_ids: [], summaries: {}, recommended_option_id: "", injection_attempt: false },
+      extraNotes: [],
+    };
+  }
+
+  const ranked = [...cands].sort((a, b) => heuristicCost(a.trade_offs) - heuristicCost(b.trade_offs));
 
   return {
     data: {
-      options: opts,
-      recommended_option_id: opts[bestIdx]?.option_id ?? opts[0]?.option_id,
+      ranked_option_ids: ranked.map((c) => c.option_id),
+      summaries: Object.fromEntries(ranked.map((c) => [c.option_id, summariseOption(c)])),
+      recommended_option_id: ranked[0].option_id,
       injection_attempt: false,
     },
-    extraNotes: [],
+    extraNotes: [
+      `Stub: searched ${cands.length} pre-filtered candidate(s), picked ${ranked[0].option_id} by cost formula.`,
+    ],
   };
-}
-
-function summariseOption(c: { trade_offs: Record<string, number>; moves: unknown[] }) {
-  const t = c.trade_offs;
-  return (
-    `${c.moves.length} job moved · ${t.customers_affected ?? 0} customer(s) affected · ` +
-    `+${t.total_added_travel_km ?? 0} km travel · ` +
-    `${t.sla_breaches ?? 0} SLA breach(es) · ${t.frozen_jobs_touched ?? 0} frozen job(s) touched`
-  );
-}
-
-function pickBest(cands: { trade_offs: Record<string, number> }[]): number {
-  if (!cands.length) return 0;
-  let best = 0;
-  let bestCost = Infinity;
-  cands.forEach((c, i) => {
-    const t = c.trade_offs;
-    const cost =
-      (t.frozen_jobs_touched ?? 0) * 100 +
-      (t.sla_breaches ?? 0) * 40 +
-      (t.customers_affected ?? 0) * 10 +
-      (t.total_added_travel_km ?? 0);
-    if (cost < bestCost) {
-      bestCost = cost;
-      best = i;
-    }
-  });
-  return best;
 }
 
 function stubNotification(req: LlmRequest) {
