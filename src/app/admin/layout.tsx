@@ -63,7 +63,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
       <TopBar active="admin" context="DISPATCH CONSOLE · SG" />
-      <div style={{ display: "flex", minHeight: "calc(100vh - 54px)" }}>
+      <div style={{ display: "flex", minHeight: "calc(100vh - 56px)" }}>
         <aside
           style={{
             width: 200,
@@ -75,8 +75,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             flexDirection: "column",
             gap: 2,
             position: "sticky",
-            top: 54,
-            height: "calc(100vh - 54px)",
+            top: 56,
+            height: "calc(100vh - 56px)",
           }}
         >
           <div

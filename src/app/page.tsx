@@ -43,32 +43,53 @@ const PIPELINE = [
 export default function Home() {
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
-      <div
+      <header
         style={{
           display: "flex",
           alignItems: "center",
           gap: 11,
           padding: "0 18px",
-          height: 54,
+          height: 56,
           background: "var(--ink)",
           color: "var(--ink-text)",
+          borderBottom: "1px solid var(--ink-border)",
+          boxShadow: "0 1px 0 rgba(0,0,0,0.35), 0 8px 24px -12px rgba(0,0,0,0.5)",
+          position: "sticky",
+          top: 0,
+          zIndex: 50,
         }}
       >
-        <span style={{ width: 20, height: 20, borderRadius: 5, background: "var(--brand)", display: "block" }} />
-        <strong style={{ fontWeight: 600, letterSpacing: "-0.01em" }}>CoolFix</strong>
+        <span
+          aria-hidden
+          style={{
+            width: 24,
+            height: 24,
+            borderRadius: 7,
+            display: "grid",
+            placeItems: "center",
+            background: "linear-gradient(150deg, var(--brand) 0%, #4f46e5 100%)",
+            boxShadow: "0 0 0 1px rgba(255,255,255,0.12), 0 2px 8px -2px rgba(37,99,235,0.6)",
+          }}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.4" strokeLinecap="round">
+            <path d="M12 2v20M4.2 7l15.6 10M19.8 7L4.2 17" />
+          </svg>
+        </span>
+        <strong style={{ fontWeight: 600, letterSpacing: "-0.01em", fontSize: 15 }}>CoolFix</strong>
         <span
           style={{
             fontFamily: "var(--mono)",
-            fontSize: 10.5,
+            fontSize: 10,
+            letterSpacing: "0.06em",
             color: "var(--ink-text-muted)",
             border: "1px solid var(--ink-border)",
-            borderRadius: 4,
-            padding: "2px 6px",
+            borderRadius: 5,
+            padding: "3px 7px",
           }}
         >
           SHOW ME YOUR AGENTS · NUS ISS
         </span>
-      </div>
+      </header>
 
       <main className="container" style={{ maxWidth: 980, paddingTop: 56, paddingBottom: 64 }}>
         <div

@@ -226,55 +226,116 @@ export function AgentFlowMap({ jobId, job }: Props) {
   }, [load]);
 
   const flow = useMemo(() => computeFlow(rows), [rows]);
-
-  // ── which visits have already been "arrived at" by the animation ────
-  // We don't just snap to the latest DB state — we play the hand-offs in
-  // order so a judge watching seees the train actually travel, even if a
-  // burst of rows landed between two polls.
-  const [shownStepCount, setShownStepCount] = useState(0);
-  const [trainPos, setTrainPos] = useState<{ path: string; dur: number; cls: string } | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const prevJobRef = useRef<string | null>(null);
-
-  // Reset the animation cursor whenever we switch to a different job.
-  useEffect(() => {
-    if (jobId !== prevJobRef.current) {
-      prevJobRef.current = jobId;
-      setShownStepCount(0);
-      setTrainPos(null);
-      setLoaded(false);
-      if (timerRef.current) clearTimeout(timerRef.current);
-    }
-  }, [jobId]);
-
   const steps = flow.steps;
 
-  // Advance one hand-off at a time toward flow.steps.length, animating
-  // the train along the real rail for each one.
-  useEffect(() => {
-    if (shownStepCount >= steps.length) return;
-    const step = steps[shownStepCount];
-    const rail = step.from ? RAIL_BY_PAIR.get(`${step.from}->${step.to}`) : null;
+  // ── the train: play the hand-offs in order ─────────────────────────
+  // A judge watching should see the train actually travel each rail, even
+  // when a burst of rows lands between two polls. The animation loop must
+  // NOT restart every time the data is re-fetched — `steps` is a fresh
+  // array on every poll even when its contents are unchanged. So the loop
+  // is driven off `steps.length` (a number) and reads step content from a
+  // ref; a self-scheduling timeout walks the cursor forward one hop at a
+  // time and is only torn down when the job changes.
+  const [shownStepCount, setShownStepCount] = useState(0);
+  const [train, setTrain] = useState<{
+    path: string;
+    dur: number;
+    cls: string;
+    key: number;
+    phase: "run" | "fade";
+  } | null>(null);
 
-    if (!rail) {
-      // No rail to animate (first station, or a hop we don't have a drawn
-      // path for) — just reveal it after a short beat.
-      timerRef.current = setTimeout(() => setShownStepCount((n) => n + 1), 260);
-      return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  const stepsRef = useRef<FlowStep[]>(steps);
+  stepsRef.current = steps;
+  const shownRef = useRef(0);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hopKeyRef = useRef(0);
+  const stepsLen = steps.length;
+
+  // Reset when the job changes.
+  useEffect(() => {
+    shownRef.current = 0;
+    setShownStepCount(0);
+    setTrain(null);
+    setLoaded(false);
+    if (timerRef.current) clearTimeout(timerRef.current);
+  }, [jobId]);
+
+  // The walk is owned by one long-lived effect keyed on `jobId` only — it
+  // is NOT torn down when new rows arrive, so an in-flight hop is never
+  // interrupted by a poll. A second effect just "nudges" the loop awake
+  // when the hop count grows while it was idle (caught up).
+  const advanceRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    const advance = () => {
+      const all = stepsRef.current;
+      const cursor = shownRef.current;
+      if (cursor >= all.length) {
+        // caught up — go idle and wait for the effect to re-run with more
+        // hops. Clearing the ref is what lets that re-run restart the loop.
+        timerRef.current = null;
+        setTrain(null);
+        return;
+      }
+      const step = all[cursor];
+      const rail = step.from ? RAIL_BY_PAIR.get(`${step.from}->${step.to}`) : null;
+
+      if (!rail) {
+        // First station, or a hop with no drawn rail — reveal after a beat.
+        timerRef.current = setTimeout(() => {
+          shownRef.current = cursor + 1;
+          setShownStepCount(cursor + 1);
+          advance();
+        }, 240);
+        return;
+      }
+
+      const isArc = rail.cls === "ghost" || rail.d.includes("Q");
+      const dur = rail.cls === "halt" ? 820 : isArc ? 720 : 560;
+      const key = ++hopKeyRef.current;
+      setTrain({ path: rail.d, dur, cls: rail.cls, key, phase: "run" });
+
+      // Run the motion, then a short fade, then commit the hop and continue.
+      timerRef.current = setTimeout(() => {
+        setTrain((t) => (t && t.key === key ? { ...t, phase: "fade" } : t));
+        timerRef.current = setTimeout(() => {
+          setTrain((t) => (t && t.key === key ? null : t));
+          shownRef.current = cursor + 1;
+          setShownStepCount(cursor + 1);
+          advance();
+        }, 180);
+      }, dur);
+    };
+
+    advanceRef.current = advance;
+
+    // Kick the loop for this job. If it's mid-hop (timer pending) leave it;
+    // it self-continues.
+    if (shownRef.current < stepsRef.current.length && timerRef.current === null) {
+      advance();
     }
 
-    const dur = rail.cls === "halt" ? 900 : 660;
-    setTrainPos({ path: rail.d, dur, cls: rail.cls });
-    timerRef.current = setTimeout(() => {
-      setTrainPos(null);
-      setShownStepCount((n) => n + 1);
-    }, dur);
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-  }, [shownStepCount, steps]);
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobId]);
 
-  // The "visible" flow state is computed only through shownStepCount hops
-  // — stations beyond that are still pending even if the DB already has
-  // the row, so the reveal is paced instead of snapping instantly.
+  // Nudge: when more hops land while the train sits idle (caught up), wake
+  // the loop. A no-op if a hop is already running.
+  useEffect(() => {
+    if (shownRef.current < stepsLen && timerRef.current === null) {
+      advanceRef.current();
+    }
+  }, [stepsLen]);
+
+  // The "visible" flow state is computed only through the hops the train
+  // has actually completed — stations beyond the cursor stay pending even
+  // if the DB already has the row, so the reveal is paced not snapped.
   const visibleFlow = useMemo(() => {
     if (shownStepCount >= steps.length) return flow;
     const visibleRows: AgentDecisionLog[] = [];
@@ -359,7 +420,7 @@ export function AgentFlowMap({ jobId, job }: Props) {
                 >
                   <FlowSvgInner
                     stations={visibleFlow.stations}
-                    train={trainPos}
+                    train={train}
                     hoverId={hoverId}
                     pinnedId={pinnedId}
                     onHover={setHoverId}
@@ -430,7 +491,7 @@ function FlowSvgInner({
   onClick,
 }: {
   stations: Record<StationId, StationRuntime>;
-  train: { path: string; dur: number; cls: string } | null;
+  train: { path: string; dur: number; cls: string; key: number; phase: "run" | "fade" } | null;
   hoverId: StationId | null;
   pinnedId: StationId | null;
   onHover: (id: StationId) => void;
@@ -508,21 +569,47 @@ function FlowSvgInner({
       </text>
 
       {train && (
-        // key on the path so each hand-off remounts the rect and its SMIL
-        // <animateMotion> actually restarts (changing the attribute alone
-        // does not reliably re-trigger a running SMIL animation).
-        <rect
-          key={train.path}
+        // key on a per-hop counter so each hand-off remounts the group and
+        // its SMIL <animateMotion> actually restarts (mutating the attribute
+        // alone does not reliably re-trigger a running SMIL animation).
+        // rotate="auto" is only safe on straight segments — on the elbow /
+        // arc rails (which contain Q curves) it makes the car spin at every
+        // corner, so those get a fixed orientation instead.
+        <g
+          key={train.key}
           className="fm-train"
-          width="18"
-          height="10"
-          rx="3"
-          x="-9"
-          y="-5"
-          fill={train.cls === "halt" ? "var(--tier-urgent)" : "var(--tier-priority)"}
+          style={{
+            opacity: train.phase === "fade" ? 0 : 1,
+            transition: "opacity 0.18s linear",
+          }}
         >
-          <animateMotion dur={`${train.dur / 1000}s`} path={train.path} fill="freeze" rotate="auto" begin="0s" />
-        </rect>
+          <rect
+            width="19"
+            height="11"
+            rx="3.5"
+            x="-9.5"
+            y="-5.5"
+            fill={train.cls === "halt" ? "var(--tier-urgent)" : "var(--tier-priority)"}
+            stroke="#fff"
+            strokeWidth="1.5"
+            strokeOpacity="0.5"
+          >
+            <animateMotion
+              dur={`${train.dur / 1000}s`}
+              path={train.path}
+              fill="freeze"
+              rotate={train.path.includes("Q") ? "0" : "auto"}
+              begin="0s"
+            />
+            {/* a soft glowing pulse riding with the car */}
+            <animate
+              attributeName="fill-opacity"
+              values="0.7;1;0.7"
+              dur="0.9s"
+              repeatCount="indefinite"
+            />
+          </rect>
+        </g>
       )}
 
       {STATION_ORDER.map((id) => (

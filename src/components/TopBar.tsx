@@ -17,57 +17,79 @@ export function TopBar({
   context: string;
 }) {
   return (
-    <div
+    <header
       style={{
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
         gap: 20,
         padding: "0 18px",
-        height: 54,
+        height: 56,
         background: "var(--ink)",
         color: "var(--ink-text)",
+        borderBottom: "1px solid var(--ink-border)",
+        boxShadow: "0 1px 0 rgba(0,0,0,0.35), 0 8px 24px -12px rgba(0,0,0,0.5)",
         position: "sticky",
         top: 0,
         zIndex: 50,
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 11, minWidth: 0 }}>
-        <Link
-          href="/"
+      <Link
+        href="/"
+        className="tb-brand"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 11,
+          minWidth: 0,
+          color: "var(--ink-text)",
+        }}
+      >
+        <span
+          aria-hidden
           style={{
-            width: 20,
-            height: 20,
-            borderRadius: 5,
-            background: "var(--brand)",
+            width: 24,
+            height: 24,
+            borderRadius: 7,
             flexShrink: 0,
-            display: "block",
+            display: "grid",
+            placeItems: "center",
+            background: "linear-gradient(150deg, var(--brand) 0%, #4f46e5 100%)",
+            boxShadow: "0 0 0 1px rgba(255,255,255,0.12), 0 2px 8px -2px rgba(37,99,235,0.6)",
           }}
-        />
-        <Link href="/" style={{ fontWeight: 600, letterSpacing: "-0.01em", color: "var(--ink-text)" }}>
-          CoolFix
-        </Link>
-        <div
+        >
+          {/* snowflake mark */}
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.4" strokeLinecap="round">
+            <path d="M12 2v20M4.2 7l15.6 10M19.8 7L4.2 17" />
+          </svg>
+        </span>
+        <span style={{ fontWeight: 600, letterSpacing: "-0.01em", fontSize: 15 }}>CoolFix</span>
+        <span
+          className="tb-context"
           style={{
             fontFamily: "var(--mono)",
-            fontSize: 10.5,
+            fontSize: 10,
+            letterSpacing: "0.06em",
             color: "var(--ink-text-muted)",
             border: "1px solid var(--ink-border)",
-            borderRadius: 4,
-            padding: "2px 6px",
+            borderRadius: 5,
+            padding: "3px 7px",
             whiteSpace: "nowrap",
           }}
         >
           {context}
-        </div>
-      </div>
-      <div
+        </span>
+      </Link>
+
+      <nav
+        aria-label="Switch persona"
         style={{
           display: "flex",
-          gap: 2,
-          background: "#242220",
+          gap: 3,
+          background: "rgba(0,0,0,0.28)",
+          border: "1px solid var(--ink-border)",
           padding: 3,
-          borderRadius: 8,
+          borderRadius: 9,
           flexShrink: 0,
         }}
       >
@@ -77,20 +99,48 @@ export function TopBar({
             <Link
               key={p.key}
               href={p.href}
-              style={{
-                fontSize: 12.5,
-                fontWeight: isActive ? 500 : 400,
-                color: isActive ? "var(--ink-text)" : "var(--ink-text-muted)",
-                background: isActive ? "#3a3733" : "transparent",
-                borderRadius: 6,
-                padding: "6px 12px",
-              }}
+              aria-current={isActive ? "page" : undefined}
+              className={`tb-tab${isActive ? " is-active" : ""}`}
             >
               {p.label}
             </Link>
           );
         })}
-      </div>
-    </div>
+      </nav>
+
+      <style>{`
+        .tb-brand .tb-context { transition: border-color 0.15s, color 0.15s; }
+        .tb-brand:hover { text-decoration: none; }
+        .tb-brand:hover .tb-context {
+          border-color: var(--ink-text-faint);
+          color: var(--ink-text);
+        }
+        .tb-tab {
+          font-size: 12.5px;
+          font-weight: 400;
+          line-height: 1;
+          color: var(--ink-text-muted);
+          background: transparent;
+          border-radius: 6px;
+          padding: 7px 13px;
+          transition: color 0.15s, background 0.15s;
+        }
+        .tb-tab:hover {
+          color: var(--ink-text);
+          background: rgba(255,255,255,0.06);
+          text-decoration: none;
+        }
+        .tb-tab.is-active {
+          color: var(--ink-text);
+          font-weight: 500;
+          background: linear-gradient(180deg, #3d3a35 0%, #322f2b 100%);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.07), 0 1px 2px rgba(0,0,0,0.3);
+        }
+        .tb-tab.is-active:hover { background: linear-gradient(180deg, #423f39 0%, #37332f 100%); }
+        @media (max-width: 560px) {
+          .tb-context { display: none; }
+        }
+      `}</style>
+    </header>
   );
 }
