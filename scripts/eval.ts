@@ -50,8 +50,11 @@ const base = {
 };
 
 async function goldenCleanAssignment() {
-  console.log("\n[golden] Clean standard booking → auto-assigned");
+  console.log("\n[golden] Clean standard booking (no free-text) → auto-assigned");
   await reseed();
+  // The description field is optional: when the customer's problem matches
+  // the dropdown category, they can leave it blank and Job-Intake classifies
+  // from the category alone.
   const r = await runBookingPipeline({
     ...base,
     customer_name: "Golden Clean",
@@ -59,11 +62,16 @@ async function goldenCleanAssignment() {
     address: "1 Clementi Ave 3",
     location: SG_LANDMARKS.clementi,
     problem_category: "routine",
-    problem_description: "Routine cleaning of two units, no rush.",
+    problem_description: "",
     tier: "standard",
   });
   check("status is assigned_auto", r.status === "assigned_auto", r.status);
   check("a technician was assigned", !!r.job.assigned_technician_id);
+  check(
+    "skill inferred from category with no description",
+    r.job.skill_required.includes("basic_maintenance"),
+    JSON.stringify(r.job.skill_required),
+  );
   check("score breakdown present", !!r.job.score_breakdown);
   check("scheduled inside service hours", withinHours(r.job.scheduled_time));
   check("technician + customer notified", r.notificationsSent >= 2, `${r.notificationsSent}`);

@@ -201,14 +201,18 @@ export default function BookPage() {
                   ))}
                 </select>
               </Field>
-              <Field label="Describe what's happening (free text)">
+              <Field label="Anything else we should know? (optional)">
                 <textarea
                   className="inp"
-                  rows={4}
-                  placeholder="e.g. The living room unit stopped blowing cold air yesterday and there's ice on the pipe."
+                  rows={3}
+                  placeholder="Only if the problem type above doesn't quite cover it — e.g. 'ice on the pipe' or 'unit is in a hard-to-reach spot'."
                   value={form.problem_description}
                   onChange={(e) => upd("problem_description", e.target.value)}
                 />
+                <span className="faint" style={{ fontSize: 11, display: "block", marginTop: 4 }}>
+                  If it matches the problem type, you can leave this blank — our
+                  assistant works from the type you picked.
+                </span>
               </Field>
             </div>
             <div className="row" style={{ gap: 8, marginTop: 16 }}>
@@ -219,8 +223,7 @@ export default function BookPage() {
                   !form.customer_name ||
                   !form.customer_email ||
                   !form.address ||
-                  !locationReady ||
-                  !form.problem_description
+                  !locationReady
                 }
                 onClick={() => setStep("tier")}
               >
@@ -299,7 +302,12 @@ export default function BookPage() {
               <dt className="muted">Contact</dt><dd style={{ margin: 0 }}>{form.customer_email} · {form.customer_phone}</dd>
               <dt className="muted">Address</dt><dd style={{ margin: 0 }}>{form.address}</dd>
               <dt className="muted">Problem</dt><dd style={{ margin: 0 }}>{PROBLEM_CATEGORIES.find((c) => c.value === form.problem_category)?.label}</dd>
-              <dt className="muted">Details</dt><dd style={{ margin: 0 }}>{form.problem_description}</dd>
+              {form.problem_description.trim() && (
+                <>
+                  <dt className="muted">Details</dt>
+                  <dd style={{ margin: 0 }}>{form.problem_description}</dd>
+                </>
+              )}
               <dt className="muted">Tier</dt><dd style={{ margin: 0 }}>{TIER_META[tier].emoji} {TIER_META[tier].label} · ~{estPrice(form.problem_category, tier)} SGD</dd>
             </dl>
             {form.location && !mapUnavailable && (
