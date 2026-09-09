@@ -10,6 +10,7 @@ import type { RuntimeConfig } from "@/lib/types";
 
 const NAV = [
   { href: "/admin", label: "Dashboard", icon: "◱" },
+  { href: "/admin/flow", label: "Agent Flow Map", icon: "⛓" },
   { href: "/admin/schedule", label: "Schedule", icon: "▤" },
   { href: "/admin/queue", label: "Job Queue", icon: "≡" },
   { href: "/admin/technicians", label: "Technicians", icon: "⚉" },

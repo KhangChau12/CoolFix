@@ -54,6 +54,18 @@
   --agent-notification: #f0eee9;
   --agent-orchestrator: #f2f0ec;
 
+  /* Same agent accents, re-tuned to read on a WHITE card (the Agent Flow
+     Map's stations) rather than the dark feed panel above. Used only by
+     AgentFlowMap.tsx as var(--agent-flow-<name>). */
+  --agent-flow-pricing: #7c3aed;
+  --agent-flow-intake: #0d9488;
+  --agent-flow-capacity: #7c3aed;
+  --agent-flow-techstate: #64748b;
+  --agent-flow-assignment: #2563eb;
+  --agent-flow-disruption: #ea580c;
+  --agent-flow-notification: #57534e;
+  --agent-flow-orchestrator: #57534e;
+
   /* Promoted one-off hex values (previously hardcoded inline) */
   --success: #15803d;
   --success-bg: #eef7f1;
@@ -119,6 +131,8 @@ h1, h2, h3, h4 { margin: 0 0 0.4em; line-height: 1.25; }
 }
 .btn:hover { background: var(--surface-2); }
 .btn:active { transform: translateY(1px); }
+.list-row-link { transition: background 0.1s; }
+.list-row-link:hover { background: var(--surface-2); text-decoration: none; }
 .btn-primary {
   background: var(--ink);
   border-color: var(--ink);
@@ -210,4 +224,48 @@ h1, h2, h3, h4 { margin: 0 0 0.4em; line-height: 1.25; }
   width: 8px; height: 8px; border-radius: 999px;
   background: #16a34a;
   animation: pulse 1.6s ease-in-out infinite;
+}
+
+/* ── Agent Flow Map (/admin/flow) ──────────────────────────────────── */
+.stage-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.78fr) minmax(320px, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+@media (max-width: 1060px) {
+  .stage-grid { grid-template-columns: 1fr; }
+}
+.panel.pinned {
+  border-color: color-mix(in srgb, var(--brand) 40%, var(--border));
+  box-shadow: 0 3px 14px rgba(37, 99, 235, 0.1);
+}
+.step {
+  font-family: var(--mono);
+  font-size: 9px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  color: var(--text-faint);
+  background: var(--surface);
+  white-space: nowrap;
+  transition: all 0.2s;
+}
+.step.active { border-color: var(--tier-priority); color: var(--tier-priority); background: var(--tier-priority-bg); }
+.step.done { border-color: color-mix(in srgb, var(--brand) 40%, transparent); color: var(--brand-ink); }
+.step.halt { border-color: var(--tier-urgent); color: var(--tier-urgent); background: var(--tier-urgent-bg); }
+.step.skip { opacity: 0.45; text-decoration: line-through; }
+
+@keyframes fm-ping {
+  0% { transform: scale(1); opacity: 0.55; }
+  100% { transform: scale(1.5); opacity: 0; }
+}
+.fm-ping { animation: fm-ping 1.4s cubic-bezier(0.2, 0.7, 0.3, 1) infinite; transform-origin: center; }
+@keyframes fm-spin { to { transform: rotate(360deg); } }
+.fm-spin { animation: fm-spin 0.75s linear infinite; }
+.fm-train { filter: drop-shadow(0 1px 3px rgba(224, 122, 31, 0.5)); }
+
+@media (prefers-reduced-motion: reduce) {
+  .fm-ping, .fm-spin { animation-duration: 0.001s; }
+  .fm-train { display: none; }
 }

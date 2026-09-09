@@ -1,11 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { apiGet } from "@/lib/client";
 import { useRealtime } from "@/components/useRealtime";
 import { AgentFeed } from "@/components/AgentFeed";
-import { Metric } from "@/components/ui";
 import {
   PIPELINE_STAGES,
   TIER_META,
@@ -13,8 +12,9 @@ import {
   type ApprovalRequest,
   type Job,
   type NotificationRecord,
+  type Technician,
 } from "@/lib/types";
-import { hoursBetween, nowISO } from "@/lib/time";
+import { hoursBetween, nowISO, sgHour } from "@/lib/time";
 
 const STAGE_DOT: Record<string, string> = {
   intake: "var(--agent-intake)",
@@ -27,33 +27,79 @@ const STAGE_DOT: Record<string, string> = {
   done: "var(--border-strong)",
 };
 
+const NOMINAL_SLOTS_PER_DAY = 5; // one technician's realistic working-day capacity
+
+function sgClock(d: Date): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Singapore",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(d);
+}
+
+function sgDate(d: Date): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Singapore",
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+  }).format(d);
+}
+
+function fmtSlot(iso: string): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Singapore",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(iso));
+}
+
 export default function Dashboard() {
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [techs, setTechs] = useState<Technician[]>([]);
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [notifications, setNotifications] = useState<NotificationRecord[]>([]);
+  const [clock, setClock] = useState<Date | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [j, a, n] = await Promise.all([
+      const [j, t, a, n] = await Promise.all([
         apiGet<{ jobs: Job[] }>("/api/bookings"),
+        apiGet<{ technicians: Technician[] }>("/api/technicians"),
         apiGet<{ approvals: ApprovalRequest[] }>("/api/approvals"),
         apiGet<{ notifications: NotificationRecord[] }>("/api/notifications"),
       ]);
       setJobs(j.jobs);
+      setTechs(t.technicians);
       setApprovals(a.approvals);
       setNotifications(n.notifications);
     } catch {
-      /* keep */
+      /* keep last good state */
     }
   }, []);
 
-  useRealtime("jobs", load);
+  const conn = useRealtime("jobs", load);
   useRealtime("notifications", load);
+  useRealtime("approval_requests", load);
   useEffect(() => {
     load();
   }, [load]);
 
+  // Live SGT clock — hydration-safe (starts null on the server).
+  useEffect(() => {
+    setClock(new Date());
+    const t = setInterval(() => setClock(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
   const now = nowISO();
+  const nowHour = clock ? sgHour(clock.toISOString()) : null;
+
+  const activeJobs = jobs.filter((j) => j.status !== "completed");
   const todayJobs = jobs.filter((j) => {
     const h = hoursBetween(now, j.scheduled_time);
     return h >= -12 && h <= 24;
@@ -61,166 +107,697 @@ export default function Dashboard() {
   const pendingAssign = jobs.filter((j) => j.status === "pending").length;
   const pendingApprovals = approvals.filter((a) => a.status === "pending").length;
   const frozen = jobs.filter((j) => j.status === "frozen").length;
+  const disrupted = jobs.filter((j) => j.status === "disrupted").length;
   const awaitingAck = notifications.filter((n) => !n.acknowledged).length;
+  const autoCommitted = jobs.filter((j) =>
+    j.reschedule_history.some((r) => r.decided_by === "auto"),
+  ).length;
 
+  // ── Fleet load ──────────────────────────────────────────────────
+  // Per-technician open assignments vs a nominal 5-slot day.
+  const fleet = useMemo(() => {
+    return techs
+      .map((t) => {
+        const assigned = activeJobs.filter(
+          (j) => j.assigned_technician_id === t.technician_id,
+        );
+        const nextJob = assigned
+          .filter((j) => hoursBetween(now, j.scheduled_time) > -1.5)
+          .sort((a, b) => a.scheduled_time.localeCompare(b.scheduled_time))[0];
+        const busyNow =
+          nowHour !== null &&
+          assigned.some((j) => Math.abs(sgHour(j.scheduled_time) - nowHour) < 1.5);
+        return {
+          id: t.technician_id,
+          name: t.name,
+          level: t.experience_level,
+          load: assigned.length,
+          pct: Math.min(100, Math.round((assigned.length / NOMINAL_SLOTS_PER_DAY) * 100)),
+          busyNow,
+          next: nextJob ?? null,
+        };
+      })
+      .sort((a, b) => b.load - a.load || a.name.localeCompare(b.name));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [techs, jobs, nowHour]);
+
+  const freeNow = fleet.filter((f) => !f.busyNow).length;
+  const fleetUtil = fleet.length
+    ? Math.round(
+        (fleet.reduce((s, f) => s + f.load, 0) /
+          (fleet.length * NOMINAL_SLOTS_PER_DAY)) *
+          100,
+      )
+    : 0;
+
+  // ── Throughput by tier (active jobs) ────────────────────────────
   const tierFill = TIERS.map((t) => ({
     tier: t,
-    count: jobs.filter((j) => j.tier === t && j.status !== "completed").length,
+    count: activeJobs.filter((j) => j.tier === t).length,
   }));
-  const maxTier = Math.max(...tierFill.map((x) => x.count), 1);
+  const tierTotal = Math.max(
+    tierFill.reduce((s, x) => s + x.count, 0),
+    1,
+  );
 
-  const jobById = Object.fromEntries(jobs.map((j) => [j.job_id, j]));
-  const pendingApprovalRows = approvals
-    .filter((a) => a.status === "pending")
-    .map((a) => ({
-      approval_id: a.approval_id,
-      reason: a.kind === "emergency_override" ? "EMERGENCY OVERRIDE" : "RE-PLAN APPROVAL",
-      title: jobById[a.job_id]
-        ? `${jobById[a.job_id].customer_name} · ${a.reason}`
-        : a.reason,
-    }));
-
+  // ── Pipeline funnel ────────────────────────────────────────────
   const pipelineCounts = PIPELINE_STAGES.map((s) => ({
     stage: s.label,
     dot: STAGE_DOT[s.key],
     count: jobs.filter((j) => j.pipeline_stage === s.key).length,
   }));
+  const pipelineInFlight = jobs.filter(
+    (j) => j.pipeline_stage !== "done" && j.status !== "completed",
+  ).length;
+
+  // ── Attention band ─────────────────────────────────────────────
+  const jobById = Object.fromEntries(jobs.map((j) => [j.job_id, j]));
+  const attentionRows = approvals
+    .filter((a) => a.status === "pending")
+    .map((a) => ({
+      approval_id: a.approval_id,
+      kind: a.kind === "emergency_override" ? "EMERGENCY OVERRIDE" : "RE-PLAN APPROVAL",
+      customer: jobById[a.job_id]?.customer_name ?? a.job_id,
+      reason: a.reason,
+      options: a.options.length,
+    }));
+
+  const upcomingJobs = jobs
+    .filter((j) => hoursBetween(now, j.scheduled_time) > -1 && j.status !== "completed")
+    .sort((a, b) => a.scheduled_time.localeCompare(b.scheduled_time))
+    .slice(0, 7);
+
+  const connLabel =
+    conn === "live" ? "live" : conn === "polling" ? "polling" : "connecting";
 
   return (
-    <div className="stack" style={{ gap: 20 }}>
-      <div className="spread">
-        <div>
-          <h1 style={{ fontSize: 22, margin: 0 }}>Dashboard</h1>
-          <p className="muted" style={{ margin: "2px 0 0", fontSize: 13 }}>
-            Live view of the dispatch pipeline and agent decisions.
-          </p>
+    <div className="stack" style={{ gap: 18 }}>
+      {/* ── Command bar ─────────────────────────────────────────── */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          flexWrap: "wrap",
+          gap: 14,
+          padding: "13px 16px",
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          borderRadius: 12,
+          boxShadow: "var(--shadow-sm)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 14, minWidth: 0 }}>
+          <div>
+            <h1 style={{ fontSize: 19, margin: 0, letterSpacing: "-0.01em" }}>
+              Dispatch overview
+            </h1>
+            <div className="faint" style={{ fontSize: 11.5, marginTop: 2 }}>
+              {activeJobs.length} active job{activeJobs.length === 1 ? "" : "s"} ·{" "}
+              {techs.length} technicians on roster
+            </div>
+          </div>
         </div>
-        <Link href="/book" className="btn btn-primary" target="_blank">
-          + New booking (Customer form)
-        </Link>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div
+            className="row"
+            style={{
+              gap: 7,
+              padding: "5px 10px",
+              borderRadius: 999,
+              border: "1px solid var(--border)",
+              background: "var(--surface-2)",
+              fontFamily: "var(--mono)",
+              fontSize: 11.5,
+            }}
+          >
+            <span
+              className={conn === "live" ? "live-dot" : ""}
+              style={{
+                width: 7,
+                height: 7,
+                borderRadius: 999,
+                background: conn === "live" ? undefined : "var(--text-faint)",
+                flex: "none",
+              }}
+            />
+            <span className="muted">{connLabel}</span>
+          </div>
+          <div
+            className="mono"
+            style={{
+              fontSize: 12,
+              color: "var(--text-muted)",
+              padding: "5px 10px",
+              borderRadius: 999,
+              border: "1px solid var(--border)",
+              background: "var(--surface-2)",
+              minWidth: 148,
+              textAlign: "center",
+            }}
+          >
+            {clock ? `${sgDate(clock)} · ${sgClock(clock)}` : "—"} SGT
+          </div>
+          <Link href="/book" className="btn btn-primary" target="_blank">
+            New booking&nbsp;<span aria-hidden style={{ opacity: 0.7 }}>↗</span>
+          </Link>
+        </div>
       </div>
 
+      {/* ── Attention band (only when something is waiting) ─────── */}
+      {attentionRows.length > 0 && (
+        <div
+          style={{
+            border: "1px solid var(--tier-urgent)",
+            borderRadius: 12,
+            overflow: "hidden",
+            background: "var(--tier-urgent-bg)",
+            boxShadow: "var(--shadow-sm)",
+          }}
+        >
+          <div
+            className="spread"
+            style={{
+              padding: "10px 15px",
+              borderBottom: "1px solid color-mix(in srgb, var(--tier-urgent) 25%, transparent)",
+            }}
+          >
+            <span className="row" style={{ gap: 8 }}>
+              <span className="pill-count">{attentionRows.length}</span>
+              <strong style={{ fontSize: 13, color: "var(--tier-urgent)", letterSpacing: "0.01em" }}>
+                Waiting on a coordinator decision
+              </strong>
+            </span>
+            <Link
+              href="/admin/approvals"
+              className="row"
+              style={{ gap: 4, fontSize: 12, fontWeight: 600 }}
+            >
+              Open Approvals queue <span aria-hidden>→</span>
+            </Link>
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+              gap: 1,
+              background: "color-mix(in srgb, var(--tier-urgent) 18%, transparent)",
+            }}
+          >
+            {attentionRows.map((r) => (
+              <Link
+                key={r.approval_id}
+                href="/admin/approvals"
+                style={{
+                  display: "block",
+                  padding: "11px 15px",
+                  background: "var(--surface)",
+                  color: "var(--text)",
+                }}
+                className="list-row-link"
+              >
+                <div
+                  className="mono"
+                  style={{
+                    fontSize: 9.5,
+                    fontWeight: 700,
+                    letterSpacing: "0.04em",
+                    color: "var(--tier-urgent)",
+                  }}
+                >
+                  {r.kind}
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 600, marginTop: 3 }}>{r.customer}</div>
+                <div className="muted" style={{ fontSize: 11.5, marginTop: 2, lineHeight: 1.45 }}>
+                  {r.reason}
+                </div>
+                <div className="faint mono" style={{ fontSize: 10, marginTop: 4 }}>
+                  {r.options} plan{r.options === 1 ? "" : "s"} to compare →
+                </div>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── KPI strip ──────────────────────────────────────────── */}
       <div
         className="grid"
-        style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}
+        style={{ gridTemplateColumns: "repeat(auto-fit, minmax(158px, 1fr))", gap: 12 }}
       >
-        <Metric label="Jobs in the day" value={todayJobs.length} hint="−12h to +24h window" />
-        <Metric
+        <Stat
+          label="Jobs in the day"
+          value={todayJobs.length}
+          sub="−12h to +24h window"
+        />
+        <Stat
           label="Awaiting assignment"
           value={pendingAssign}
-          accent={pendingAssign > 0 ? "var(--tier-priority)" : undefined}
+          sub={pendingAssign > 0 ? "queued for the pipeline" : "all assigned"}
+          tone={pendingAssign > 0 ? "warn" : "ok"}
         />
-        <Metric
+        <Stat
           label="Needs approval"
           value={pendingApprovals}
-          accent={pendingApprovals > 0 ? "var(--tier-urgent)" : undefined}
-          hint={pendingApprovals > 0 ? "Go to Approvals (HITL)" : "all clear"}
+          sub={pendingApprovals > 0 ? "in the Approvals queue" : "all clear"}
+          tone={pendingApprovals > 0 ? "alert" : "ok"}
         />
-        <Metric label="Frozen (locked)" value={frozen} accent="var(--status-frozen)" />
-        <Metric
-          label="Notifications un-acked"
+        <Stat
+          label="Auto-committed re-plans"
+          value={autoCommitted}
+          sub="agent moved a job, no human"
+          tone={autoCommitted > 0 ? "accent" : "muted"}
+        />
+        <Stat
+          label="Frozen / disrupted"
+          value={`${frozen} / ${disrupted}`}
+          sub="locked · agent re-planning"
+          tone={disrupted > 0 ? "alert" : "muted"}
+        />
+        <Stat
+          label="Un-acked notifications"
           value={awaitingAck}
-          accent={awaitingAck > 0 ? "var(--tier-priority)" : undefined}
-          hint={awaitingAck > 0 ? "technician / customer hasn't tapped Seen" : "all acknowledged"}
+          sub={awaitingAck > 0 ? "no 'Seen' from tech / customer" : "all acknowledged"}
+          tone={awaitingAck > 0 ? "warn" : "ok"}
         />
       </div>
 
-      <div className="grid" style={{ gridTemplateColumns: "1.4fr 1fr", alignItems: "start", gap: 20 }}>
-        <AgentFeed limit={80} />
+      {/* ── Ops row: fleet load (wide) · pipeline + tier + next-up ── */}
+      <div
+        className="grid"
+        style={{ gridTemplateColumns: "minmax(0, 1.15fr) minmax(280px, 1fr)", alignItems: "start", gap: 18 }}
+      >
+        <div className="stack" style={{ gap: 14 }}>
+          {/* Fleet load */}
+          <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+            <div
+              className="spread"
+              style={{ padding: "12px 15px 11px", borderBottom: "1px solid var(--border)" }}
+            >
+              <strong style={{ fontSize: 13 }}>Fleet load</strong>
+              <span className="row" style={{ gap: 8 }}>
+                <span
+                  className="mono"
+                  style={{
+                    fontSize: 11,
+                    color: freeNow === 0 ? "var(--tier-urgent)" : "var(--success)",
+                  }}
+                >
+                  {freeNow}/{fleet.length} free now
+                </span>
+                <Link
+                  href="/admin/technicians"
+                  className="row"
+                  style={{ gap: 3, fontSize: 11.5, fontWeight: 600 }}
+                >
+                  Roster <span aria-hidden>→</span>
+                </Link>
+              </span>
+            </div>
 
-        <div className="stack" style={{ gap: 16 }}>
-          <div className="card" style={{ padding: 16 }}>
-            <strong style={{ fontSize: 13 }}>Fill by tier</strong>
-            <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
-              {tierFill.map(({ tier, count }) => (
-                <div key={tier} className="row" style={{ gap: 8 }}>
-                  <span style={{ width: 92, fontSize: 12 }}>
-                    {TIER_META[tier].emoji} {TIER_META[tier].label}
-                  </span>
-                  <span style={{ flex: 1, height: 10, background: "var(--surface-2)", borderRadius: 999 }}>
+            <div style={{ padding: "10px 15px 12px" }}>
+              <div
+                className="spread"
+                style={{ fontSize: 11, marginBottom: 9 }}
+              >
+                <span className="muted">Fleet utilisation</span>
+                <span className="mono">{fleetUtil}%</span>
+              </div>
+              <span
+                style={{
+                  display: "block",
+                  height: 6,
+                  background: "var(--surface-2)",
+                  borderRadius: 999,
+                  overflow: "hidden",
+                  marginBottom: 14,
+                }}
+              >
+                <span
+                  style={{
+                    display: "block",
+                    height: "100%",
+                    width: `${fleetUtil}%`,
+                    background:
+                      fleetUtil > 80
+                        ? "var(--tier-urgent)"
+                        : fleetUtil > 55
+                          ? "var(--tier-priority)"
+                          : "var(--tier-flexible)",
+                    borderRadius: 999,
+                    transition: "width 0.3s ease",
+                  }}
+                />
+              </span>
+
+              <div style={{ display: "grid", gap: 10 }}>
+                {fleet.map((f) => (
+                  <div key={f.id} style={{ display: "grid", gap: 4 }}>
+                    <div className="spread" style={{ fontSize: 11.5 }}>
+                      <span className="row" style={{ gap: 6, minWidth: 0 }}>
+                        {f.busyNow && (
+                          <span
+                            title="on a job right now"
+                            style={{
+                              width: 6,
+                              height: 6,
+                              borderRadius: 999,
+                              background: "var(--status-soon)",
+                              flex: "none",
+                            }}
+                          />
+                        )}
+                        <span
+                          style={{
+                            fontWeight: 500,
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                        >
+                          {f.name}
+                        </span>
+                        <span className="faint" style={{ fontSize: 9.5 }}>{f.level}</span>
+                      </span>
+                      <span className="mono faint" style={{ fontSize: 10.5, flexShrink: 0 }}>
+                        {f.load ? `${f.load} open` : "idle"}
+                      </span>
+                    </div>
                     <span
                       style={{
                         display: "block",
-                        height: "100%",
-                        width: `${(count / maxTier) * 100}%`,
-                        background: `var(${TIER_META[tier].colorVar})`,
+                        height: 5,
+                        background: "var(--surface-2)",
                         borderRadius: 999,
+                        overflow: "hidden",
+                      }}
+                    >
+                      <span
+                        style={{
+                          display: "block",
+                          height: "100%",
+                          width: `${Math.max(f.pct, f.load ? 8 : 0)}%`,
+                          background:
+                            f.pct > 80
+                              ? "var(--tier-urgent)"
+                              : f.pct > 50
+                                ? "var(--tier-priority)"
+                                : "var(--tier-standard)",
+                          borderRadius: 999,
+                          transition: "width 0.3s ease",
+                        }}
+                      />
+                    </span>
+                    {f.next && (
+                      <span className="faint mono" style={{ fontSize: 9.5 }}>
+                        next {fmtSlot(f.next.scheduled_time)} · {f.next.location.address}
+                      </span>
+                    )}
+                  </div>
+                ))}
+                {fleet.length === 0 && (
+                  <div className="faint" style={{ fontSize: 11.5 }}>Loading roster…</div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="stack" style={{ gap: 14 }}>
+          {/* Pipeline funnel */}
+          <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+            <div
+              className="spread"
+              style={{ padding: "12px 15px 11px", borderBottom: "1px solid var(--border)" }}
+            >
+              <strong style={{ fontSize: 13 }}>Pipeline</strong>
+              <span className="faint mono" style={{ fontSize: 10.5 }}>
+                {pipelineInFlight} in flight
+              </span>
+            </div>
+            <div style={{ padding: "11px 15px 13px", display: "grid", gap: 7 }}>
+              {pipelineCounts.map((p) => (
+                <div key={p.stage} className="row" style={{ gap: 9 }}>
+                  <span
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: 2,
+                      background: p.dot,
+                      flexShrink: 0,
+                      opacity: p.count > 0 ? 1 : 0.4,
+                    }}
+                  />
+                  <span
+                    style={{
+                      fontSize: 12,
+                      flex: 1,
+                      color: p.count > 0 ? "var(--text)" : "var(--text-faint)",
+                    }}
+                  >
+                    {p.stage}
+                  </span>
+                  <span
+                    className="mono"
+                    style={{
+                      fontSize: 11,
+                      color: p.count > 0 ? "var(--text)" : "var(--text-faint)",
+                      background: p.count > 0 ? "var(--surface-2)" : "transparent",
+                      borderRadius: 999,
+                      padding: p.count > 0 ? "1px 8px" : "1px 0",
+                      minWidth: 20,
+                      textAlign: "center",
+                    }}
+                  >
+                    {p.count}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Tier mix */}
+          <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+            <div
+              style={{ padding: "12px 15px 11px", borderBottom: "1px solid var(--border)" }}
+            >
+              <strong style={{ fontSize: 13 }}>Active jobs by tier</strong>
+            </div>
+            <div style={{ padding: "12px 15px 14px" }}>
+              <div
+                style={{
+                  display: "flex",
+                  height: 10,
+                  borderRadius: 999,
+                  overflow: "hidden",
+                  background: "var(--surface-2)",
+                }}
+              >
+                {tierFill.map(({ tier, count }) =>
+                  count > 0 ? (
+                    <span
+                      key={tier}
+                      title={`${TIER_META[tier].label}: ${count}`}
+                      style={{
+                        width: `${(count / tierTotal) * 100}%`,
+                        background: `var(${TIER_META[tier].colorVar})`,
+                        transition: "width 0.3s ease",
                       }}
                     />
-                  </span>
-                  <span className="mono" style={{ width: 22, textAlign: "right" }}>{count}</span>
-                </div>
-              ))}
+                  ) : null,
+                )}
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: "7px 14px",
+                  marginTop: 12,
+                }}
+              >
+                {tierFill.map(({ tier, count }) => (
+                  <div key={tier} className="row" style={{ gap: 6, fontSize: 11.5 }}>
+                    <span
+                      style={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: 2,
+                        background: `var(${TIER_META[tier].colorVar})`,
+                        flexShrink: 0,
+                      }}
+                    />
+                    <span style={{ flex: 1 }} className="muted">
+                      {TIER_META[tier].label}
+                    </span>
+                    <span className="mono">{count}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
 
-          <div className="card" style={{ padding: 16 }}>
-            <div className="spread" style={{ marginBottom: 10 }}>
-              <strong style={{ fontSize: 13.5 }}>Waiting on you</strong>
-              <Link href="/admin/approvals" style={{ fontSize: 12 }}>
-                Open queue
+          {/* Upcoming */}
+          <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+            <div
+              className="spread"
+              style={{ padding: "12px 15px 11px", borderBottom: "1px solid var(--border)" }}
+            >
+              <strong style={{ fontSize: 13 }}>Next up</strong>
+              <Link
+                href="/admin/schedule"
+                className="row"
+                style={{ gap: 3, fontSize: 11.5, fontWeight: 600 }}
+              >
+                Schedule <span aria-hidden>→</span>
               </Link>
             </div>
-            {pendingApprovalRows.length === 0 && (
-              <div className="faint" style={{ fontSize: 12 }}>Nothing pending.</div>
-            )}
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {pendingApprovalRows.slice(0, 2).map((h) => (
-                <div key={h.approval_id} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "10px 11px" }}>
-                  <div className="mono faint" style={{ fontSize: 11, marginBottom: 3 }}>{h.reason}</div>
-                  <div style={{ fontSize: 12.5, fontWeight: 500, lineHeight: 1.45 }}>{h.title}</div>
+            <div style={{ padding: "4px 6px 6px" }}>
+              {upcomingJobs.length === 0 && (
+                <div className="faint" style={{ fontSize: 11.5, padding: "8px 9px" }}>
+                  Nothing on the horizon.
                 </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="card" style={{ padding: 16 }}>
-            <strong style={{ fontSize: 13.5, display: "block", marginBottom: 10 }}>Pipeline</strong>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {pipelineCounts.map((p) => (
-                <div key={p.stage} className="row" style={{ gap: 10 }}>
-                  <span style={{ width: 9, height: 9, borderRadius: 3, background: p.dot, display: "inline-block", flexShrink: 0 }} />
-                  <span style={{ fontSize: 12.5, flex: 1 }}>{p.stage}</span>
-                  <span className="mono" style={{ fontSize: 12, color: "var(--text-muted)" }}>{p.count}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="card" style={{ padding: 16 }}>
-            <strong style={{ fontSize: 13 }}>Upcoming (next 6)</strong>
-            <div style={{ display: "grid", gap: 6, marginTop: 10 }}>
-              {jobs
-                .filter((j) => hoursBetween(now, j.scheduled_time) > -1 && j.status !== "completed")
-                .sort((a, b) => a.scheduled_time.localeCompare(b.scheduled_time))
-                .slice(0, 6)
-                .map((j) => (
-                  <Link
-                    key={j.job_id}
-                    href={`/admin/jobs/${j.job_id}`}
-                    className="row"
-                    style={{ gap: 8, fontSize: 12, color: "var(--text)" }}
+              )}
+              {upcomingJobs.map((j) => (
+                <Link
+                  key={j.job_id}
+                  href={`/admin/jobs/${j.job_id}`}
+                  className="row list-row-link"
+                  style={{
+                    gap: 9,
+                    fontSize: 12,
+                    color: "var(--text)",
+                    padding: "7px 9px",
+                    borderRadius: 7,
+                  }}
+                >
+                  <span className={`status-dot ${j.status}`} />
+                  <span
+                    style={{
+                      flex: 1,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
                   >
-                    <span className={`status-dot ${j.status}`} />
-                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {j.customer_name}
-                    </span>
-                    <span className="chip" style={{ fontSize: 9 }}>{TIER_META[j.tier].label}</span>
-                    <span className="mono faint">
-                      {new Intl.DateTimeFormat("en-GB", {
-                        timeZone: "Asia/Singapore",
-                        weekday: "short",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                        hour12: false,
-                      }).format(new Date(j.scheduled_time))}
-                    </span>
-                  </Link>
-                ))}
+                    {j.customer_name}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: 8.5,
+                      fontWeight: 700,
+                      letterSpacing: "0.03em",
+                      textTransform: "uppercase",
+                      color: `var(${TIER_META[j.tier].colorVar})`,
+                    }}
+                  >
+                    {TIER_META[j.tier].label}
+                  </span>
+                  <span className="mono faint" style={{ fontSize: 10.5 }}>
+                    {fmtSlot(j.scheduled_time)}
+                  </span>
+                </Link>
+              ))}
             </div>
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Local primitives ─────────────────────────────────────────────
+
+type Tone = "ok" | "warn" | "alert" | "accent" | "muted";
+
+const TONE_COLOR: Record<Tone, string> = {
+  ok: "var(--success)",
+  warn: "var(--tier-priority)",
+  alert: "var(--tier-urgent)",
+  accent: "var(--brand)",
+  muted: "var(--border-strong)",
+};
+
+function Stat({
+  label,
+  value,
+  sub,
+  tone = "muted",
+}: {
+  label: string;
+  value: ReactNode;
+  sub?: string;
+  tone?: Tone;
+}) {
+  const active = tone !== "muted" && tone !== "ok";
+  return (
+    <div
+      className="card"
+      style={{
+        padding: "12px 14px",
+        position: "relative",
+        overflow: "hidden",
+      }}
+    >
+      <span
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 0,
+          bottom: 0,
+          width: 3,
+          background: TONE_COLOR[tone],
+          opacity: active ? 1 : 0.35,
+        }}
+      />
+      <div
+        className="faint"
+        style={{
+          fontSize: 10,
+          fontWeight: 600,
+          textTransform: "uppercase",
+          letterSpacing: "0.05em",
+        }}
+      >
+        {label}
+      </div>
+      <div
+        className="mono"
+        style={{
+          fontSize: 25,
+          fontWeight: 600,
+          marginTop: 5,
+          lineHeight: 1.1,
+          letterSpacing: "-0.02em",
+          color: active ? TONE_COLOR[tone] : "var(--text)",
+        }}
+      >
+        {value}
+      </div>
+      {sub && (
+        <div className="faint" style={{ fontSize: 10.5, marginTop: 3, lineHeight: 1.35 }}>
+          {sub}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PanelLabel({ title, right }: { title: string; right?: ReactNode }) {
+  return (
+    <div className="spread">
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 700,
+          textTransform: "uppercase",
+          letterSpacing: "0.07em",
+          color: "var(--text-faint)",
+        }}
+      >
+        {title}
+      </div>
+      {right}
     </div>
   );
 }

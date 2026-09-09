@@ -38,6 +38,7 @@ import { distanceKm } from "@/lib/geo";
 import {
   addHours,
   computeFreezePoint,
+  DISPATCH_SERVICE_HOURS,
   findTimeClash,
   hoursBetween,
   isFrozen,
@@ -48,11 +49,16 @@ import {
 import { logDecision } from "./log";
 import { validateDisruptionPlans } from "./schemas";
 import type { AssignmentResult, LlmPlan } from "./schemas";
-import type { Job, ReplanOption, SkillTag, Tier } from "@/lib/types";
+import type { Job, ReplanOption, RuntimeConfig, SkillTag, Tier } from "@/lib/types";
+import { AUTO_REPLAN_LIMITS } from "@/lib/types";
 import type { AgentContext } from "./context";
 
 const TOP_N_FOR_LLM = 6;
-const SLOT_OFFSETS_HOURS = [1, 2, 3, 4, 24, 25, 26, 48];
+// Same-day offsets 1..6h keep a real re-plan window even when the incoming
+// urgent job lands mid-afternoon; then the next-day ladder (24..26h) and a
+// two-day fallback (48h). Every generated slot is still hard-filtered
+// against the technician's real working hours.
+const SLOT_OFFSETS_HOURS = [1, 2, 3, 4, 5, 6, 24, 25, 26, 48];
 /** How many plans we hand to the coordinator / keep for the feed. */
 const MAX_PLANS_KEPT = 3;
 
@@ -313,15 +319,16 @@ export async function runDisruptionAgent(
     chosen = options[0];
   }
 
-  // ── Risk calibration (unchanged) ─────────────────────────────────
-  // Freeze window is already guaranteed clean by generation-time filtering
-  // — the only thing left to calibrate is customer / travel / SLA impact.
-  const overThreshold =
-    chosen.trade_offs.customers_affected > cfg.hitlMaxCustomersAffected ||
-    chosen.trade_offs.total_added_travel_km > cfg.hitlMaxAddedTravelKm ||
-    chosen.trade_offs.sla_breaches > 0;
-
-  const needsApproval = overThreshold;
+  // ── Risk calibration ─────────────────────────────────────────────
+  // Freeze window is already guaranteed clean by generation-time filtering.
+  // The remaining question is whether this move is low-impact enough to
+  // commit without a human. It qualifies for auto-commit ONLY if it clears
+  // BOTH the tunable config thresholds AND every fixed safety rail (soft
+  // tier, same-day, small shift, comfortable gap, no SLA breach, not a job
+  // that was already rescheduled once). Anything else waits for a
+  // coordinator.
+  const autoCommit = replanQualifiesForAutoCommit(ctx, chosen, cfg, now);
+  const needsApproval = !autoCommit.ok;
 
   const entry = logDecision(ctx, {
     agent: "DisruptionAgent",
@@ -366,9 +373,9 @@ export async function runDisruptionAgent(
       llmAccepted
         ? `LLM designed the re-plan; the chosen plan was re-validated move-by-move against live schedule state before use.`
         : "Fell back to the best pre-computed mechanical option — every constraint still enforced.",
-      overThreshold
-        ? "Impact exceeds the config threshold — routing to HITL."
-        : "Low impact — eligible for auto-commit.",
+      needsApproval
+        ? `Not eligible for auto-commit — ${autoCommit.reasons.join("; ")}. Routing to a coordinator.`
+        : `Low impact on every safety rail (soft tier, same-day, ≤${AUTO_REPLAN_LIMITS.maxShiftHours}h shift, ≥${AUTO_REPLAN_LIMITS.minGapHours}h gap, no SLA breach) — auto-committed without a human.`,
     ],
   });
 
@@ -417,7 +424,11 @@ function legalSlotsFor(
 ): string[] {
   const slots: string[] = [];
   for (const offset of SLOT_OFFSETS_HOURS) {
-    const slot = snapToServiceHours(addHours(job.scheduled_time, offset), 0);
+    const slot = snapToServiceHours(
+      addHours(job.scheduled_time, offset),
+      0,
+      DISPATCH_SERVICE_HOURS,
+    );
     if (slots.includes(slot)) continue;
     if (job.assigned_technician_id === t.technician_id && slot === job.scheduled_time) {
       continue; // no-op
@@ -742,6 +753,92 @@ function moveIsFreezeSafeIn(
   return !movedJob || !isFrozen(movedJob.freeze_point, now);
 }
 
+// ── Auto-commit qualification (rule-based) ───────────────────────────
+
+/**
+ * A re-plan skips the human ONLY when it is genuinely low-impact. The
+ * config thresholds (`hitlMaxCustomersAffected`, `hitlMaxAddedTravelKm`)
+ * are the tunable part; on top of them we enforce fixed safety rails so
+ * "1 customer affected" is only auto-committed when that customer is on a
+ * soft tier, is barely moved, still has a comfortable gap, keeps their SLA,
+ * and hasn't already been rescheduled once. Any rail broken → HITL.
+ * Returns { ok, reasons } — `reasons` lists every rail that failed, for the
+ * decision log.
+ */
+export function replanQualifiesForAutoCommit(
+  ctx: AgentContext,
+  chosen: ReplanOption,
+  cfg: RuntimeConfig,
+  now: string,
+): { ok: boolean; reasons: string[] } {
+  const t = chosen.trade_offs;
+  const reasons: string[] = [];
+
+  if (t.customers_affected > cfg.hitlMaxCustomersAffected) {
+    reasons.push(
+      `${t.customers_affected} customers affected (limit ${cfg.hitlMaxCustomersAffected})`,
+    );
+  }
+  if (t.total_added_travel_km > cfg.hitlMaxAddedTravelKm) {
+    reasons.push(
+      `+${t.total_added_travel_km} km travel (limit ${cfg.hitlMaxAddedTravelKm} km)`,
+    );
+  }
+  if (t.sla_breaches > 0) {
+    reasons.push(`${t.sla_breaches} SLA breach(es)`);
+  }
+  if ((t.total_shift_hours ?? 0) > AUTO_REPLAN_LIMITS.maxShiftHours) {
+    reasons.push(
+      `${t.total_shift_hours}h shift (limit ${AUTO_REPLAN_LIMITS.maxShiftHours}h)`,
+    );
+  }
+  if (
+    t.tightest_gap_hours != null &&
+    t.tightest_gap_hours < AUTO_REPLAN_LIMITS.minGapHours
+  ) {
+    reasons.push(
+      `${t.tightest_gap_hours}h gap to the next job (need ≥${AUTO_REPLAN_LIMITS.minGapHours}h)`,
+    );
+  }
+
+  for (const mv of chosen.moves) {
+    const job = ctx.getJob(mv.job_id);
+    if (!job) {
+      reasons.push(`moved job ${mv.job_id} not found`);
+      continue;
+    }
+    if (!AUTO_REPLAN_LIMITS.movableTiers.includes(job.tier)) {
+      reasons.push(`${job.customer_name}'s job is ${job.tier} tier (auto-move is soft-tier only)`);
+    }
+    if (job.reschedule_history.length > AUTO_REPLAN_LIMITS.maxPriorReschedules) {
+      reasons.push(`${job.customer_name} was already rescheduled once`);
+    }
+    if (!sameSgDay(mv.from_time, mv.to_time)) {
+      reasons.push(`${job.customer_name}'s job would move to another day`);
+    }
+    // The move must not push the job past its own freeze point either — a
+    // low-impact move keeps the customer well clear of the lock.
+    const newFreeze = computeFreezePoint(mv.to_time, ctx.config.freezeWindowHours);
+    if (isFrozen(newFreeze, now)) {
+      reasons.push(`${job.customer_name}'s new slot is already inside its freeze window`);
+    }
+  }
+
+  return { ok: reasons.length === 0, reasons };
+}
+
+/** Same Singapore-local calendar day? */
+function sameSgDay(aISO: string, bISO: string): boolean {
+  const day = (iso: string) =>
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Singapore",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date(iso));
+  return day(aISO) === day(bISO);
+}
+
 // ── Deterministic candidate search (rule-based, no LLM) ───────────────
 
 export interface CandidateMove {
@@ -829,7 +926,7 @@ function buildCandidateMoves(
   for (const t of skilledTechs) {
     for (const offset of SLOT_OFFSETS_HOURS) {
       const rawSlot = addHours(bumped.scheduled_time, offset);
-      const slot = snapToServiceHours(rawSlot, 0);
+      const slot = snapToServiceHours(rawSlot, 0, DISPATCH_SERVICE_HOURS);
       const dedupeKey = `${t.technician_id}|${slot}`;
       if (seenSlots.has(dedupeKey)) continue;
       seenSlots.add(dedupeKey);

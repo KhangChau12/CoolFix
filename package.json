@@ -9,7 +9,10 @@
     "start": "next start -p 3000",
     "lint": "next lint",
     "seed": "tsx scripts/seed.ts",
-    "eval": "tsx scripts/eval.ts"
+    "eval": "tsx scripts/eval.ts",
+    "fuzz": "tsx scripts/fuzz.ts",
+    "robustness": "tsx scripts/robustness.ts",
+    "concurrency": "tsx scripts/concurrency.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.45.4",
@@ -18,7 +21,6 @@
     "react-dom": "18.3.1"
   },
   "devDependencies": {
-    "@aws-sdk/client-bedrock-runtime": "3.637.0",
     "@types/node": "20.14.10",
     "@types/react": "18.3.3",
     "@types/react-dom": "18.3.0",

@@ -23,6 +23,7 @@ import { callLlm } from "@/lib/llm";
 import { distanceKm } from "@/lib/geo";
 import {
   addHours,
+  DISPATCH_SERVICE_HOURS,
   findTimeClash,
   isWithinWorkingHours,
   snapToServiceHours,
@@ -127,7 +128,7 @@ function firstFreeSlot(
   const t = ctx.getTechnician(techId);
   if (!t) return null;
   for (const off of SLOT_OFFSETS_HOURS) {
-    const slot = snapToServiceHours(addHours(around, off), 0);
+    const slot = snapToServiceHours(addHours(around, off), 0, DISPATCH_SERVICE_HOURS);
     if (!isWithinWorkingHours(t.working_hours, slot)) continue;
     if (findTimeClash(ctx.jobs, techId, slot, ignoreJobId)) continue;
     return slot;
@@ -146,7 +147,7 @@ function firstCommonFreeSlot(
   const b = ctx.getTechnician(bId);
   if (!a || !b) return null;
   for (const off of SLOT_OFFSETS_HOURS) {
-    const slot = snapToServiceHours(addHours(around, off), 0);
+    const slot = snapToServiceHours(addHours(around, off), 0, DISPATCH_SERVICE_HOURS);
     if (!isWithinWorkingHours(a.working_hours, slot)) continue;
     if (!isWithinWorkingHours(b.working_hours, slot)) continue;
     if (findTimeClash(ctx.jobs, aId, slot, ignoreJobId)) continue;
@@ -169,7 +170,11 @@ export function buildEdgecaseSpace(
   const seen = new Set<string>();
   for (const t of skilled) {
     for (const off of SLOT_OFFSETS_HOURS) {
-      const slot = snapToServiceHours(addHours(input.scheduledTime, off), 0);
+      const slot = snapToServiceHours(
+        addHours(input.scheduledTime, off),
+        0,
+        DISPATCH_SERVICE_HOURS,
+      );
       const key = `${t.technician_id}|${slot}`;
       if (seen.has(key)) continue;
       seen.add(key);

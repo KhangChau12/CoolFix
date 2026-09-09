@@ -359,17 +359,39 @@ export interface RuntimeConfig {
   capacityTotalPerDay: number;
   /** Base price (SGD) per required skill. */
   basePrice: Record<SkillTag, number>;
-  llmMode: "stub" | "bedrock" | "openai";
+  llmMode: "stub" | "gateway" | "openai";
 }
+
+/**
+ * A re-plan may auto-commit only when EVERY one of these holds (checked in
+ * disruption.ts `replanQualifiesForAutoCommit`). The config thresholds
+ * (`hitlMaxCustomersAffected`, `hitlMaxAddedTravelKm`) are the tunable part;
+ * these are the fixed safety rails that make "1 customer affected" safe
+ * enough to skip the human — a genuinely low-impact move only.
+ */
+export const AUTO_REPLAN_LIMITS = {
+  /** Only ever auto-move a Flexible-tier job. A Standard/Priority/Urgent
+   * customer's appointment moving always goes to a coordinator, even when
+   * the move itself looks small. */
+  movableTiers: ["flexible"] as Tier[],
+  /** Max total hours any job is shifted from its original slot. */
+  maxShiftHours: 3,
+  /** Every moved job must keep at least this gap (h) to its neighbour. */
+  minGapHours: 2,
+  /** Never auto-move a job that was already rescheduled once. */
+  maxPriorReschedules: 0,
+};
 
 export const DEFAULT_CONFIG: RuntimeConfig = {
   freezeWindowHours: 2,
   scoreWeights: { w1: 1.0, w2: 2.0, w3: 1.5, w4: 1.0 },
-  // 0 = every re-plan that moves a customer's appointment goes to the
-  // coordinator. CoolFix positions on reliability, so any customer-visible
-  // disruption gets a human check. Raise this to let low-impact moves
-  // auto-commit (Settings screen).
-  hitlMaxCustomersAffected: 0,
+  // 1 = a re-plan that moves ONE customer's appointment may auto-commit —
+  // but only if it also clears every rail in AUTO_REPLAN_LIMITS (Flexible
+  // tier only, same-day, <=3h shift, >=2h gap, no SLA breach, not already
+  // rescheduled). Anything above 1 customer, a Standard/Priority job, or any
+  // rail broken, still goes to the Approvals queue. Set this to 0 to review
+  // every customer-visible move.
+  hitlMaxCustomersAffected: 1,
   hitlMaxAddedTravelKm: 8,
   capacityFlexiblePerDay: 6,
   capacityTotalPerDay: 24,

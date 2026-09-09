@@ -31,28 +31,40 @@ human approved.
 Customer booking
    │
    ▼
-Job-Intake Agent ......... LLM       free-text → {skill_required, urgency, window}
+Job-Intake Agent ......... LLM       free-text → {skill_required[], urgency, time window}
    ▼
-Pricing Engine ........... rule      deterministic price from skill × tier (priced once, on the real skills)
+Pricing Engine ........... rule      base_price[skill] × tier_multiplier — priced ONCE, after
+   │                                 intake, on the real required skills (no provisional pass)
    ▼
-Capacity/Yield Agent ..... rule      daily thresholds + per-skill saturation forecast
+Capacity/Yield Agent ..... rule      daily fleet thresholds + per-skill saturation forecast
    ▼
-Technician-State Agent ... rule      roster + location + load (state store)
+Technician-State Agent ... rule      roster + location + load (state store, least-privilege)
    ▼
-Assignment/Scoring Agent . rule      transparent formula, skill = hard filter
+Assignment/Scoring Agent . rule      transparent formula; skill match = HARD filter
    ▼
-Assignment Tie-break ..... LLM       ambiguity-only: close scores / one strained
-   │                                 candidate / urgent with no strong fit. Picks
-   │                                 within the eligible top-3; the pick is
-   │                                 re-scored against live state before commit.
-   │                                 Unambiguous ranking → this agent never runs.
-   ├─ no conflict ───────────────→ auto-commit → Notification Agent (LLM)
-   ├─ no eligible technician ────→ Assignment Edge-case Agent (LLM: widen / split / pair / escalate)
-   └─ conflict (must bump) ──────→ Disruption Agent (LLM: designs the re-plan)
-                                     ├─ low impact ─────────→ auto-commit
-                                     └─ customer impact OR
-                                        frozen job touched ─→ HITL Approval Gate
+Assignment Tie-break ..... LLM       ambiguity-only: close scores / one strained candidate /
+   │                                 urgent with no strong fit. Picks within the eligible
+   │                                 top-3; the pick is re-scored against live state before
+   │                                 commit. Unambiguous ranking → this agent never runs.
+   │
+   ├─ technician free, no conflict ──────────→ auto-commit → Notification Agent (LLM)
+   │
+   ├─ NO eligible technician (and no bump) ──→ Assignment Edge-case Agent (LLM)
+   │                                            picks one pre-validated lever:
+   │                                            widen_window (auto-commit) /
+   │                                            split_visit · pair_junior_senior (→ HITL) /
+   │                                            escalate (→ coordinator)
+   │
+   └─ conflict — urgent job must bump a soft job ──→ Disruption Agent (LLM: DESIGNS the re-plan)
+                                                       ├─ low impact, every safety rail clear ─→ auto-commit
+                                                       ├─ impact over threshold ───────────────→ HITL Approval Gate
+                                                       └─ every option would touch a frozen job ─→ no re-plan proposed;
+                                                                                                   job reported unassignable
 ```
+
+Nine agents total: Job-Intake, Pricing, Capacity, Technician-State,
+Assignment/Scoring, Assignment Tie-break, Assignment Edge-case, Disruption,
+Notification — orchestrated by a typed pipeline in `orchestrator.ts`.
 
 **State management.** One booking = one `AgentContext`. It loads the
 technician roster, the job list and config **once**, so the scoring pass
@@ -72,7 +84,7 @@ what the LLM can choose from and re-checks what it picked:
 |---|---|---|
 | Job-Intake | **yes** | interpreting a customer's free-text symptom description |
 | Pricing | no | `base_price[skill] × tier_multiplier` — must be exact and free |
-| Capacity | no | threshold + per-skill saturation, both deterministic |
+| Capacity | no | fleet threshold + per-skill saturation, both deterministic |
 | Technician-State | no | a database query |
 | Assignment/Scoring | no | the formula is transparent and auditable by design |
 | Assignment Tie-break | **yes**, ambiguity-only | runs only when the formula is a coin-flip; picks within the eligible top-3, and the pick is re-scored against live state before commit — it can re-order the eligible set, never reach past it |
@@ -91,13 +103,33 @@ switching providers touches no agent code:
 
 - `LLM_MODE=stub` (default) — deterministic fixtures; the demo runs offline
   and never spends credit.
-- `LLM_MODE=bedrock` — Claude Sonnet 4.5 on AWS Bedrock (`InvokeModel`).
+- `LLM_MODE=gateway` — **the hackathon provider**: the organisers' self-hosted
+  AWS LLM gateway. Ollama-compatible `POST /api/chat`, `X-API-Key` auth,
+  Claude Sonnet 4.5 (`global.anthropic.claude-sonnet-4-5-...`) on AWS behind
+  it. The gateway has no JSON mode and no native tool-calling — neither
+  matters here, because every agent already asks for minified JSON in its
+  system prompt and the parser tolerates the ```json fence the gateway adds.
+  A transport-level linear backoff (3s / 6s / 9s) covers the gateway's
+  429/403-on-burst behaviour.
 - `LLM_MODE=openai` — OpenAI Chat Completions over plain `fetch` (no extra
-  SDK), `response_format: json_object` to hold the contract.
+  SDK), `response_format: json_object`; kept as a dev fallback provider.
 
-A per-process call budget hard-stops runaway loops, and results are cached by
-input hash so re-running a demo step is free. `/api/health` reports the
-active mode and whether its credentials are present.
+A per-process call budget hard-stops runaway loops, results are cached by
+input hash so re-running a demo step is free, and a bounded single retry
+covers a malformed-JSON response only — never a constraint-invalid one, which
+falls back deterministically instead. `/api/health` reports the active mode
+and whether its credentials are present.
+
+**Provider portability, verified.** The full eval suite has been run against
+the live gateway, not just the stub. The pipeline structure holds — schema
+validation, guardrails, HITL gating, the injection defence and the
+deterministic fallbacks all behave identically. What *does* change is the
+model's judgement inside the space it is given: the real Claude sometimes
+designs a re-plan the fixtures wouldn't (e.g. a next-day slot instead of a
+tight same-day shift), and the rule layer then routes it to a human because
+it breaks a safety rail — exactly as intended. The stub is the deterministic
+demo path; the gateway is the real one, and the guardrails are what make the
+difference between them safe.
 
 ## 3. Tool use & typed schemas
 
@@ -113,49 +145,104 @@ The customer booking is validated and clamped at the very edge
 truncated to 2000 chars (a token-bomb guard), unknown tiers rejected with a
 `[schema:*]` error that the API maps to HTTP 400.
 
+For the Disruption and Edge-case agents the schema is stricter still: the LLM
+is handed a **pre-verified legal space** (allowed technician × slot pairs, all
+hard constraints already applied) and may only return references *into* that
+space — a plan is `{job_id, to_tech_id, to_slot_iso}` where every value must
+appear verbatim in the space it was given. The LLM cannot emit a slot, a
+technician, or a trade-off number of its own.
+
 ## 4. Autonomy & human-in-the-loop
 
-The core demo. The **freeze window** (`scheduled_time − 3h`, configurable) is
+The core demo. The **freeze window** (`scheduled_time − 2h`, configurable) is
 the risk boundary:
 
 - **Before the freeze point** a job is "soft". The Disruption Agent may
-  propose moving it. If the recommended re-plan is low-impact — under the
-  configured thresholds for customers affected, added travel, SLA breaches —
-  it **auto-commits**.
-- **Any re-plan that affects a customer** (default: `hitlMaxCustomersAffected
-  = 0`) goes to the **Approvals queue**. The coordinator sees 2–3 options with
-  quantified trade-offs and the agent's recommendation, picks one, and
-  approves — or rejects, and nothing changes.
-- **After the freeze point** a job is "frozen". The only way to change it is an
-  **Emergency Override**: a distinct, louder approval flow, styled red, that
-  records the approver's name against every frozen job it touches. There is no
-  automatic path through this gate.
+  design a re-plan that moves it. The recommended re-plan **auto-commits**
+  only when it clears *every* safety rail — otherwise it goes to the
+  coordinator.
+- **After the freeze point** a job is "frozen". It is an **absolute
+  constraint**. The pipeline treats a frozen appointment as already having
+  happened: no agent — rule or LLM — may propose touching it. If every
+  candidate re-plan for an incoming job would have to move a frozen job, the
+  Disruption Agent proposes **nothing** and the incoming job is reported
+  unassignable, so the customer picks a different time. There is no automatic
+  path through the freeze window. (See §5, "design decision".)
 
-Autonomy is a **dial**, not a switch: the thresholds live in `runtime_config`
-and are editable on the Settings screen. Raise `hitlMaxCustomersAffected` and
-low-impact moves start auto-committing; the demo shows this live.
+### The auto-commit safety rails
+
+A re-plan skips the human only when **all** of these hold
+(`disruption.ts` → `replanQualifiesForAutoCommit`):
+
+| Rail | Value | Source |
+|---|---|---|
+| Customers affected | ≤ `hitlMaxCustomersAffected` (**default 1**) | `runtime_config`, editable in Settings |
+| Added travel | ≤ `hitlMaxAddedTravelKm` (default 8 km) | `runtime_config`, editable in Settings |
+| SLA breaches | 0 | fixed |
+| Moved-job tier | Flexible only | `AUTO_REPLAN_LIMITS`, fixed |
+| Total time shift | ≤ 3 h | `AUTO_REPLAN_LIMITS`, fixed |
+| Gap to neighbouring job | ≥ 2 h | `AUTO_REPLAN_LIMITS`, fixed |
+| Prior reschedules of that job | 0 | `AUTO_REPLAN_LIMITS`, fixed |
+| Same calendar day (SGT) | required | fixed |
+| Moved job's new slot | outside its own freeze window | fixed |
+
+`hitlMaxCustomersAffected = 1` is the tunable that gives the Disruption Agent
+real autonomy: a genuinely low-impact move — one Flexible customer, same day,
+a couple of hours, comfortable buffer — is committed automatically, with the
+audit row recording `decided_by = "auto"`. Anything larger, anything that
+touches a Standard/Priority customer, or any single rail broken, and the
+pipeline **stops** and raises an approval. The coordinator sees the 2–3 plans
+the agent designed, each with quantified trade-offs and the agent's
+recommendation, and picks one — or rejects, and nothing changes.
+
+Set `hitlMaxCustomersAffected` to 0 on the Settings screen and *every*
+customer-visible move goes to the queue; raise it and the auto-commit
+envelope grows. **Autonomy is a dial the coordinator owns, not a fixed
+property of the system** — and the demo shows both ends of it live.
+
+The approval record's `kind` field still carries the value
+`"emergency_override"` in the type so the DB schema is stable, but the
+pipeline never produces it — see §5.
 
 ## 5. Safety, security & guardrails
 
 - **Prompt injection.** The customer description is untrusted. It reaches the
   LLM only inside a delimited, neutralised frame (`<<<CUSTOMER_TEXT_BEGIN>>>`
   … `END`), with a system instruction to treat everything inside as data. Known
-  injection markers are detected and noted. Even on a successful injection the
-  structured output is still validated and the pricing is still computed by the
-  rule engine — the eval suite asserts a "set price to 0" payload leaves the
-  price untouched.
+  injection markers are detected and noted in the guardrail log. Even on a
+  successful injection the structured output is still validated and the
+  pricing is still computed by the rule engine — the eval suite asserts a
+  "set price to 0" payload leaves the price untouched and the Job-Intake row
+  flags `injection_attempt`.
 - **Skill matching is a hard constraint, not a soft score.** A technician
   without the matching certification is removed from candidacy *before* scoring
   — this mirrors a real legal constraint (you cannot send an uncertified person
-  to handle refrigerant). If no certified technician is free, the system
-  **escalates to a human** rather than forcing an assignment.
+  to handle refrigerant). If no certified technician is free, the Edge-case
+  Agent tries a small set of pre-validated levers and, failing those, the
+  system **escalates to a human** rather than forcing an assignment.
+- **Freeze window is absolute — a deliberate design decision.** An earlier
+  design had an "Emergency Override" flow that let an urgent job break a
+  frozen appointment with a louder approval. We removed it from the automatic
+  pipeline: a frozen appointment is treated as already-in-progress, and no
+  agent path proposes touching it. The freeze check runs at *two* layers
+  (candidate generation and post-LLM re-validation) through one shared
+  function, so the two can't drift. A coordinator can still hand-edit a
+  frozen job outside this pipeline in a genuine emergency (a technician calls
+  in sick) — but that is a separate human action, not something an agent
+  offers.
+- **The LLM is never trusted blindly.** Every choice it makes passes two
+  layers: (a) a cross-check that its referenced ids/slots exist in the space
+  it was given, and (b) an independent re-validation of all hard constraints
+  against live state. Fail either and the pipeline falls back to the best
+  pre-computed deterministic option, with the reason written to the guardrail
+  notes.
 - **Least privilege.** The Technician-State Agent returns only the fields
   scoring needs — never a technician's phone or home address. The browser uses
   a Supabase anon key with RLS allowing read-only access; all writes go through
   the server with the service-role key.
 - **Blast-radius limits.** LLM call budget; input size caps; deterministic slot
-  math (the Disruption Agent never invents schedule times, it only ranks
-  pre-computed options).
+  math (the Disruption Agent never invents schedule times, it only picks from
+  pre-computed legal slots).
 
 ## 6. Observability & evaluation
 
@@ -165,24 +252,67 @@ re-plan options, guardrail notes, latency, and — for approvals — who signed
 off. That table is:
 
 - the **Agent Reasoning Feed** on the Admin dashboard (live via Supabase
-  Realtime, with a polling fallback), where each row expands to a bar-chart
-  score breakdown, the full candidate list with rejection reasons, and the
-  Disruption Agent's options side by side;
+  Realtime, with a polling fallback), where rows are grouped by booking and
+  each expands to a bar-chart score breakdown, the full candidate list with
+  rejection reasons, and the Disruption Agent's plans side by side. Each row
+  carries a **LLM AGENT / RULE ENGINE** badge so the cost discipline is
+  visible at a glance;
+- the **per-job pipeline replay** at `/admin/jobs/[id]` — the whole decision
+  timeline for one job in pipeline order, plus its notification acks;
+- the **customer-facing tracker** (`/book`) — a six-step, plain-language
+  version of the same pipeline ("Understanding your problem" → "Sending your
+  confirmation"), with no internal detail leaked;
 - the **observability artifact** for this submission.
 
-`scripts/eval.ts` runs a golden-path + adversarial suite — clean assignment,
-ambiguous-score tie-break, bump→HITL→approve, reject-keeps-schedule,
-edge-case widen-window, and adversarial cases (prompt injection, oversized
-input, invalid tier, no-certified-technician). Each scenario re-seeds first
-so cases are independent; the run exits non-zero on any failed assertion.
+`scripts/eval.ts` runs a golden-path + adversarial suite — **10 scenarios,
+48 assertions**, re-seeding before each so cases are independent, exiting
+non-zero on any failure:
+
+| Scenario | What it proves |
+|---|---|
+| Clean standard booking | end-to-end auto-assign, score breakdown present, both parties notified |
+| Urgent bump → HITL → approve | Disruption Agent designs ≥2 re-validated plans; gate holds (0 notifications) until a coordinator approves; audit records the coordinator's name; no double-booking |
+| Low-impact re-plan → auto-commit | every safety rail clears; bumped job moves same-day; audit records `decided_by = "auto"`; no approval raised |
+| Coordinator rejects re-plan | nothing changes — schedule and reschedule history untouched |
+| Ambiguous score → tie-break | tie-break agent fires only on genuine ambiguity, its pick is re-scored and certified (skipped, not failed, when the formula is unambiguous for that run's slot) |
+| No slot at the ideal time → edge-case widen | edge-case agent widens the window to a genuinely free *certified* technician; no Disruption Agent involved |
+| Adversarial: prompt injection | price not zeroed, skill still correct, `injection_attempt` flagged |
+| Adversarial: oversized description | pipeline completes, stored text truncated to 2000 chars |
+| Adversarial: invalid tier | rejected at the schema boundary |
+| Adversarial: no certified technician | never force-assigns — widens to a certified tech, proposes a supervised pair, or escalates |
+
+Three further probes back the eval, each re-seeding per case and exiting
+non-zero on a violation:
+
+- **`scripts/robustness.ts`** — mocks the wall clock and runs the
+  demo-critical scenarios at every hour of the SGT day. It exists because an
+  earlier version of the slot maths let the "low-impact re-plan → the agent
+  auto-commits" path silently flip to HITL when the demo ran mid-afternoon
+  (the same-day re-plan window had collapsed against a hard 17:00 snap). The
+  fix — a wider dispatch window for the *search*, with the technician's real
+  working hours still the hard gate, and an urgent booking that rolls to the
+  next day rather than landing too late for a same-day re-plan — is now
+  regression-tested across the whole day.
+- **`scripts/fuzz.ts`** — unusual-but-valid bookings (emoji, 3k-char text,
+  HTML, JSON-shaped payloads, contradictory urgency, category/description
+  mismatch) against the invariants that must always hold: price > 0, every
+  assigned technician certified, a valid schedule instant, no agent-created
+  double-booking, the frozen job untouched.
+- **`scripts/concurrency.ts`** — several bookings fired with `Promise.all`.
+  One `AgentContext` is one snapshot of the schedule loaded up front, so two
+  overlapping runs could hand the same slot to two jobs. `runBookingPipeline`
+  now serializes itself with an in-process queue (correct for the
+  single-process Lightsail deploy); this probe is the guard.
 
 ## 7. Platform & tooling
 
 - **Next.js 14** (App Router) — one app hosts all three UIs and the agent API.
 - **Supabase** (Postgres + Realtime) behind a single `repo` module; swapping
-  the store is confined to that file plus the row↔domain mappers.
-- **AWS Bedrock — Claude Sonnet 4.5** for LLM calls; deploys to **AWS
-  Lightsail**.
+  the store is confined to that file plus the row↔domain mappers. Supabase is
+  an external managed DB, not a deployment target — the app itself runs on
+  AWS.
+- **Claude Sonnet 4.5** via the competition's self-hosted AWS LLM gateway
+  (`LLM_MODE=gateway`); deploys to **AWS Lightsail**.
 - Multi-agent orchestration is a clean, typed pipeline in `orchestrator.ts` —
   no framework magic, every hand-off visible.
 
@@ -193,5 +323,14 @@ so cases are independent; the run exits non-zero on any failed assertion.
   `geo.ts`.
 - The Capacity Agent combines fleet-wide caps with a per-skill saturation
   forecast (certified technicians × slots/day, and the tight window around the
-  requested time); a historical-yield model is the documented next step.
-- Manual drag-drop override on the Gantt is not yet wired (view + hover only).
+  requested time). A historical-yield model, and an LLM tier for the
+  ambiguous cases (the same "rule enumerates → LLM picks → rule re-validates"
+  pattern as the tie-break agent), are the documented next steps.
+- All schedule changes flow through an agent or the HITL gate by design;
+  manual drag-drop override on the Gantt is intentionally *not* wired (view +
+  hover only), to keep every change inside the audited path. A guarded
+  coordinator-initiated override is a possible future addition.
+- The booking pipeline serializes itself in-process, which is correct for the
+  single-instance Lightsail deploy. A horizontally-scaled deployment would
+  need a database-level lock or an optimistic pre-flush re-check of the
+  chosen slot instead — a small, well-isolated change in `orchestrator.ts`.

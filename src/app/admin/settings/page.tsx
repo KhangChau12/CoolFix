@@ -85,7 +85,7 @@ export default function SettingsPage() {
 
       <Section
         title="Human-in-the-loop thresholds"
-        hint="A re-plan auto-commits only if it stays under all of these. Otherwise it goes to the Approvals queue. Set customers to 0 to review every customer-visible move."
+        hint="A re-plan auto-commits only if it stays under all of these AND clears the fixed safety rails (Flexible tier only, same-day, ≤3h shift, ≥2h gap, no SLA breach, not already rescheduled). Anything else goes to the Approvals queue. Set customers to 0 to review every customer-visible move."
       >
         <NumberField
           label="hitlMaxCustomersAffected"
@@ -142,9 +142,9 @@ export default function SettingsPage() {
         </div>
       </Section>
 
-      <Section title="LLM mode" hint="stub = deterministic fixtures, no API calls. bedrock = live Claude Sonnet 4.5 on AWS Bedrock. openai = OpenAI Chat Completions.">
+      <Section title="LLM mode" hint="stub = deterministic fixtures, no API calls. gateway = live Claude Sonnet 4.5 via the competition's self-hosted AWS LLM gateway (the hackathon provider). openai = OpenAI Chat Completions (dev fallback).">
         <div className="row" style={{ gap: 8 }}>
-          {(["stub", "bedrock", "openai"] as const).map((m) => (
+          {(["stub", "gateway", "openai"] as const).map((m) => (
             <button
               key={m}
               className="chip"

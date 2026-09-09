@@ -58,10 +58,24 @@ export function sgHour(iso: string): number {
 }
 
 /**
+ * The wider window the disruption / edge-case slot search may place a job
+ * in. It is deliberately larger than the customer-facing default
+ * (09:00–17:00): the true hard limit on a technician's day is their own
+ * `working_hours` (enforced by `isWithinWorkingHours`), not this snap. If
+ * the search window is left at 09:00–17:00 the set of legal same-day
+ * re-plan slots collapses to nothing whenever the demo runs mid-afternoon,
+ * which is a run-time artefact, not a real constraint. 08:00–20:00 keeps a
+ * real amount of same-day room while still rejecting a 3 a.m. slot.
+ */
+export const DISPATCH_SERVICE_HOURS = { open: 8, close: 20 } as const;
+
+/**
  * Snap a target instant to the next slot that lands inside the fleet's
  * common service hours (default 09:00–17:00 SGT), rounded to the hour.
  * Keeps `earliest` as a floor. Used by the orchestrator so the scoring
  * pass isn't handed a 3 a.m. appointment that every technician rejects.
+ * The disruption / edge-case slot search passes `DISPATCH_SERVICE_HOURS`
+ * for a wider window (see that constant).
  */
 export function snapToServiceHours(
   fromISO: string,
@@ -81,6 +95,84 @@ export function snapToServiceHours(
     t = new Date(t.getTime() + 3600_000);
   }
   return t.toISOString();
+}
+
+/**
+ * The latest SGT hour an urgent booking may be scheduled to *start* the
+ * same day. If `now + earliestHoursOut` would land later than this, the job
+ * rolls to the next day's dispatch open instead. This is what guarantees
+ * that a job which gets bumped by an urgent booking always has a same-day
+ * afternoon slot to be re-planned into — the whole "low impact → the agent
+ * auto-commits" story depends on that headroom existing regardless of what
+ * time of day the pipeline runs.
+ */
+export const URGENT_LATEST_SAME_DAY_HOUR = 14;
+
+/**
+ * Snap `now + earliestHoursOut` to a slot inside `windowHours`, but never
+ * later than `latestSameDayHour` — a later target wraps to the next day's
+ * open instead of landing right before close. Deterministic given the
+ * instant. This is the shared rollover behaviour behind
+ * `snapToUrgentDispatchSlot` below; factored out so any tier's scheduling
+ * can opt into the same "always leaves same-day headroom" guarantee instead
+ * of drifting out of sync with each other depending on wall-clock time.
+ */
+function snapWithRollover(
+  fromISO: string,
+  earliestHoursOut: number,
+  windowHours: { open: number; close: number },
+  latestSameDayHour: number,
+): string {
+  const snapped = snapToServiceHours(fromISO, earliestHoursOut, windowHours);
+  if (sgHour(snapped) <= latestSameDayHour) return snapped;
+  // Too late for a comfortable same-day window → next day, open.
+  let t = new Date(snapped);
+  for (let i = 0; i < 48; i++) {
+    t = new Date(t.getTime() + 3600_000);
+    const h = sgHour(t.toISOString());
+    if (h === windowHours.open) return t.toISOString();
+  }
+  return snapped;
+}
+
+/**
+ * Snap `now + earliestHoursOut` to an urgent-dispatch slot: inside
+ * `DISPATCH_SERVICE_HOURS`, but never later than `URGENT_LATEST_SAME_DAY_HOUR`
+ * — a later target wraps to the next day's open. Deterministic given the
+ * instant. Used by the orchestrator (urgent bookings) and mirrored by the
+ * seed so a seeded soft job sits exactly where the incoming urgent job lands.
+ */
+export function snapToUrgentDispatchSlot(
+  fromISO: string,
+  earliestHoursOut: number,
+): string {
+  return snapWithRollover(fromISO, earliestHoursOut, DISPATCH_SERVICE_HOURS, URGENT_LATEST_SAME_DAY_HOUR);
+}
+
+/**
+ * The latest SGT hour a non-urgent (standard/priority/flexible) booking may
+ * be scheduled to *start* the same day, before rolling to tomorrow's open.
+ * Set lower than `URGENT_LATEST_SAME_DAY_HOUR` on purpose: non-urgent jobs
+ * have days/weeks of slack, so there's no reason to ever hand one a
+ * last-hour-of-the-day slot. Existing without this, a non-urgent booking's
+ * scheduled slot could drift onto a different day than a same-instant
+ * urgent/seeded job depending on exactly what hour the pipeline runs at —
+ * a demo-breaking, purely run-time artefact (see `goldenEdgecaseWiden`).
+ */
+export const STANDARD_LATEST_SAME_DAY_HOUR = 15;
+
+/**
+ * Snap `now + earliestHoursOut` to a non-urgent dispatch slot: same wide
+ * `DISPATCH_SERVICE_HOURS` window as urgent bookings (the real hard limit is
+ * each technician's own `working_hours`, not this snap — see that constant's
+ * doc comment), with its own same-day rollover cutoff. Used by the
+ * orchestrator for every tier except urgent.
+ */
+export function snapToStandardDispatchSlot(
+  fromISO: string,
+  earliestHoursOut: number,
+): string {
+  return snapWithRollover(fromISO, earliestHoursOut, DISPATCH_SERVICE_HOURS, STANDARD_LATEST_SAME_DAY_HOUR);
 }
 
 /**

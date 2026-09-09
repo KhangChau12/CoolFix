@@ -246,26 +246,10 @@ function tryFindBumpTarget(
   const { w1, w2, w3, w4 } = cfg.scoreWeights;
   const now = nowISO();
 
-  const softJobs = ctx.jobs
-    .filter(
-      (j) =>
-        j.assigned_technician_id &&
-        (j.tier === "flexible" || j.tier === "standard") &&
-        j.status === "assigned" &&
-        !isFrozen(j.freeze_point, now) &&
-        Math.abs(hoursBetween(j.scheduled_time, input.scheduledTime)) < 1.5,
-    )
-    .sort((a, b) => tierRank(a.tier) - tierRank(b.tier));
-
-  for (const soft of softJobs) {
-    const tech = ctx.getTechnician(soft.assigned_technician_id!);
-    if (!tech) continue;
-    const hasSkill = input.skillRequired.every((s) => tech.skill_tags.includes(s));
-    if (!hasSkill) continue;
-
+  const scoreTech = (tech: NonNullable<ReturnType<typeof ctx.getTechnician>>): ScoreBreakdown => {
     const dist = Math.max(distanceKm(tech.location, input.jobLocation), 0.3);
     const workload = Math.max(tech.current_workload, 0.5);
-    const breakdown: ScoreBreakdown = {
+    const bd: ScoreBreakdown = {
       distance: round(w1 * (1 / dist)),
       skill_match: round(
         w2 * skillMatchBonus(input.skillRequired, tech.skill_tags, tech.experience_level),
@@ -274,17 +258,53 @@ function tryFindBumpTarget(
       workload: round(w4 * (1 / workload)),
       total: 0,
     };
-    breakdown.total = round(
-      breakdown.distance + breakdown.skill_match + breakdown.urgency + breakdown.workload,
+    bd.total = round(bd.distance + bd.skill_match + bd.urgency + bd.workload);
+    return bd;
+  };
+
+  // Every soft, not-yet-frozen job at this slot whose technician is
+  // certified for the incoming job — each is a possible bump target.
+  const candidates = ctx.jobs
+    .filter(
+      (j) =>
+        j.assigned_technician_id &&
+        (j.tier === "flexible" || j.tier === "standard") &&
+        j.status === "assigned" &&
+        !isFrozen(j.freeze_point, now) &&
+        Math.abs(hoursBetween(j.scheduled_time, input.scheduledTime)) < 1.5,
+    )
+    .map((soft) => {
+      const tech = ctx.getTechnician(soft.assigned_technician_id!);
+      if (!tech || !input.skillRequired.every((s) => tech.skill_tags.includes(s))) {
+        return null;
+      }
+      return { soft, tech, breakdown: scoreTech(tech) };
+    })
+    .filter((c): c is NonNullable<typeof c> => c !== null)
+    // Bump the LOWEST tier first; among equals, free up the technician who
+    // scores BEST for the incoming job (so the urgent job lands with the
+    // right person, not just whoever came first in the list); then the job
+    // not yet rescheduled; then the job physically CLOSEST to the incoming
+    // one (that technician's route barely changes). Every key is
+    // deterministic so the same booking always bumps the same job.
+    .sort(
+      (a, b) =>
+        tierRank(a.soft.tier) - tierRank(b.soft.tier) ||
+        b.breakdown.total - a.breakdown.total ||
+        a.soft.reschedule_history.length - b.soft.reschedule_history.length ||
+        distanceKm(a.soft.location, input.jobLocation) -
+          distanceKm(b.soft.location, input.jobLocation) ||
+        a.soft.job_id.localeCompare(b.soft.job_id),
     );
-    return {
-      technician_id: tech.technician_id,
-      breakdown,
-      bumped_job_id: soft.job_id,
-      bumped_customer: soft.customer_name,
-    };
-  }
-  return null;
+
+  const best = candidates[0];
+  if (!best) return null;
+  return {
+    technician_id: best.tech.technician_id,
+    breakdown: best.breakdown,
+    bumped_job_id: best.soft.job_id,
+    bumped_customer: best.soft.customer_name,
+  };
 }
 
 function tierRank(t: Tier): number {

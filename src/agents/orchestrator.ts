@@ -39,7 +39,8 @@ import {
   findTimeClash,
   isFrozen,
   nowISO,
-  snapToServiceHours,
+  snapToStandardDispatchSlot,
+  snapToUrgentDispatchSlot,
 } from "@/lib/time";
 import type { ApprovalRequest, Job } from "@/lib/types";
 
@@ -58,19 +59,64 @@ export interface PipelineResult {
   message: string;
 }
 
-export async function runBookingPipeline(
+// ── Pipeline serialization ────────────────────────────────────────
+// One AgentContext = one snapshot of the schedule loaded up front, mutated
+// in memory, flushed at the end. Two pipeline runs overlapping in time
+// would each load the schedule BEFORE the other committed, and could hand
+// the same technician + slot to two different jobs (their staged
+// assignments are invisible to each other). The deploy target is a single
+// Lightsail Node process, so an in-process queue is enough: each booking
+// runs start-to-flush before the next one begins. `POST /api/bookings`
+// therefore processes concurrent submissions one at a time, in arrival
+// order — a few seconds of extra latency under a burst, never a
+// double-booking. (A multi-instance deploy would need a DB-level lock or
+// an optimistic pre-flush re-check instead.)
+let pipelineChain: Promise<unknown> = Promise.resolve();
+
+export function runBookingPipeline(
+  rawBooking: unknown,
+): Promise<PipelineResult> {
+  const run = pipelineChain.then(
+    () => runBookingPipelineUnsafe(rawBooking),
+    () => runBookingPipelineUnsafe(rawBooking),
+  );
+  // Keep the chain alive regardless of this run's outcome; swallow here so
+  // a rejection doesn't become an unhandled rejection on the chain itself.
+  pipelineChain = run.catch(() => undefined);
+  return run;
+}
+
+// Monotonic suffixes so two entities created in the same millisecond can
+// never collide on an id. This matters even though the pipeline is
+// serialized: the id is generated before the previous run has necessarily
+// advanced the wall clock, and under a mocked clock (robustness sweep) or
+// a slow LLM provider (gateway) many runs share the exact same Date.now().
+let jobIdSeq = 0;
+let approvalIdSeq = 0;
+function nextApprovalId(): string {
+  return `apr_${Date.now().toString(36)}${(approvalIdSeq++).toString(36)}`;
+}
+
+async function runBookingPipelineUnsafe(
   rawBooking: unknown,
 ): Promise<PipelineResult> {
   const booking: BookingRequest = validateBookingRequest(rawBooking);
   const ctx = await AgentContext.create();
   const now = nowISO();
-  const jobId = `job_${Date.now().toString(36)}`;
+  const jobId = `job_${Date.now().toString(36)}${(jobIdSeq++).toString(36)}`;
 
   logDecision(ctx, {
     agent: "Orchestrator",
     jobId,
     reasoningKind: "rule",
-    input: { tier: booking.tier, category: booking.problem_category },
+    // customer_name is carried here (not just in the headline) so the live
+    // Agent Flow Map can label a booking from its very first row, before
+    // the full job record has flushed.
+    input: {
+      tier: booking.tier,
+      category: booking.problem_category,
+      customer_name: booking.customer_name,
+    },
     output: { pipeline: "start" },
     headline: `New booking received (${booking.customer_name}, ${booking.tier})`,
     outcome: "info",
@@ -104,9 +150,19 @@ export async function runBookingPipeline(
     slotHours = capacity.alternative_slot_hours;
   }
 
-  // Snap to a slot inside common service hours so scoring isn't handed
-  // an appointment every technician would reject as off-hours.
-  const scheduledTime = snapToServiceHours(now, slotHours);
+  // Snap to a slot inside service hours so scoring isn't handed an
+  // appointment every technician would reject as off-hours. Both tiers use
+  // the same wide 08:00–20:00 window (the real hard limit is each
+  // technician's own working_hours, checked downstream) with a same-day
+  // rollover guard so the slot never drifts onto a different calendar day
+  // than a same-instant urgent/seeded job depending on wall-clock time.
+  // Urgent gets a later same-day cutoff (more headroom for a same-day
+  // re-plan if it needs to bump something); non-urgent tiers roll over
+  // earlier since they have days/weeks of slack anyway.
+  const scheduledTime =
+    booking.tier === "urgent"
+      ? snapToUrgentDispatchSlot(now, slotHours)
+      : snapToStandardDispatchSlot(now, slotHours);
   const freezePoint = computeFreezePoint(scheduledTime, ctx.config.freezeWindowHours);
 
   // Stage the job so later agents (clash detection) see it.
@@ -258,7 +314,7 @@ export async function runBookingPipeline(
         edge.proposalForHuman
       ) {
         const approval: ApprovalRequest = {
-          approval_id: `apr_${Date.now().toString(36)}`,
+          approval_id: nextApprovalId(),
           created_at: nowISO(),
           kind: "standard",
           job_id: jobId,
@@ -522,7 +578,7 @@ export async function runBookingPipeline(
   // (Freeze window can never be the reason we land here — that case
   // already returned above as "unassignable".)
   const approval: ApprovalRequest = {
-    approval_id: `apr_${Date.now().toString(36)}`,
+    approval_id: nextApprovalId(),
     created_at: nowISO(),
     kind: "standard",
     job_id: jobId,

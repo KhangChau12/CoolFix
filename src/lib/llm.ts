@@ -5,10 +5,14 @@
 //  • Only Job-Intake, Disruption, and Notification agents call this.
 //    Pricing + Technician-State are pure rule/bookkeeping — never here.
 //  • LLM_MODE=stub returns deterministic fixture output so the demo runs
-//    offline and never burns API credit. LLM_MODE=bedrock calls the real
-//    Claude Sonnet 4.5 model on AWS Bedrock (hackathon default).
-//    LLM_MODE=openai calls the OpenAI Chat Completions API instead — same
-//    prompt frame, same JSON contract, so no agent code changes.
+//    offline and never burns API credit.
+//  • LLM_MODE=gateway is the hackathon provider: the organisers' self-hosted
+//    AWS LLM gateway (Ollama-compatible /api/chat, X-API-Key header, Claude
+//    Sonnet 4.5 on AWS behind it).
+//  • LLM_MODE=openai calls the OpenAI Chat Completions API instead — same
+//    prompt frame, same JSON contract, kept as a fallback dev provider.
+//  • All modes share one prompt frame + JSON contract, so switching
+//    providers touches no agent code.
 //  • A per-process call budget hard-stops runaway loops.
 //  • Every prompt is wrapped with an injection-resistant system frame:
 //    customer free-text is delimited and the model is told to treat it
@@ -43,7 +47,7 @@ export interface LlmRequest {
   maxAttempts?: number;
 }
 
-export type LlmMode = "stub" | "bedrock" | "openai";
+export type LlmMode = "stub" | "gateway" | "openai";
 
 export interface LlmResponse<T = unknown> {
   data: T;
@@ -127,8 +131,8 @@ export async function callLlm<T = unknown>(req: LlmRequest): Promise<LlmResponse
     const started = Date.now();
     try {
       const out: LlmResponse<T> =
-        mode === "bedrock"
-          ? await callBedrock<T>(systemPrompt, userBlock, guardrail_notes, started)
+        mode === "gateway"
+          ? await callGateway<T>(systemPrompt, userBlock, guardrail_notes, started)
           : mode === "openai"
             ? await callOpenAI<T>(systemPrompt, userBlock, guardrail_notes, started)
             : await callStub<T>(req, guardrail_notes, started);
@@ -145,58 +149,6 @@ export async function callLlm<T = unknown>(req: LlmRequest): Promise<LlmResponse
     }
   }
   throw lastError;
-}
-
-async function callBedrock<T>(
-  system: string,
-  user: string,
-  notes: string[],
-  started: number,
-): Promise<LlmResponse<T>> {
-  if (callCount >= BUDGET) {
-    throw new Error(`LLM call budget (${BUDGET}) exhausted — refusing to call Bedrock.`);
-  }
-  callCount += 1;
-
-  const region = process.env.AWS_REGION ?? "ap-southeast-1";
-  const modelId =
-    process.env.BEDROCK_MODEL_ID ??
-    "apac.anthropic.claude-sonnet-4-5-20250929-v1:0";
-
-  // Lazy import so the stub path has zero AWS dependency.
-  const { BedrockRuntimeClient, InvokeModelCommand } = await import(
-    "@aws-sdk/client-bedrock-runtime"
-  );
-  const client = new BedrockRuntimeClient({ region });
-
-  const body = {
-    anthropic_version: "bedrock-2023-05-31",
-    max_tokens: 1024,
-    system,
-    messages: [{ role: "user", content: [{ type: "text", text: user }] }],
-    temperature: 0,
-  };
-
-  const resp = await client.send(
-    new InvokeModelCommand({
-      modelId,
-      contentType: "application/json",
-      accept: "application/json",
-      body: JSON.stringify(body),
-    }),
-  );
-
-  const payload = JSON.parse(new TextDecoder().decode(resp.body));
-  const raw: string = payload?.content?.[0]?.text ?? "";
-  const data = safeParse<T>(raw);
-  return {
-    data,
-    raw,
-    mode: "bedrock",
-    cached: false,
-    latency_ms: Date.now() - started,
-    guardrail_notes: notes,
-  };
 }
 
 async function callOpenAI<T>(
@@ -217,9 +169,8 @@ async function callOpenAI<T>(
   const model = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
   const baseUrl = process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1";
 
-  // Plain fetch — no SDK dependency, mirroring the lazy Bedrock path.
-  // response_format json_object forces a parseable object back, same
-  // contract every agent already validates.
+  // Plain fetch — no SDK dependency. response_format json_object forces a
+  // parseable object back, same contract every agent already validates.
   const resp = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
@@ -258,6 +209,86 @@ async function callOpenAI<T>(
   };
 }
 
+async function callGateway<T>(
+  system: string,
+  user: string,
+  notes: string[],
+  started: number,
+): Promise<LlmResponse<T>> {
+  if (callCount >= BUDGET) {
+    throw new Error(`LLM call budget (${BUDGET}) exhausted — refusing to call the gateway.`);
+  }
+  callCount += 1;
+
+  const baseUrl = process.env.LLM_GATEWAY_URL ?? "https://api.softwaresystems.app";
+  const apiKey = process.env.LLM_GATEWAY_API_KEY;
+  if (!apiKey) {
+    throw new Error("LLM_MODE=gateway but LLM_GATEWAY_API_KEY is not set.");
+  }
+  const model =
+    process.env.LLM_MODEL ?? "global.anthropic.claude-sonnet-4-5-20250929-v1:0";
+
+  // Ollama-compatible /api/chat. The gateway ignores a `tools` field and has
+  // no JSON mode — we already ask for minified JSON in the system prompt and
+  // safeParse() below tolerates a ```json fence, which this gateway adds.
+  const url = `${baseUrl.replace(/\/$/, "")}/api/chat`;
+  const body = JSON.stringify({
+    model,
+    stream: false,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+    options: { num_predict: 1024, temperature: 0 },
+  });
+
+  // The gateway returns 403/429 on rapid successive requests. The
+  // starter-kit client uses a linear 3s/6s/9s backoff; under a burst of
+  // whole-pipeline runs (several LLM calls each) that isn't always enough,
+  // so we extend it and add a little jitter. Configurable via
+  // LLM_GATEWAY_BACKOFF_MS (comma-separated). Transport-level retry —
+  // distinct from the malformed-JSON retry in callLlm().
+  const backoffs = (process.env.LLM_GATEWAY_BACKOFF_MS ?? "0,3000,6000,12000,20000,30000")
+    .split(",")
+    .map((n) => Number(n.trim()))
+    .filter((n) => Number.isFinite(n));
+  let lastDetail = "";
+  for (let i = 0; i < backoffs.length; i++) {
+    if (backoffs[i] > 0) {
+      const jitter = Math.floor(Math.random() * 1000);
+      await new Promise((r) => setTimeout(r, backoffs[i] + jitter));
+    }
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": apiKey },
+      body,
+    });
+    if (resp.status === 403 || resp.status === 429) {
+      lastDetail = `${resp.status} ${(await resp.text().catch(() => "")).slice(0, 160)}`;
+      continue; // rate-limited — back off and retry
+    }
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => "");
+      throw new Error(`Gateway API ${resp.status}: ${detail.slice(0, 200)}`);
+    }
+    const payload = (await resp.json()) as {
+      message?: { content?: string };
+      response?: string;
+    };
+    const raw: string = payload?.message?.content ?? payload?.response ?? "";
+    const data = safeParse<T>(raw);
+    return {
+      data,
+      raw,
+      mode: "gateway",
+      cached: false,
+      latency_ms: Date.now() - started,
+      guardrail_notes: [...notes, `Gateway model: ${model}`],
+    };
+  }
+  throw new Error(`Gateway API rate-limited after ${backoffs.length} attempts: ${lastDetail}`);
+}
+
 async function callStub<T>(
   req: LlmRequest,
   notes: string[],
@@ -267,6 +298,11 @@ async function callStub<T>(
   const { data, extraNotes } = stubFor(req);
   // Simulate a realistic-ish latency for the feed timeline.
   const latency = 180 + Math.floor(Math.random() * 220);
+  // Opt-in REAL delay per stubbed call (tests only) — lets a script
+  // reproduce the multi-second pacing of a gateway run while staying
+  // deterministic and offline. Unset in normal dev/demo/eval.
+  const realDelay = Number(process.env.LLM_STUB_DELAY_MS ?? 0);
+  if (realDelay > 0) await new Promise((r) => setTimeout(r, realDelay));
   return {
     data: data as T,
     raw: JSON.stringify(data),

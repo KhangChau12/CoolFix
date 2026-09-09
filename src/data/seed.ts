@@ -3,21 +3,23 @@ import { SG_LANDMARKS } from "@/lib/geo";
 import {
   addHours,
   computeFreezePoint,
+  DISPATCH_SERVICE_HOURS,
   nowISO,
   sgHour,
   snapToServiceHours,
+  snapToUrgentDispatchSlot,
 } from "@/lib/time";
 import { DEFAULT_CONFIG, TIER_META } from "@/lib/types";
 
 /**
- * The slot a new URGENT booking lands in — must match the orchestrator's
- * logic: URGENT_EARLIEST_HOURS from now, snapped to service hours.
- * Keep this constant in sync with orchestrator.ts.
+ * The slot a new URGENT booking lands in — MUST match the orchestrator's
+ * logic exactly (`snapToUrgentDispatchSlot`, URGENT_EARLIEST_HOURS from now).
+ * Keep `URGENT_EARLIEST_HOURS` in sync with orchestrator.ts.
  */
 export const URGENT_EARLIEST_HOURS = 4;
 
 export function urgentSlotISO(): string {
-  return snapToServiceHours(nowISO(), URGENT_EARLIEST_HOURS);
+  return snapToUrgentDispatchSlot(nowISO(), URGENT_EARLIEST_HOURS);
 }
 
 // ── Seed technicians ────────────────────────────────────────────────
@@ -33,7 +35,10 @@ export function seedTechnicians(): Technician[] {
       skill_tags: ["basic_maintenance", "refrigerant_handling"],
       experience_level: "senior",
       location: SG_LANDMARKS.bishan,
-      working_hours: { start: "08:00", end: "18:00" },
+      // Long shift on purpose: Marcus is the Bishan refrigerant technician
+      // the auto-commit demo depends on, and a same-day afternoon re-plan
+      // slot for job_2005 must exist regardless of what time the demo runs.
+      working_hours: { start: "08:00", end: "20:00" },
       current_workload: 2,
       phone: "+65 8123 4001",
     },
@@ -63,7 +68,11 @@ export function seedTechnicians(): Technician[] {
       technician_id: "tech_daniel",
       name: "Daniel Ong",
       photo_url: "https://i.pravatar.cc/120?img=52",
-      skill_tags: ["refrigerant_handling", "electrical_work", "commercial_chiller"],
+      // basic_maintenance included: every senior can do routine servicing,
+      // and it keeps Daniel eligible for a "no cooling" refrigerant job
+      // even when Job-Intake also tags basic_maintenance — otherwise the
+      // Buona Vista bump→HITL scenario silently reassigns to Marcus.
+      skill_tags: ["basic_maintenance", "refrigerant_handling", "electrical_work", "commercial_chiller"],
       experience_level: "senior",
       location: SG_LANDMARKS.buonaVista,
       working_hours: { start: "07:00", end: "16:00" },
@@ -77,7 +86,7 @@ export function seedTechnicians(): Technician[] {
       skill_tags: ["basic_maintenance", "refrigerant_handling", "electrical_work"],
       experience_level: "junior",
       location: SG_LANDMARKS.woodlands,
-      working_hours: { start: "09:00", end: "18:00" },
+      working_hours: { start: "09:00", end: "20:00" },
       current_workload: 0,
       phone: "+65 8123 4005",
     },
@@ -121,12 +130,15 @@ interface SeedJobSpec {
   dayOffset: number;
   hour: number;
   /**
-   * "fixed"       — use dayOffset + hour literally.
-   * "frozen_soon" — resolve to now+2h (job sits inside its freeze window).
-   * "urgent_slot" — resolve to exactly where a new urgent booking lands,
-   *                 so an incoming urgent job collides with this one.
+   * "fixed"        — use dayOffset + hour literally.
+   * "frozen_soon"  — resolve to now+2h (job sits inside its freeze window).
+   * "urgent_slot"  — resolve to exactly where a new urgent booking lands,
+   *                  so an incoming urgent job collides with this one.
+   * "urgent_offset"— urgent_slot + `hour` (used as an hour offset, may be
+   *                  negative), snapped to service hours. Fills a
+   *                  technician's day around the urgent slot.
    */
-  hourMode?: "fixed" | "frozen_soon" | "urgent_slot";
+  hourMode?: "fixed" | "frozen_soon" | "urgent_slot" | "urgent_offset";
   status: Job["status"];
   tech: string | null;
   stage: Job["pipeline_stage"];
@@ -271,6 +283,87 @@ const SPECS: SeedJobSpec[] = [
     createdHoursAgo: 50,
   },
 
+  // ── Two contrasting re-plan scenarios share the same setup ──────────
+  //   Every refrigerant technician (Marcus / Daniel / Gopal) is already on
+  //   a soft-tier job at the urgent slot (job_2005/2006/2007). An incoming
+  //   urgent refrigerant job therefore has to bump one of them — and WHICH
+  //   one depends on where the incoming job is:
+  //
+  //   • Incoming near BISHAN → bumps job_2005 (Marcus, Bishan). Marcus has
+  //     a free afternoon, so the Disruption Agent shifts job_2005 ~2h on
+  //     the same technician: 1 Flexible customer, same day, comfortable
+  //     gap, no SLA breach → clears every auto-commit rail → AUTO-COMMITS,
+  //     no human. (eval: goldenAutoReplan)
+  //
+  //   • Incoming near BUONA VISTA → bumps job_2006 (Daniel). Daniel is the
+  //     ONLY refrigerant+chiller technician and job_2010 / job_2011 fill
+  //     the rest of his day, so job_2006's only re-plan pushes it to the
+  //     NEXT DAY. A cross-day move breaks the auto-commit rails, and a
+  //     reassignment to Marcus/Gopal exceeds the added-travel rail — so it
+  //     goes to the Approvals queue. (eval: goldenBumpHITL)
+  //
+  //   job_2010 / job_2011 are Priority (never bump targets) and sit at
+  //   urgent_slot + 2h / + 4h. 1.5h apart is only the HARD FLOOR
+  //   (findTimeClash's <1.5h threshold — start-to-start distance, no
+  //   separate travel/rest buffer added on top of it anywhere in the
+  //   codebase). The product's own comfort target is 2h+: see
+  //   heuristicCost's squeezePenalty and AUTO_REPLAN_LIMITS.minGapHours,
+  //   both keyed off the exact same start-to-start "tightest_gap_hours"
+  //   measure, and the Disruption Agent's own LLM prompt explicitly calls
+  //   a job placed right at the 1.5h floor against another "fragile — no
+  //   travel buffer" and asks for "a slightly later slot with a clear
+  //   gap" instead. So these two are spaced a full 2h apart, not just
+  //   barely legal — an earlier version had them 1h apart (a genuine
+  //   overlap under the app's fixed ~1.5h-visit assumption) and a version
+  //   after that fixed it to exactly 1.5h apart (legal, but exactly the
+  //   "fragile" pattern the LLM prompt itself warns against). Note
+  //   job_2006's HITL outcome does NOT depend on Daniel's afternoon being
+  //   fully packed — it's `standard` tier, and
+  //   AUTO_REPLAN_LIMITS.movableTiers = ["flexible"] already excludes it
+  //   from ever auto-committing regardless of gap size. The Gantt view
+  //   also lane-splits any jobs that DO land within 1.5h of each other
+  //   (`assignLanes` in schedule/page.tsx) so a real near-clash stays
+  //   legible instead of rendering as one merged block, but the seed
+  //   itself shouldn't rely on that as a crutch.
+  {
+    id: "job_2010",
+    customer: "PowerCool Facilities",
+    email: "ops@powercool.example.sg",
+    phone: "+65 9111 0010",
+    address: "16 Ayer Rajah Cres, #03-01",
+    loc: { lat: 1.2968, lng: 103.787 },
+    desc: "Quarterly chiller inspection, booked slot.",
+    category: "commercial",
+    skill: ["commercial_chiller"],
+    tier: "priority",
+    dayOffset: 0,
+    hour: 2,
+    hourMode: "urgent_offset",
+    status: "assigned",
+    tech: "tech_daniel",
+    stage: "assigned",
+    createdHoursAgo: 30,
+  },
+  {
+    id: "job_2011",
+    customer: "Lena Foo",
+    email: "lena.foo@example.sg",
+    phone: "+65 9111 0011",
+    address: "Blk 34 Holland Dr, #10-122",
+    loc: { lat: 1.3092, lng: 103.7938 },
+    desc: "Aircon servicing for three units.",
+    category: "not_cooling",
+    skill: ["refrigerant_handling"],
+    tier: "priority",
+    dayOffset: 0,
+    hour: 4,
+    hourMode: "urgent_offset",
+    status: "assigned",
+    tech: "tech_daniel",
+    stage: "assigned",
+    createdHoursAgo: 26,
+  },
+
   // Pending job in the queue — not yet processed by agents.
   {
     id: "job_2008",
@@ -320,6 +413,12 @@ export function seedJobs(freezeWindowHours: number): Job[] {
       scheduled = addHours(now, 2);
     } else if (s.hourMode === "urgent_slot") {
       scheduled = urgentSlotISO();
+    } else if (s.hourMode === "urgent_offset") {
+      scheduled = snapToServiceHours(
+        addHours(urgentSlotISO(), s.hour),
+        0,
+        DISPATCH_SERVICE_HOURS,
+      );
     } else {
       const dt = new Date(
         anchor.getTime() + s.dayOffset * 24 * 3600_000 + (s.hour - 9) * 3600_000,

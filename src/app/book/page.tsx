@@ -14,6 +14,7 @@ import {
   TIER_SLA_TEXT,
   DEFAULT_CONFIG,
   CATEGORY_HINT_SKILL,
+  type AgentDecisionLog,
   type Job,
   type Technician,
   type Tier,
@@ -369,6 +370,8 @@ function TrackView({ result }: { result: PipelineResult }) {
       </div>
       <p className="muted" style={{ fontSize: 13 }}>{result.message}</p>
 
+      <PipelineProgress jobId={jobId} finalStatus={result.status} />
+
       {/* live technician + ETA card, once assigned */}
       {tech && ["assigned", "frozen", "in_progress"].includes(j.status) && (
         <div
@@ -459,4 +462,193 @@ function TrackView({ result }: { result: PipelineResult }) {
       </div>
     </div>
   );
+}
+
+// ── Pipeline progress (customer-facing) ─────────────────────────────
+// A plain-language view of the multi-agent pipeline running on this
+// booking, read live from /api/decisions?job=<id>. The customer sees the
+// system *working* — "Understanding your problem ✓ → Matching a
+// technician ⏳" — instead of a static "please wait". Deliberately hides
+// every internal detail (scores, candidate lists, rule-vs-LLM labels,
+// guardrail notes); those live in the admin pipeline view.
+
+type StepState = "done" | "active" | "waiting" | "pending";
+
+const CUSTOMER_STEPS: { key: string; label: string; agents: AgentDecisionLog["agent_name"][] }[] = [
+  { key: "intake", label: "Understanding your problem", agents: ["JobIntakeAgent"] },
+  { key: "price", label: "Confirming the price", agents: ["PricingEngine"] },
+  { key: "capacity", label: "Checking team availability", agents: ["CapacityAgent"] },
+  {
+    key: "match",
+    label: "Matching a certified technician",
+    agents: ["TechnicianStateAgent", "AssignmentAgent", "AssignmentTiebreakAgent", "AssignmentEdgecaseAgent"],
+  },
+  { key: "schedule", label: "Fitting the visit into the schedule", agents: ["DisruptionAgent"] },
+  { key: "confirm", label: "Sending your confirmation", agents: ["NotificationAgent"] },
+];
+
+function PipelineProgress({
+  jobId,
+  finalStatus,
+}: {
+  jobId: string;
+  finalStatus: PipelineResult["status"];
+}) {
+  const [rows, setRows] = useState<AgentDecisionLog[]>([]);
+  const [loaded, setLoaded] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const { decisions } = await apiGet<{ decisions: AgentDecisionLog[] }>(
+        `/api/decisions?job=${jobId}`,
+      );
+      setRows(decisions);
+      setLoaded(true);
+    } catch {
+      /* keep last */
+    }
+  }, [jobId]);
+
+  useRealtime("agent_decision_log", load);
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const seen = new Set(rows.map((r) => r.agent_name));
+  const awaitingApproval =
+    finalStatus === "awaiting_approval" ||
+    rows.some((r) => r.requires_human_approval && r.outcome === "requires_approval");
+  // A step is done once any of its agents has logged a row. The scheduling
+  // step ("Fitting the visit…") is only relevant when the Disruption Agent
+  // actually ran — otherwise it's skipped, not pending.
+  const disruptionInvolved = seen.has("DisruptionAgent");
+  const steps = CUSTOMER_STEPS.filter((s) => s.key !== "schedule" || disruptionInvolved);
+
+  // While the booking is parked at the approvals gate, the schedule step is
+  // "in a coordinator's hands" (not a finished ✓) and confirmation hasn't
+  // been reached — even though the Disruption Agent has already logged its
+  // proposal.
+  const gateKeys = new Set(["schedule", "confirm"]);
+  const doneKeys = new Set(
+    steps
+      .filter((s) => s.agents.some((a) => seen.has(a)))
+      .filter((s) => !(awaitingApproval && gateKeys.has(s.key)))
+      .map((s) => s.key),
+  );
+  const firstPendingIdx = steps.findIndex((s) => !doneKeys.has(s.key));
+
+  const stateOf = (idx: number, key: string): StepState => {
+    if (doneKeys.has(key)) return "done";
+    if (awaitingApproval && key === "schedule") return "waiting";
+    if (idx === firstPendingIdx) {
+      if (awaitingApproval && gateKeys.has(key)) return "waiting";
+      return "active";
+    }
+    return "pending";
+  };
+
+  const settled =
+    finalStatus === "assigned_auto" ||
+    finalStatus === "assigned_after_replan" ||
+    (doneKeys.has("confirm") && !awaitingApproval);
+
+  return (
+    <div
+      style={{
+        marginTop: 14,
+        padding: "13px 15px",
+        borderRadius: 10,
+        background: "var(--surface-2)",
+        border: "1px solid var(--border)",
+      }}
+    >
+      <div
+        className="row"
+        style={{ gap: 8, justifyContent: "space-between", marginBottom: 10 }}
+      >
+        <strong style={{ fontSize: 12.5 }}>
+          {settled ? "How we set up your booking" : "Setting up your booking…"}
+        </strong>
+        {!loaded && <span className="faint" style={{ fontSize: 10.5 }}>loading…</span>}
+      </div>
+
+      <div style={{ display: "grid", gap: 2 }}>
+        {steps.map((s, idx) => {
+          const st = stateOf(idx, s.key);
+          return (
+            <div
+              key={s.key}
+              className="row"
+              style={{ gap: 10, padding: "5px 0", alignItems: "center" }}
+            >
+              <StepMark state={st} />
+              <span
+                style={{
+                  fontSize: 12.5,
+                  color: st === "pending" ? "var(--text-faint)" : "var(--text)",
+                  fontWeight: st === "active" || st === "waiting" ? 600 : 400,
+                }}
+              >
+                {s.label}
+                {st === "waiting" && (
+                  <span className="muted" style={{ fontWeight: 400 }}>
+                    {" "}— a coordinator is confirming a small schedule change
+                  </span>
+                )}
+                {st === "active" && (
+                  <span className="muted" style={{ fontWeight: 400 }}>
+                    {" "}— in progress
+                  </span>
+                )}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function StepMark({ state }: { state: StepState }) {
+  const base = {
+    width: 16,
+    height: 16,
+    borderRadius: 999,
+    flexShrink: 0,
+    display: "grid",
+    placeItems: "center",
+    fontSize: 10,
+  } as const;
+  if (state === "done") {
+    return <span style={{ ...base, background: "var(--tier-flexible)", color: "#fff" }}>✓</span>;
+  }
+  if (state === "active") {
+    return (
+      <span
+        style={{
+          ...base,
+          border: "2px solid var(--brand)",
+          background: "var(--brand-tint)",
+        }}
+      >
+        <span
+          style={{
+            width: 6,
+            height: 6,
+            borderRadius: 999,
+            background: "var(--brand)",
+            animation: "pulse 1.4s ease-in-out infinite",
+          }}
+        />
+      </span>
+    );
+  }
+  if (state === "waiting") {
+    return (
+      <span style={{ ...base, border: "2px solid var(--tier-priority)", color: "var(--tier-priority)" }}>
+        ⏸
+      </span>
+    );
+  }
+  return <span style={{ ...base, border: "2px solid var(--border-strong)" }} />;
 }

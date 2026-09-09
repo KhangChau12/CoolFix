@@ -252,9 +252,13 @@ export function PipelineReplay({ jobId }: { jobId: string }) {
   );
 }
 
-// ── sub-views (self-contained so this file has no cross-imports) ─────
+// ── sub-views ──────────────────────────────────────────────────────
+// Exported so AgentFlowMap.tsx (the live /admin/flow line map) can reuse
+// exactly the same rendering of a decision row's structured payload —
+// one definition of what a score breakdown / candidate list / re-plan
+// option set looks like, everywhere it's shown.
 
-function ScoreBars({
+export function ScoreBars({
   b,
   color,
 }: {
@@ -298,7 +302,7 @@ function ScoreBars({
   );
 }
 
-function Candidates({ rows }: { rows: NonNullable<AgentDecisionLog["candidates"]> }) {
+export function Candidates({ rows }: { rows: NonNullable<AgentDecisionLog["candidates"]> }) {
   return (
     <div style={{ marginTop: 10 }}>
       <div className="faint" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.04em" }}>
@@ -339,7 +343,7 @@ function Candidates({ rows }: { rows: NonNullable<AgentDecisionLog["candidates"]
   );
 }
 
-function ReplanOptions({
+export function ReplanOptions({
   options,
   llmDesigned,
 }: {

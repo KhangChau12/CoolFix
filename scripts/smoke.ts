@@ -47,7 +47,11 @@ async function main() {
   line("SCENARIO 2 — URGENT refrigerant job at ~14:00 (bump + HITL expected)");
   // Seed jobs 2005/2006/2007 book all three refrigerant-skilled techs at
   // 14:00 SGT on soft tiers. An urgent refrigerant job near that hour and
-  // area must bump one → HITL gate opens.
+  // area must bump one. From most locations the bump lands on Daniel's
+  // job_2006, and Daniel (booked solid by job_2010/2011) can only re-plan
+  // it to the next day → the move breaks the auto-commit rails → HITL.
+  // (An urgent job right in Bishan instead bumps Marcus's job_2005, which
+  //  he can absorb the same day → that one auto-commits. See eval.ts.)
   const r2 = await runBookingPipeline({
     customer_name: "Test Urgent",
     customer_email: "urgent@test.sg",
