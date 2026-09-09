@@ -5,26 +5,31 @@ import Link from "next/link";
 import { apiGet, apiSend } from "@/lib/client";
 import { useRealtime } from "@/components/useRealtime";
 import { EmptyState, Toast } from "@/components/ui";
+import MapView, { type MapPin } from "@/components/MapView";
 import { fmtSGDateTime } from "@/lib/time";
-import type { AgentDecisionLog, ApprovalRequest, Job } from "@/lib/types";
+import type { AgentDecisionLog, ApprovalRequest, Job, Technician } from "@/lib/types";
 
 export default function ApprovalsPage() {
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [jobs, setJobs] = useState<Record<string, Job>>({});
+  const [techs, setTechs] = useState<Record<string, Technician>>({});
   const [decisions, setDecisions] = useState<AgentDecisionLog[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [choice, setChoice] = useState<Record<string, string>>({});
+  const [mapFailed, setMapFailed] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState<{ msg: string; kind: "success" | "error" } | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [a, j, d] = await Promise.all([
+      const [a, j, t, d] = await Promise.all([
         apiGet<{ approvals: ApprovalRequest[] }>("/api/approvals"),
         apiGet<{ jobs: Job[] }>("/api/bookings"),
+        apiGet<{ technicians: Technician[] }>("/api/technicians"),
         apiGet<{ decisions: AgentDecisionLog[] }>("/api/decisions?limit=120"),
       ]);
       setApprovals(a.approvals);
       setJobs(Object.fromEntries(j.jobs.map((x) => [x.job_id, x])));
+      setTechs(Object.fromEntries(t.technicians.map((x) => [x.technician_id, x])));
       setDecisions(d.decisions);
     } catch {
       /* keep */
@@ -82,6 +87,28 @@ export default function ApprovalsPage() {
         const isEmergency = a.kind === "emergency_override";
         const levelColor = isEmergency ? "var(--tier-urgent)" : "var(--agent-disruption)";
         const disruptionRow = decisions.find((d) => d.log_id === a.disruption_log_id);
+
+        // Map the geography of this decision: the incoming job that forced the
+        // re-plan (anchor) plus every OTHER job the selected plan would move,
+        // each tagged with the technician who'd take it.
+        const selectedOpt =
+          a.options.find((o) => o.option_id === selected) ??
+          a.options.find((o) => o.recommended) ??
+          a.options[0];
+        const extraPins: MapPin[] = (selectedOpt?.moves ?? [])
+          .map((mv): MapPin | null => {
+            const mj = jobs[mv.job_id];
+            if (!mj) return null;
+            const t = techs[mv.technician_id];
+            return {
+              lat: mj.location.lat,
+              lng: mj.location.lng,
+              role: "alt",
+              label: `${mj.customer_name} → moved${t ? ` · ${t.name}` : ""}`,
+            };
+          })
+          .filter((x): x is MapPin => x !== null);
+
         return (
           <div
             key={a.approval_id}
@@ -123,6 +150,22 @@ export default function ApprovalsPage() {
               {isEmergency && a.frozen_jobs_impacted.length > 0 &&
                 ` — frozen jobs impacted: ${a.frozen_jobs_impacted.join(", ")}`}
             </div>
+
+            {job && !mapFailed.has(a.approval_id) && (
+              <div style={{ marginBottom: 12 }}>
+                <MapView
+                  mode="display"
+                  customer={{ lat: job.location.lat, lng: job.location.lng, address: job.location.address }}
+                  extras={extraPins}
+                  height={200}
+                  onUnavailable={() => setMapFailed((s) => new Set(s).add(a.approval_id))}
+                />
+                <p className="faint" style={{ fontSize: 10.5, margin: "5px 0 0" }}>
+                  🔵 incoming urgent job
+                  {extraPins.length > 0 && " · 🟢 jobs this plan would move"}
+                </p>
+              </div>
+            )}
 
             {disruptionRow && a.options.length > 0 && (
               <AgentReasoningPanel row={disruptionRow} jobId={a.job_id} />

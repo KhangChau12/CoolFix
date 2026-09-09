@@ -11,6 +11,7 @@ import Link from "next/link";
 import { apiGet } from "@/lib/client";
 import { useRealtime } from "@/components/useRealtime";
 import { PipelineReplay } from "@/components/PipelineReplay";
+import MapView from "@/components/MapView";
 import { TierBadge, StatusDot } from "@/components/ui";
 import { fmtSGDateTime } from "@/lib/time";
 import type { Job, NotificationRecord, Technician } from "@/lib/types";
@@ -21,6 +22,7 @@ export default function AdminJobPage({ params }: { params: { id: string } }) {
   const [tech, setTech] = useState<Technician | null>(null);
   const [notes, setNotes] = useState<NotificationRecord[]>([]);
   const [notFound, setNotFound] = useState(false);
+  const [mapOk, setMapOk] = useState(true);
 
   const load = useCallback(async () => {
     try {
@@ -111,6 +113,21 @@ export default function AdminJobPage({ params }: { params: { id: string } }) {
               </>
             )}
           </dl>
+
+          {mapOk && (
+            <div style={{ marginTop: 14 }}>
+              <MapView
+                mode="display"
+                customer={{ lat: job.location.lat, lng: job.location.lng, address: job.location.address }}
+                technician={
+                  tech ? { lat: tech.location.lat, lng: tech.location.lng, name: tech.name } : null
+                }
+                active={job.status === "in_progress"}
+                height={220}
+                onUnavailable={() => setMapOk(false)}
+              />
+            </div>
+          )}
         </div>
       )}
 

@@ -56,12 +56,23 @@ interface PickProps extends CommonProps {
   onPick: (place: PickedPlace) => void;
 }
 
+export interface MapPin {
+  lat: number;
+  lng: number;
+  label: string;
+  /** "customer" (blue) | "tech" (amber) | "alt" (green) — picks the pin colour. */
+  role?: "customer" | "tech" | "alt";
+}
+
 interface DisplayProps extends CommonProps {
   mode: "display";
   customer: { lat: number; lng: number; address: string };
   technician?: { lat: number; lng: number; name: string } | null;
   /** Tighten the visual style when the technician is en route. */
   active?: boolean;
+  /** Extra read-only markers (no connecting line) — e.g. other jobs a
+   * re-plan would move. Included in the auto-fit. */
+  extras?: MapPin[];
 }
 
 type Props = PickProps | DisplayProps;
@@ -181,6 +192,7 @@ export default function MapView(props: Props) {
   const custMarkerRef = useRef<LeafletMarker | null>(null);
   const techMarkerRef = useRef<LeafletMarker | null>(null);
   const lineRef = useRef<LeafletPolyline | null>(null);
+  const extraMarkersRef = useRef<LeafletMarker[]>([]);
 
   // Keep the latest onPick in a ref so the map-init effect can stay
   // mount-only without going stale.
@@ -262,6 +274,7 @@ export default function MapView(props: Props) {
       custMarkerRef.current = null;
       techMarkerRef.current = null;
       lineRef.current = null;
+      extraMarkersRef.current = [];
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -301,6 +314,10 @@ export default function MapView(props: Props) {
   const dTechLat = props.mode === "display" ? props.technician?.lat ?? null : null;
   const dTechLng = props.mode === "display" ? props.technician?.lng ?? null : null;
   const dActive = props.mode === "display" ? Boolean(props.active) : false;
+  const dExtras = props.mode === "display" ? props.extras ?? null : null;
+  const dExtrasKey = dExtras
+    ? dExtras.map((e) => `${e.lat.toFixed(4)},${e.lng.toFixed(4)},${e.role ?? ""}`).join("|")
+    : "";
 
   useEffect(() => {
     if (mode !== "display" || !ready || failed || dCustLat == null || dCustLng == null) return;
@@ -317,6 +334,22 @@ export default function MapView(props: Props) {
         .bindPopup(`<b>Your address</b><br>${escapeHtml(p.customer.address)}`);
     } else {
       custMarkerRef.current.setLatLng([dCustLat, dCustLng]);
+    }
+
+    // Extra read-only markers (other jobs a re-plan touches). Rebuilt
+    // whenever the set changes — small counts, so a clear-and-readd is fine.
+    const EXTRA_COLOR = { customer: "var(--tier-standard)", tech: "var(--tier-priority)", alt: "var(--tier-flexible)" };
+    for (const m of extraMarkersRef.current) m.remove();
+    extraMarkersRef.current = [];
+    if (dExtras) {
+      for (const e of dExtras) {
+        const m = L.marker([e.lat, e.lng], {
+          icon: makePinIcon(L, EXTRA_COLOR[e.role ?? "alt"]),
+        })
+          .addTo(map)
+          .bindPopup(escapeHtml(e.label));
+        extraMarkersRef.current.push(m);
+      }
     }
 
     if (dTechLat != null && dTechLng != null && p.technician) {
@@ -352,12 +385,19 @@ export default function MapView(props: Props) {
         lineRef.current.setLatLngs(pts);
         lineRef.current.setStyle(style);
       }
-      map.fitBounds(L.latLngBounds(pts).pad(0.35), { animate: false });
+      const fitPts = [...pts, ...(dExtras?.map((e) => [e.lat, e.lng] as [number, number]) ?? [])];
+      map.fitBounds(L.latLngBounds(fitPts).pad(0.35), { animate: false });
+    } else if (dExtras && dExtras.length > 0) {
+      const fitPts: [number, number][] = [
+        [dCustLat, dCustLng],
+        ...dExtras.map((e) => [e.lat, e.lng] as [number, number]),
+      ];
+      map.fitBounds(L.latLngBounds(fitPts).pad(0.35), { animate: false });
     } else {
       map.setView([dCustLat, dCustLng], 14, { animate: false });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, mode, dCustLat, dCustLng, dTechLat, dTechLng, dActive]);
+  }, [ready, mode, dCustLat, dCustLng, dTechLat, dTechLng, dActive, dExtrasKey]);
 
   // ── search box (pick only) ──
   const [q, setQ] = useState("");

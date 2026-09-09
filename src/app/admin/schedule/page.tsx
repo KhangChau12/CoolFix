@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiGet } from "@/lib/client";
 import { useRealtime } from "@/components/useRealtime";
 import { TierBadge } from "@/components/ui";
+import MapView from "@/components/MapView";
 import {
   TIER_META,
   type ApprovalRequest,
@@ -12,7 +13,7 @@ import {
   type RuntimeConfig,
   type Technician,
 } from "@/lib/types";
-import { fmtSGTime, sgHour } from "@/lib/time";
+import { fmtSGDateTime, fmtSGTime, sgHour } from "@/lib/time";
 
 const DAY_START = 7;
 const DAY_END = 20;
@@ -92,6 +93,7 @@ export default function SchedulePage() {
   const [hoverJob, setHoverJob] = useState<Job | null>(null);
   const [pinnedJob, setPinnedJob] = useState<Job | null>(null);
   const [freezeHours, setFreezeHours] = useState(2);
+  const deepLinkApplied = useRef(false);
 
   const load = useCallback(async () => {
     const [j, t, a] = await Promise.all([
@@ -102,6 +104,26 @@ export default function SchedulePage() {
     setJobs(j.jobs);
     setTechs(t.technicians);
     setApprovals(a.approvals);
+    // Deep-link: /admin/schedule?pin=<jobId> opens that job's card and jumps
+    // to its day (applied once — a realtime refresh shouldn't re-open it).
+    if (typeof window !== "undefined" && !deepLinkApplied.current) {
+      const pin = new URLSearchParams(window.location.search).get("pin");
+      if (pin) {
+        deepLinkApplied.current = true;
+        const target = j.jobs.find((x) => x.job_id === pin);
+        if (target) {
+          const key = sgDayKey(new Date(target.scheduled_time));
+          const off = Math.round(
+            (new Date(`${key}T00:00:00+08:00`).getTime() -
+              new Date(sgDayKey(new Date()) + "T00:00:00+08:00").getTime()) /
+              86400000,
+          );
+          setDayOffset(off);
+          setView("day");
+          setPinnedJob(target);
+        }
+      }
+    }
   }, []);
 
   useRealtime("jobs", load);
@@ -120,7 +142,21 @@ export default function SchedulePage() {
 
   const nowDecimal = sgHourDecimal(new Date().toISOString());
   const isToday = dayOffset === 0;
-  const shown = pinnedJob ?? hoverJob;
+  // Hover shows a small corner tooltip; a click ("pin") opens the full modal.
+  const hoverPreview = !pinnedJob && hoverJob ? hoverJob : null;
+  const pinnedTech = pinnedJob
+    ? techs.find((t) => t.technician_id === pinnedJob.assigned_technician_id) ?? null
+    : null;
+
+  // Close the pinned modal on Escape.
+  useEffect(() => {
+    if (!pinnedJob) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPinnedJob(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [pinnedJob]);
 
   // Day-keys of jobs that still have a pending approval — surfaced as a red dot
   // on the week strip / matrix so a coordinator can see which day is contested.
@@ -333,55 +369,44 @@ export default function SchedulePage() {
         />
       )}
 
-      {shown && (
+      {/* hover: minimal corner tooltip */}
+      {hoverPreview && (
         <div
           className="card"
           onClick={(e) => e.stopPropagation()}
           style={{
-            padding: 14,
+            padding: "10px 12px",
             position: "fixed",
             right: 28,
             bottom: 28,
-            width: 310,
+            width: 260,
             zIndex: 50,
             boxShadow: "var(--shadow-lg)",
-            border: pinnedJob ? "1px solid var(--ink)" : "1px solid var(--border)",
+            border: "1px solid var(--border)",
+            pointerEvents: "none",
           }}
         >
           <div className="spread">
-            <strong style={{ fontSize: 13 }}>{shown.customer_name}</strong>
-            <TierBadge tier={shown.tier} />
+            <strong style={{ fontSize: 12.5 }}>{hoverPreview.customer_name}</strong>
+            <TierBadge tier={hoverPreview.tier} />
           </div>
-          <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-            {shown.location.address}
+          <div className="muted" style={{ fontSize: 11.5, marginTop: 5 }}>
+            {fmtSGTime(hoverPreview.scheduled_time)} SGT · {hoverPreview.location.address}
           </div>
-          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-            {fmtSGTime(shown.scheduled_time)} SGT · {shown.skill_required.join(", ")}
+          <div className="faint" style={{ fontSize: 10.5, marginTop: 5 }}>
+            Click for the full card
           </div>
-          {shown.score_breakdown && (
-            <div className="mono faint" style={{ fontSize: 11, marginTop: 8 }}>
-              score {shown.score_breakdown.total} · dist {shown.score_breakdown.distance} · skill{" "}
-              {shown.score_breakdown.skill_match} · urg {shown.score_breakdown.urgency} · load{" "}
-              {shown.score_breakdown.workload}
-            </div>
-          )}
-          {shown.reschedule_history.length > 0 && (
-            <div className="faint" style={{ fontSize: 10, marginTop: 6 }}>
-              rescheduled {shown.reschedule_history.length}× · last by{" "}
-              {shown.reschedule_history.at(-1)?.decided_by}
-            </div>
-          )}
-          <button
-            className="btn btn-ghost"
-            style={{ marginTop: 10, width: "100%", justifyContent: "center", fontSize: 12 }}
-            onClick={(e) => {
-              e.stopPropagation();
-              router.push(`/admin/jobs/${shown.job_id}`);
-            }}
-          >
-            View full pipeline →
-          </button>
         </div>
+      )}
+
+      {/* pin (click): full centred modal */}
+      {pinnedJob && (
+        <PinnedJobModal
+          job={pinnedJob}
+          tech={pinnedTech}
+          onClose={() => setPinnedJob(null)}
+          onOpenPipeline={() => router.push(`/admin/jobs/${pinnedJob.job_id}`)}
+        />
       )}
 
       <div className="spread" style={{ flexWrap: "wrap", gap: 12 }}>
@@ -426,6 +451,246 @@ export default function SchedulePage() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ── Pinned-job modal ─────────────────────────────────────────────────
+// A click on a job block "pins" it and opens this centred modal — the full
+// picture the coordinator needs before touching the schedule: where the job
+// and the assigned technician are on the map, the Assignment Agent's score
+// breakdown, and the reschedule history. (Hover still shows only a small
+// corner tooltip.)
+
+function PinnedJobModal({
+  job,
+  tech,
+  onClose,
+  onOpenPipeline,
+}: {
+  job: Job;
+  tech: Technician | null;
+  onClose: () => void;
+  onOpenPipeline: () => void;
+}) {
+  const [mapOk, setMapOk] = useState(true);
+  const sb = job.score_breakdown;
+  const frozen = job.status === "frozen";
+  const disrupted = job.status === "disrupted";
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 100,
+        background: "rgba(23,22,19,0.45)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 20,
+        animation: "sched-fade 0.12s ease",
+      }}
+    >
+      <div
+        className="card"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${job.customer_name} — job detail`}
+        style={{
+          width: "min(560px, 100%)",
+          maxHeight: "calc(100vh - 40px)",
+          overflowY: "auto",
+          padding: 0,
+          boxShadow: "var(--shadow-lg)",
+        }}
+      >
+        {/* header */}
+        <div
+          className="spread"
+          style={{
+            padding: "14px 18px",
+            borderBottom: "1px solid var(--border)",
+            position: "sticky",
+            top: 0,
+            background: "var(--surface)",
+            zIndex: 2,
+          }}
+        >
+          <div className="row" style={{ gap: 10, minWidth: 0 }}>
+            <strong style={{ fontSize: 15 }}>{job.customer_name}</strong>
+            <TierBadge tier={job.tier} />
+            {frozen && (
+              <span className="chip" style={{ fontSize: 9.5 }}>
+                🔒 locked
+              </span>
+            )}
+            {disrupted && (
+              <span
+                className="chip"
+                style={{ fontSize: 9.5, background: "var(--tier-urgent-bg)", color: "var(--tier-urgent)" }}
+              >
+                ⚡ disrupted
+              </span>
+            )}
+          </div>
+          <button
+            className="btn btn-ghost"
+            onClick={onClose}
+            aria-label="Close"
+            style={{ fontSize: 16, lineHeight: 1, padding: "2px 9px" }}
+          >
+            ✕
+          </button>
+        </div>
+
+        <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 14 }}>
+          {/* facts */}
+          <dl
+            style={{
+              fontSize: 12.5,
+              display: "grid",
+              gridTemplateColumns: "112px 1fr",
+              gap: "5px 12px",
+              margin: 0,
+            }}
+          >
+            <dt className="muted">Address</dt>
+            <dd style={{ margin: 0 }}>{job.location.address}</dd>
+            <dt className="muted">Scheduled</dt>
+            <dd style={{ margin: 0 }}>{fmtSGDateTime(job.scheduled_time)} SGT</dd>
+            <dt className="muted">Needs</dt>
+            <dd style={{ margin: 0 }}>{job.skill_required.join(", ")}</dd>
+            <dt className="muted">Technician</dt>
+            <dd style={{ margin: 0 }}>
+              {tech ? `${tech.name} · ${tech.experience_level}` : "— not assigned"}
+            </dd>
+            <dt className="muted">Price</dt>
+            <dd style={{ margin: 0 }}>{job.price} SGD</dd>
+          </dl>
+
+          {/* map */}
+          {mapOk && (
+            <MapView
+              mode="display"
+              customer={{ lat: job.location.lat, lng: job.location.lng, address: job.location.address }}
+              technician={
+                tech ? { lat: tech.location.lat, lng: tech.location.lng, name: tech.name } : null
+              }
+              active={job.status === "in_progress"}
+              height={200}
+              onUnavailable={() => setMapOk(false)}
+            />
+          )}
+
+          {/* score breakdown */}
+          {sb && (
+            <div>
+              <div
+                className="faint"
+                style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}
+              >
+                Assignment Agent score
+              </div>
+              <div
+                className="row"
+                style={{ gap: 6, alignItems: "baseline", marginBottom: 8 }}
+              >
+                <strong className="mono" style={{ fontSize: 20 }}>
+                  {sb.total}
+                </strong>
+                <span className="faint" style={{ fontSize: 11 }}>
+                  weighted total
+                </span>
+              </div>
+              <div style={{ display: "grid", gap: 5 }}>
+                {[
+                  ["Distance", sb.distance],
+                  ["Skill match", sb.skill_match],
+                  ["Urgency", sb.urgency],
+                  ["Workload", sb.workload],
+                ].map(([label, val]) => {
+                  const v = val as number;
+                  const pct = Math.max(2, Math.min(100, (v / Math.max(sb.total, 0.001)) * 100));
+                  return (
+                    <div key={label as string} className="row" style={{ gap: 8, fontSize: 11 }}>
+                      <span className="muted" style={{ width: 78, flexShrink: 0 }}>
+                        {label}
+                      </span>
+                      <span
+                        style={{
+                          flex: 1,
+                          height: 7,
+                          borderRadius: 999,
+                          background: "var(--surface-2)",
+                          overflow: "hidden",
+                        }}
+                      >
+                        <span
+                          style={{
+                            display: "block",
+                            width: `${pct}%`,
+                            height: "100%",
+                            background: "var(--agent-assignment, var(--brand))",
+                          }}
+                        />
+                      </span>
+                      <span className="mono faint" style={{ width: 36, textAlign: "right" }}>
+                        {v}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* reschedule history */}
+          {job.reschedule_history.length > 0 && (
+            <div>
+              <div
+                className="faint"
+                style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}
+              >
+                Rescheduled {job.reschedule_history.length}×
+              </div>
+              <div style={{ display: "grid", gap: 5 }}>
+                {job.reschedule_history.map((r, i) => (
+                  <div
+                    key={i}
+                    className="mono"
+                    style={{
+                      fontSize: 10.5,
+                      color: "var(--text-muted)",
+                      background: "var(--surface-2)",
+                      border: "1px solid var(--border)",
+                      borderRadius: 6,
+                      padding: "6px 9px",
+                      lineHeight: 1.6,
+                    }}
+                  >
+                    {fmtSGDateTime(r.from_time)} → {fmtSGDateTime(r.to_time)}
+                    {"\n"}
+                    by {r.decided_by} · {r.reason}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <button
+            className="btn btn-primary"
+            style={{ width: "100%", justifyContent: "center", fontSize: 12.5 }}
+            onClick={onOpenPipeline}
+          >
+            View full agent pipeline →
+          </button>
+        </div>
+      </div>
+
+      <style>{`@keyframes sched-fade { from { opacity: 0 } to { opacity: 1 } }`}</style>
     </div>
   );
 }
