@@ -123,6 +123,36 @@ async function runBookingPipelineUnsafe(
     guardrailNotes: ["Booking passed schema validation (least-privilege, oversize-guarded)."],
   });
 
+  // Persist a skeleton job row right away (stageJob does a fire-and-forget
+  // upsert on first stage). On the gateway the first "real" stageJob is
+  // ~4s away, behind the Job-Intake LLM call — this lets the customer's
+  // processing screen and /admin/flow find the booking in ~200ms instead
+  // and start streaming pipeline progress. skill_required / price / the
+  // snapped slot are filled in by the authoritative stageJob below; until
+  // then the row carries safe placeholders.
+  const skeletonNow = nowISO();
+  ctx.stageJob({
+    job_id: jobId,
+    customer_name: booking.customer_name,
+    customer_email: booking.customer_email,
+    customer_phone: booking.customer_phone,
+    location: { ...booking.location, address: booking.address },
+    problem_description: booking.problem_description,
+    problem_category: booking.problem_category,
+    photo_url: booking.photo_url,
+    skill_required: [],
+    tier: booking.tier,
+    scheduled_time: skeletonNow,
+    freeze_point: skeletonNow,
+    status: "pending",
+    assigned_technician_id: null,
+    score_breakdown: null,
+    price: 0,
+    created_at: now,
+    pipeline_stage: "intake",
+    reschedule_history: [],
+  });
+
   // ── 1. Job-Intake (LLM) ─────────────────────────────────────────
   const intake = await runJobIntakeAgent(ctx, jobId, booking);
 

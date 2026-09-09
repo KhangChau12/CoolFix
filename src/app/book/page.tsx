@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { apiGet, apiSend } from "@/lib/client";
 import { useRealtime } from "@/components/useRealtime";
@@ -21,7 +21,7 @@ import {
 } from "@/lib/types";
 import type { PipelineResult } from "@/agents/orchestrator";
 
-type Step = "welcome" | "form" | "tier" | "confirm" | "track";
+type Step = "welcome" | "form" | "tier" | "confirm" | "processing" | "track";
 
 const AREA_KEYS = Object.keys(SG_LANDMARKS) as (keyof typeof SG_LANDMARKS)[];
 
@@ -53,6 +53,12 @@ export default function BookPage() {
   async function submit() {
     setBusy(true);
     setErr(null);
+    // Move to the processing screen immediately — the pipeline runs
+    // server-side for 10-15s on the real model, and the customer should see
+    // it working (live pipeline steps) instead of a frozen "Submitting…"
+    // button. The request keeps running; when it resolves we swap to the
+    // full tracker.
+    setStep("processing");
     try {
       const r = await apiSend<PipelineResult>("/api/bookings", "POST", {
         customer_name: form.customer_name,
@@ -70,6 +76,8 @@ export default function BookPage() {
       setStep("track");
     } catch (e) {
       setErr((e as Error).message);
+      // Stay on the processing screen so the error + retry are shown in
+      // context, not back on a form the customer already filled in.
     } finally {
       setBusy(false);
     }
@@ -237,10 +245,26 @@ export default function BookPage() {
               </button>
             </div>
             <p className="faint" style={{ fontSize: 11, marginTop: 10 }}>
-              On submit, the multi-agent pipeline runs: intake → pricing → capacity →
-              scoring → assignment (and disruption handling if needed).
+              Our dispatch assistant then reads your request, prices it, checks the
+              team's availability and matches a certified technician — you'll see each
+              step as it happens. This usually takes around 15 seconds.
             </p>
           </div>
+        )}
+
+        {step === "processing" && (
+          <ProcessingView
+            customerEmail={form.customer_email}
+            error={err}
+            onRetry={() => {
+              setErr(null);
+              submit();
+            }}
+            onEditBooking={() => {
+              setErr(null);
+              setStep("confirm");
+            }}
+          />
         )}
 
         {step === "track" && result && (
@@ -271,7 +295,9 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 function Stepper({ step }: { step: Step }) {
   const order: Step[] = ["welcome", "form", "tier", "confirm", "track"];
   const labels = ["Start", "Problem", "Speed", "Confirm", "Track"];
-  const idx = order.indexOf(step);
+  // "processing" is a transient state between Confirm and Track — show it
+  // as still sitting on the Confirm pill.
+  const idx = order.indexOf(step === "processing" ? "confirm" : step);
   return (
     <div className="row" style={{ gap: 5, marginBottom: 24, flexWrap: "wrap" }}>
       {labels.map((l, i) => (
@@ -464,6 +490,164 @@ function TrackView({ result }: { result: PipelineResult }) {
   );
 }
 
+// ── Processing screen ──────────────────────────────────────────────
+// Shown from the instant "Confirm booking" is pressed until the POST
+// resolves. The pipeline runs server-side for ~10-15s on the real model;
+// rather than freeze the button, we show the customer the pipeline
+// *working* live. The job's skeleton row is persisted within ~200ms of
+// the request starting (see agents/context.ts), so we can find it by the
+// customer's email + a very recent created_at and stream its progress
+// before the POST has even returned.
+
+function ProcessingView({
+  customerEmail,
+  error,
+  onRetry,
+  onEditBooking,
+}: {
+  customerEmail: string;
+  error: string | null;
+  onRetry: () => void;
+  onEditBooking: () => void;
+}) {
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  const startRef = useRef(Date.now());
+
+  // tick the elapsed clock
+  useEffect(() => {
+    const t = setInterval(() => setElapsed(Math.round((Date.now() - startRef.current) / 1000)), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  // find the just-created job by email + recency (skeleton lands fast)
+  const findJob = useCallback(async () => {
+    if (jobId) return;
+    try {
+      const { jobs } = await apiGet<{ jobs: Job[] }>("/api/bookings");
+      const mine = jobs
+        .filter(
+          (j) =>
+            j.customer_email.toLowerCase() === customerEmail.toLowerCase() &&
+            Date.now() - new Date(j.created_at).getTime() < 120_000,
+        )
+        .sort((a, b) => b.created_at.localeCompare(a.created_at));
+      if (mine[0]) setJobId(mine[0].job_id);
+    } catch {
+      /* keep trying */
+    }
+  }, [customerEmail, jobId]);
+
+  useRealtime("jobs", findJob);
+  useEffect(() => {
+    findJob();
+    const t = setInterval(findJob, 1000);
+    return () => clearInterval(t);
+  }, [findJob]);
+
+  if (error) {
+    return (
+      <div className="card" style={{ padding: 24 }}>
+        <h2 style={{ fontSize: 18, margin: 0 }}>We couldn&apos;t finish your booking</h2>
+        <div
+          style={{
+            marginTop: 12,
+            padding: "12px 14px",
+            borderRadius: 9,
+            background: "var(--tier-urgent-bg)",
+            border: "1px solid rgba(208,52,44,0.3)",
+            fontSize: 13,
+            color: "var(--text)",
+          }}
+        >
+          {error}
+        </div>
+        <p className="muted" style={{ fontSize: 12.5, marginTop: 12 }}>
+          Nothing was charged and no technician was booked. You can try again — your
+          details are still filled in.
+        </p>
+        <div className="row" style={{ gap: 8, marginTop: 16 }}>
+          <button className="btn btn-primary" onClick={onRetry}>
+            Try again
+          </button>
+          <button className="btn btn-ghost" onClick={onEditBooking}>
+            Edit booking
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const slow = elapsed >= 18;
+
+  return (
+    <div className="card" style={{ padding: 24 }}>
+      <div className="spread" style={{ alignItems: "flex-start" }}>
+        <div>
+          <h2 style={{ fontSize: 18, margin: 0 }}>Setting up your booking</h2>
+          <p className="muted" style={{ fontSize: 12.5, margin: "6px 0 0" }}>
+            Our dispatch assistant is working on it now — this usually takes about
+            15&nbsp;seconds.
+          </p>
+        </div>
+        <span
+          className="mono faint"
+          style={{ fontSize: 11, whiteSpace: "nowrap", marginTop: 3 }}
+        >
+          {elapsed}s
+        </span>
+      </div>
+
+      <div
+        style={{
+          marginTop: 16,
+          padding: "14px 15px",
+          borderRadius: 10,
+          background: "var(--surface-2)",
+          border: "1px solid var(--border)",
+        }}
+      >
+        {jobId ? (
+          <PipelineProgress jobId={jobId} finalStatus={null} compact />
+        ) : (
+          <div className="row" style={{ gap: 10, fontSize: 12.5, color: "var(--text-muted)" }}>
+            <span
+              style={{
+                width: 14,
+                height: 14,
+                borderRadius: 999,
+                border: "2px solid var(--brand)",
+                borderTopColor: "transparent",
+                animation: "spin 0.7s linear infinite",
+                flexShrink: 0,
+              }}
+            />
+            Starting the pipeline…
+          </div>
+        )}
+      </div>
+
+      {slow && (
+        <p
+          className="muted"
+          style={{
+            fontSize: 12,
+            marginTop: 12,
+            padding: "9px 12px",
+            borderRadius: 8,
+            background: "var(--brand-tint)",
+            border: "1px solid #bfdbfe",
+          }}
+        >
+          Still working — thanks for your patience. Complex jobs sometimes take a
+          little longer to match the right technician. This page will update the
+          moment it&apos;s done.
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ── Pipeline progress (customer-facing) ─────────────────────────────
 // A plain-language view of the multi-agent pipeline running on this
 // booking, read live from /api/decisions?job=<id>. The customer sees the
@@ -474,28 +658,67 @@ function TrackView({ result }: { result: PipelineResult }) {
 
 type StepState = "done" | "active" | "waiting" | "pending";
 
-const CUSTOMER_STEPS: { key: string; label: string; agents: AgentDecisionLog["agent_name"][] }[] = [
-  { key: "intake", label: "Understanding your problem", agents: ["JobIntakeAgent"] },
-  { key: "price", label: "Confirming the price", agents: ["PricingEngine"] },
-  { key: "capacity", label: "Checking team availability", agents: ["CapacityAgent"] },
+const CUSTOMER_STEPS: {
+  key: string;
+  label: string;
+  /** present-tense line shown while this step is running */
+  active: string;
+  agents: AgentDecisionLog["agent_name"][];
+}[] = [
+  {
+    key: "intake",
+    label: "Understanding your problem",
+    active: "Reading your description",
+    agents: ["JobIntakeAgent"],
+  },
+  {
+    key: "price",
+    label: "Confirming the price",
+    active: "Working out the quote",
+    agents: ["PricingEngine"],
+  },
+  {
+    key: "capacity",
+    label: "Checking team availability",
+    active: "Looking at the schedule for your time slot",
+    agents: ["CapacityAgent"],
+  },
   {
     key: "match",
     label: "Matching a certified technician",
+    active: "Comparing certified technicians by skill, distance and workload",
     agents: ["TechnicianStateAgent", "AssignmentAgent", "AssignmentTiebreakAgent", "AssignmentEdgecaseAgent"],
   },
-  { key: "schedule", label: "Fitting the visit into the schedule", agents: ["DisruptionAgent"] },
-  { key: "confirm", label: "Sending your confirmation", agents: ["NotificationAgent"] },
+  {
+    key: "schedule",
+    label: "Fitting the visit into the schedule",
+    active: "Rearranging nearby jobs so a technician can reach you",
+    agents: ["DisruptionAgent"],
+  },
+  {
+    key: "confirm",
+    label: "Sending your confirmation",
+    active: "Writing your confirmation",
+    agents: ["NotificationAgent"],
+  },
 ];
 
 function PipelineProgress({
   jobId,
   finalStatus,
+  compact = false,
 }: {
   jobId: string;
-  finalStatus: PipelineResult["status"];
+  /** null while the pipeline is still running (no result yet). */
+  finalStatus: PipelineResult["status"] | null;
+  /** processing screen: no card chrome, no header (the parent supplies it). */
+  compact?: boolean;
 }) {
   const [rows, setRows] = useState<AgentDecisionLog[]>([]);
   const [loaded, setLoaded] = useState(false);
+  // Poll faster while the pipeline is still in flight so steps light up
+  // close to real time; back off once it has settled.
+  const pollMs = finalStatus === null ? 1200 : 4000;
 
   const load = useCallback(async () => {
     try {
@@ -512,7 +735,9 @@ function PipelineProgress({
   useRealtime("agent_decision_log", load);
   useEffect(() => {
     load();
-  }, [load]);
+    const t = setInterval(load, pollMs);
+    return () => clearInterval(t);
+  }, [load, pollMs]);
 
   const seen = new Set(rows.map((r) => r.agent_name));
   const awaitingApproval =
@@ -552,6 +777,59 @@ function PipelineProgress({
     finalStatus === "assigned_after_replan" ||
     (doneKeys.has("confirm") && !awaitingApproval);
 
+  const body = (
+    <div style={{ display: "grid", gap: 2 }}>
+      {steps.map((s, idx) => {
+        const st = stateOf(idx, s.key);
+        return (
+          <div
+            key={s.key}
+            className="row"
+            style={{ gap: 10, padding: "6px 0", alignItems: "flex-start" }}
+          >
+            <div style={{ marginTop: 1 }}>
+              <StepMark state={st} />
+            </div>
+            <span
+              style={{
+                fontSize: 12.5,
+                lineHeight: 1.45,
+                color: st === "pending" ? "var(--text-faint)" : "var(--text)",
+                fontWeight: st === "active" || st === "waiting" ? 600 : 400,
+              }}
+            >
+              {s.label}
+              {st === "waiting" && (
+                <span className="muted" style={{ fontWeight: 400, display: "block", marginTop: 1 }}>
+                  A coordinator is confirming a small schedule change — nothing more
+                  for you to do.
+                </span>
+              )}
+              {st === "active" && (
+                <span className="muted" style={{ fontWeight: 400, display: "block", marginTop: 1 }}>
+                  {s.active}…
+                </span>
+              )}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  if (compact) {
+    return (
+      <div>
+        {body}
+        {!loaded && (
+          <div className="faint" style={{ fontSize: 10.5, marginTop: 8 }}>
+            connecting…
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div
       style={{
@@ -571,40 +849,7 @@ function PipelineProgress({
         </strong>
         {!loaded && <span className="faint" style={{ fontSize: 10.5 }}>loading…</span>}
       </div>
-
-      <div style={{ display: "grid", gap: 2 }}>
-        {steps.map((s, idx) => {
-          const st = stateOf(idx, s.key);
-          return (
-            <div
-              key={s.key}
-              className="row"
-              style={{ gap: 10, padding: "5px 0", alignItems: "center" }}
-            >
-              <StepMark state={st} />
-              <span
-                style={{
-                  fontSize: 12.5,
-                  color: st === "pending" ? "var(--text-faint)" : "var(--text)",
-                  fontWeight: st === "active" || st === "waiting" ? 600 : 400,
-                }}
-              >
-                {s.label}
-                {st === "waiting" && (
-                  <span className="muted" style={{ fontWeight: 400 }}>
-                    {" "}— a coordinator is confirming a small schedule change
-                  </span>
-                )}
-                {st === "active" && (
-                  <span className="muted" style={{ fontWeight: 400 }}>
-                    {" "}— in progress
-                  </span>
-                )}
-              </span>
-            </div>
-          );
-        })}
-      </div>
+      {body}
     </div>
   );
 }

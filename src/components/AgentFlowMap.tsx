@@ -508,7 +508,11 @@ function FlowSvgInner({
       </text>
 
       {train && (
+        // key on the path so each hand-off remounts the rect and its SMIL
+        // <animateMotion> actually restarts (changing the attribute alone
+        // does not reliably re-trigger a running SMIL animation).
         <rect
+          key={train.path}
           className="fm-train"
           width="18"
           height="10"
@@ -593,15 +597,15 @@ function Station({
     >
       {state === "active" && (
         <rect
-          x={-CW / 2 - 3}
-          y={topY - 3}
-          width={CW + 6}
-          height={boxH + 6}
-          rx="12"
+          x={-CW / 2 - 4}
+          y={topY - 4}
+          width={CW + 8}
+          height={boxH + 8}
+          rx="13"
           fill="none"
           stroke="var(--tier-priority)"
-          strokeWidth="1.5"
-          className="fm-ping"
+          strokeWidth="2"
+          className="fm-halo"
         />
       )}
       <rect
@@ -647,15 +651,13 @@ function Station({
             fill={state === "active" ? "var(--tier-priority)" : state === "halt" ? "var(--tier-urgent)" : "var(--brand)"}
           />
           {state === "active" ? (
-            <path
-              d={`M ${CW / 2 - 2} ${topY - 6} A 5 5 0 0 1 ${CW / 2 + 2.3} ${topY + 1.5}`}
-              fill="none"
-              stroke="#fff"
-              strokeWidth="2"
-              strokeLinecap="round"
-              className="fm-spin"
-              style={{ transformOrigin: `${CW / 2 - 2}px ${topY - 1}px` }}
-            />
+            // three dots fading in sequence — a "working" indicator with no
+            // transform (see .fm-dot in globals.css for why)
+            <g>
+              <circle className="fm-dot" cx={CW / 2 - 6} cy={topY - 1} r="1.5" fill="#fff" />
+              <circle className="fm-dot fm-dot-2" cx={CW / 2 - 2} cy={topY - 1} r="1.5" fill="#fff" />
+              <circle className="fm-dot fm-dot-3" cx={CW / 2 + 2} cy={topY - 1} r="1.5" fill="#fff" />
+            </g>
           ) : (
             <path
               d={`M ${CW / 2 - 5.3} ${topY - 0.7} l 2.4 2.4 l 4.6 -5`}

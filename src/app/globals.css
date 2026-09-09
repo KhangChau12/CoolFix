@@ -220,6 +220,9 @@ h1, h2, h3, h4 { margin: 0 0 0.4em; line-height: 1.25; }
   0%, 49% { opacity: 1; }
   50%, 100% { opacity: 0; }
 }
+/* Plain rotation for HTML spinners (an SVG-nested element needs
+   transform-box: fill-box — see the Agent Flow Map notes below). */
+@keyframes spin { to { transform: rotate(360deg); } }
 .live-dot {
   width: 8px; height: 8px; border-radius: 999px;
   background: #16a34a;
@@ -256,16 +259,31 @@ h1, h2, h3, h4 { margin: 0 0 0.4em; line-height: 1.25; }
 .step.halt { border-color: var(--tier-urgent); color: var(--tier-urgent); background: var(--tier-urgent-bg); }
 .step.skip { opacity: 0.45; text-decoration: line-through; }
 
-@keyframes fm-ping {
-  0% { transform: scale(1); opacity: 0.55; }
-  100% { transform: scale(1.5); opacity: 0; }
+/* Active-station halo. A fixed outline that only breathes its opacity —
+   NO transform. (A CSS `transform: scale()` on an SVG element nested in a
+   <g transform="translate(...)"> pivots around the SVG viewport origin,
+   not the element's own centre, so the old scale-ping lurched around the
+   card instead of pulsing on it.) */
+@keyframes fm-halo {
+  0%, 100% { opacity: 0.9; }
+  50% { opacity: 0.32; }
 }
-.fm-ping { animation: fm-ping 1.4s cubic-bezier(0.2, 0.7, 0.3, 1) infinite; transform-origin: center; }
-@keyframes fm-spin { to { transform: rotate(360deg); } }
-.fm-spin { animation: fm-spin 0.75s linear infinite; }
+.fm-halo { animation: fm-halo 2s ease-in-out infinite; }
+
+/* Working indicator in the status disc: three dots fading in sequence.
+   Opacity-only, same reason as above. */
+@keyframes fm-dot {
+  0%, 80%, 100% { opacity: 0.25; }
+  40% { opacity: 1; }
+}
+.fm-dot { animation: fm-dot 1.4s ease-in-out infinite; }
+.fm-dot-2 { animation-delay: 0.18s; }
+.fm-dot-3 { animation-delay: 0.36s; }
+
 .fm-train { filter: drop-shadow(0 1px 3px rgba(224, 122, 31, 0.5)); }
 
 @media (prefers-reduced-motion: reduce) {
-  .fm-ping, .fm-spin { animation-duration: 0.001s; }
+  .fm-halo { animation: none; opacity: 0.7; }
+  .fm-dot { animation: none; opacity: 0.7; }
   .fm-train { display: none; }
 }
