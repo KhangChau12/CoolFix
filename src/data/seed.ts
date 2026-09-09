@@ -1,4 +1,4 @@
-import type { Job, Technician } from "@/lib/types";
+import type { AgentDecisionLog, Job, NotificationRecord, Technician } from "@/lib/types";
 import { SG_LANDMARKS } from "@/lib/geo";
 import {
   addHours,
@@ -9,7 +9,7 @@ import {
   snapToServiceHours,
   snapToUrgentDispatchSlot,
 } from "@/lib/time";
-import { DEFAULT_CONFIG, TIER_META } from "@/lib/types";
+import { DEFAULT_CONFIG, SKILL_CERT, TIER_META } from "@/lib/types";
 
 /**
  * The slot a new URGENT booking lands in — MUST match the orchestrator's
@@ -105,11 +105,16 @@ export function seedTechnicians(): Technician[] {
 }
 
 // ── Seed jobs ───────────────────────────────────────────────────────
-// A day's schedule already partly booked. Includes one job past its
+// A day's schedule the coordinator's agents have ALREADY worked through:
+// every job here is assigned (or frozen), each with a synthetic pipeline
+// trail in agent_decision_log (see seedDecisionLog below) so opening
+// /admin/jobs/<id> shows the full replay. Includes one job past its
 // freeze point (frozen) and a controlled setup where every
-// refrigerant-skilled technician is busy at 14:00 on soft-tier jobs —
-// so an incoming urgent refrigerant job forces the Disruption Agent to
-// bump one, and the HITL gate to open.
+// refrigerant-skilled technician is busy at the urgent slot on soft-tier
+// jobs — so an incoming urgent refrigerant job forces the Disruption
+// Agent to re-plan ONE already-scheduled job, and (near Buona Vista) the
+// HITL gate to open. The demo's new booking is the only thing that runs
+// the live pipeline; the seed is the day it lands into.
 
 interface SeedJobSpec {
   id: string;
@@ -364,7 +369,10 @@ const SPECS: SeedJobSpec[] = [
     createdHoursAgo: 26,
   },
 
-  // Pending job in the queue — not yet processed by agents.
+  // Tomorrow-afternoon job the agents already handled — assigned, waiting
+  // for its slot. Gopal (Woodlands, refrigerant-certified) is free tomorrow;
+  // job_2005/2006/2007 only load the refrigerant technicians at TODAY's
+  // urgent slot, so there is no clash a day out.
   {
     id: "job_2008",
     customer: "Aaron Chan",
@@ -379,10 +387,10 @@ const SPECS: SeedJobSpec[] = [
     dayOffset: 1,
     hour: 15,
     hourMode: "fixed",
-    status: "pending",
-    tech: null,
-    stage: "scoring",
-    createdHoursAgo: 3,
+    status: "assigned",
+    tech: "tech_gopal",
+    stage: "assigned",
+    createdHoursAgo: 8,
   },
 ];
 
@@ -474,4 +482,243 @@ function demoBreakdown(id: string) {
     workload,
     total: Math.round((distance + skill_match + urgency + workload) * 100) / 100,
   };
+}
+
+// ── Synthetic pipeline trail for pre-assigned seed jobs ─────────────
+//
+// The seed represents a day the coordinator's agents have already worked
+// through — so each assigned/frozen job needs a believable
+// agent_decision_log, the same shape a live run writes, so that
+// /admin/jobs/<id> (PipelineReplay) and the dashboard feed show a real
+// pipeline instead of "no agent activity recorded".
+//
+// This is NOT a re-run of the pipeline: it's a deterministic reconstruction
+// of what each agent would have logged, ending at the same pipeline_stage
+// the job carries. `reasoning_kind` matches each agent's real nature
+// (Job-Intake and Notification are LLM agents in this system; Pricing /
+// Capacity / Tech-State / Assignment are rule engines) so the feed's
+// LLM/rule split stays truthful — the reconstruction just didn't spend
+// the tokens. Ordering matches /api/decisions?job=…: rows sort by
+// timestamp, then by the base36 counter in the log_id tail — both
+// ascending here, one row ~30s after the previous, the whole trail
+// finishing a few minutes after the job's created_at.
+
+const URGENCY_WEIGHT: Record<string, number> = { low: 0.5, medium: 1.0, high: 2.0 };
+
+function urgencyHintFor(tier: Job["tier"]): "low" | "medium" | "high" {
+  if (tier === "urgent") return "high";
+  if (tier === "flexible") return "low";
+  return "medium";
+}
+
+interface SeededRow {
+  agent: AgentDecisionLog["agent_name"];
+  kind: "llm" | "rule";
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  headline: string;
+  outcome: AgentDecisionLog["outcome"];
+  guardrails?: string[];
+  score?: AgentDecisionLog["score_breakdown"];
+  latencyMs?: number;
+}
+
+/**
+ * One decision-log + notification set per assigned/frozen seed job.
+ * `jobs` is the output of seedJobs(); `techs` the output of
+ * seedTechnicians(). Returns both so the seed script / reset route can
+ * insert them alongside the jobs.
+ */
+export function seedAgentActivity(
+  jobs: Job[],
+  techs: Technician[],
+): { decisions: AgentDecisionLog[]; notifications: NotificationRecord[] } {
+  const decisions: AgentDecisionLog[] = [];
+  const notifications: NotificationRecord[] = [];
+  const techName = (id: string | null) =>
+    techs.find((t) => t.technician_id === id)?.name ?? id ?? "unassigned";
+
+  // Global monotonic counter → the base36 tail /api/decisions sorts on.
+  let seq = 0;
+  const nextTail = () => (seq++).toString(36);
+
+  for (const job of jobs) {
+    if (!job.assigned_technician_id) continue; // pending / unassignable — no trail
+
+    const tier = job.tier;
+    const meta = TIER_META[tier];
+    const urgency = urgencyHintFor(tier);
+    const sb = job.score_breakdown ?? demoBreakdown(job.job_id);
+    const basePrice = basePriceFor(job.skill_required);
+    const certs = job.skill_required.map((s) => SKILL_CERT[s]).join(", ");
+    const tName = techName(job.assigned_technician_id);
+    const frozen = job.status === "frozen";
+
+    const rows: SeededRow[] = [
+      {
+        agent: "Orchestrator",
+        kind: "rule",
+        input: { tier, category: job.problem_category, customer_name: job.customer_name },
+        output: { pipeline: "start" },
+        headline: `New booking received (${job.customer_name}, ${meta.labelEn})`,
+        outcome: "info",
+        guardrails: ["Booking passed schema validation (least-privilege, oversize-guarded)."],
+      },
+      {
+        agent: "JobIntakeAgent",
+        kind: "llm",
+        input: { problem_description: job.problem_description, category_hint: job.problem_category },
+        output: {
+          skill_required: job.skill_required,
+          urgency_hint: urgency,
+          injection_attempt: false,
+        },
+        headline: `Classified as ${job.skill_required.join(" + ")} · urgency ${urgency}`,
+        outcome: "auto_commit",
+        guardrails: ["Customer free-text treated as untrusted input (delimited, no instructions followed)."],
+      },
+      {
+        agent: "PricingEngine",
+        kind: "rule",
+        input: { skill_required: job.skill_required, tier },
+        output: {
+          price: job.price,
+          base_price: basePrice,
+          tier_multiplier: meta.priceMultiplier,
+          currency: "SGD",
+          breakdown: `${basePrice} SGD × ${meta.priceMultiplier} (${meta.labelEn}) = ${job.price} SGD`,
+        },
+        headline: `Priced at ${job.price} SGD (${meta.labelEn})`,
+        outcome: "auto_commit",
+        guardrails: ["Rule-based — no LLM call (deliberate architecture decision)."],
+      },
+      {
+        agent: "CapacityAgent",
+        kind: "rule",
+        input: { tier, skill_required: job.skill_required },
+        output: { decision: "accept", skill_saturated: false },
+        headline: "Capacity OK — booking accepted at the requested window",
+        outcome: "auto_commit",
+        guardrails: ["Skill-aware saturation check (certified technicians for this skill in the next 24h)."],
+      },
+      {
+        agent: "TechnicianStateAgent",
+        kind: "rule",
+        input: { scheduled_time: job.scheduled_time },
+        output: {
+          roster_size: techs.length,
+          certified_for_skill: techs.filter((t) =>
+            job.skill_required.every((s) => t.skill_tags.includes(s)),
+          ).length,
+        },
+        headline: `Roster read — ${techs.length} technicians, location + workload only (no PII)`,
+        outcome: "info",
+        guardrails: ["Least-privilege: home address / phone never exposed to the scoring pass."],
+      },
+      {
+        agent: "AssignmentAgent",
+        kind: "rule",
+        input: {
+          skill_required: job.skill_required,
+          required_certification: certs,
+          tier,
+          urgency_weight: URGENCY_WEIGHT[urgency],
+        },
+        output: {
+          assigned_technician_id: job.assigned_technician_id,
+          conflict: false,
+        },
+        headline: `Assigned ${tName} — weighted score ${sb.total}`,
+        outcome: "auto_commit",
+        score: sb,
+        guardrails: [
+          "Skill match is a hard constraint — uncertified technicians removed before scoring, not penalised.",
+        ],
+      },
+      {
+        agent: "NotificationAgent",
+        kind: "llm",
+        input: { channel: "technician_app", kind: "new_assignment" },
+        output: { recipient: job.assigned_technician_id, acknowledged: false },
+        headline: `Job card sent to ${tName}'s app`,
+        outcome: "info",
+        guardrails: ["Notification built from structured job facts only — not the raw customer text."],
+      },
+      {
+        agent: "NotificationAgent",
+        kind: "llm",
+        input: { channel: "customer_email", kind: "booking_confirmed" },
+        output: { recipient: job.customer_email, acknowledged: false },
+        headline: `Booking confirmation emailed to ${job.customer_name}`,
+        outcome: "info",
+      },
+      {
+        agent: "Orchestrator",
+        kind: "rule",
+        input: { conflict: false },
+        output: {
+          result: frozen ? "assigned_auto" : "assigned_auto",
+          technician: job.assigned_technician_id,
+        },
+        headline: frozen
+          ? "Auto-committed — schedule since locked (inside freeze window)"
+          : "Auto-commit: technician assigned, no schedule conflict",
+        outcome: "auto_commit",
+        guardrails: ["Zero impact on other jobs → full autonomy, no human approval needed."],
+      },
+    ];
+
+    // Anchor the trail a few minutes after the booking was created.
+    const startMs = new Date(job.created_at).getTime() + 4_000;
+    rows.forEach((r, i) => {
+      const ts = new Date(startMs + i * 32_000).toISOString();
+      decisions.push({
+        log_id: `seedlog_${job.job_id}_${nextTail()}`,
+        timestamp: ts,
+        agent_name: r.agent,
+        job_id: job.job_id,
+        reasoning_kind: r.kind,
+        input_summary: r.input,
+        output_summary: r.output,
+        score_breakdown: r.score ?? null,
+        candidates: null,
+        replan_options: null,
+        requires_human_approval: false,
+        outcome: r.outcome,
+        approved_by: null,
+        headline: r.headline,
+        latency_ms: r.latencyMs ?? (r.kind === "llm" ? 900 : 0),
+        guardrail_notes: r.guardrails ?? [],
+      });
+    });
+
+    // Two notifications, matching the two NotificationAgent rows.
+    const notifBase = new Date(startMs + rows.length * 32_000).toISOString();
+    notifications.push({
+      notification_id: `seednote_${job.job_id}_tech`,
+      created_at: notifBase,
+      channel: "technician_app",
+      recipient_id: job.assigned_technician_id,
+      job_id: job.job_id,
+      kind: "new_assignment",
+      subject: `New job · ${job.customer_name}`,
+      body: `${job.skill_required.join(" + ")} at ${job.location.address}. Tap "Seen" to acknowledge.`,
+      acknowledged: frozen,
+      acknowledged_at: frozen ? addHours(notifBase, 1) : null,
+    });
+    notifications.push({
+      notification_id: `seednote_${job.job_id}_cust`,
+      created_at: notifBase,
+      channel: "customer_email",
+      recipient_id: job.customer_email,
+      job_id: job.job_id,
+      kind: "booking_confirmed",
+      subject: `Your CoolFix booking is confirmed`,
+      body: `Hi ${job.customer_name}, ${tName} is scheduled to visit. We'll remind you before the appointment.`,
+      acknowledged: false,
+      acknowledged_at: null,
+    });
+  }
+
+  return { decisions, notifications };
 }

@@ -240,6 +240,11 @@ pipeline never produces it — see §5.
   scoring needs — never a technician's phone or home address. The browser uses
   a Supabase anon key with RLS allowing read-only access; all writes go through
   the server with the service-role key.
+- **Location is validated, not trusted.** The customer picks their address on
+  a map that geocodes it to a coordinate client-side, but the server re-checks
+  every booking's `{ lat, lng }` against a Singapore bounding box at the schema
+  boundary and rejects anything outside it — a malformed, out-of-range, or
+  injected coordinate never reaches the routing score.
 - **Blast-radius limits.** LLM call budget; input size caps; deterministic slot
   math (the Disruption Agent never invents schedule times, it only picks from
   pre-computed legal slots).
@@ -318,9 +323,16 @@ non-zero on a violation:
 
 ## Known limitations / next steps
 
-- Routing uses straight-line (haversine) distance, not real drive times — kept
-  offline-safe and cost-free for the demo; a maps API is a drop-in behind
-  `geo.ts`.
+- The customer picks their address on a real map (Leaflet + OpenStreetMap
+  tiles, geocoded via Nominatim), and the live booking tracker shows the
+  customer pin, the assigned technician, and the straight-line distance
+  between them. This is all client-side and degrades gracefully — if Leaflet,
+  the tiles, or the geocoder are unreachable, the form falls back to a fixed
+  list of area landmarks and the tracker to a plain address card. The backend
+  contract is unchanged: it receives a validated `{ lat, lng }` either way.
+- Routing uses straight-line (haversine) distance on those coordinates, not
+  real drive times — kept offline-safe and cost-free for the demo; a
+  distance-matrix API is a drop-in behind `geo.ts`.
 - The Capacity Agent combines fleet-wide caps with a per-skill saturation
   forecast (certified technicians × slots/day, and the tight window around the
   requested time). A historical-yield model, and an LLM tier for the

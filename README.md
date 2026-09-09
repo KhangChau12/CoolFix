@@ -53,6 +53,10 @@ on the Admin dashboard and the observability artifact for the submission.
 - **Next.js 14** (App Router) + TypeScript — one app, all three UIs + agent API
 - **Supabase** (Postgres + Realtime) — data store; the Reasoning Feed subscribes
   to `agent_decision_log` inserts
+- **Leaflet + OpenStreetMap** — the customer's address picker and the live
+  booking-tracker map. Client-side only (tiles from `openstreetmap.org`,
+  geocoding via Nominatim); no API key, and it falls back to a fixed area
+  list if unreachable. The backend still only handles a validated `{lat,lng}`.
 - **LLM calls** via one client (`src/lib/llm.ts`) with three interchangeable modes —
   same prompt frame + JSON contract, so no agent code changes:
   - `LLM_MODE=stub` (default) — deterministic fixtures, no network, no credit burned

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { apiGet, apiSend } from "@/lib/client";
 import { useRealtime } from "@/components/useRealtime";
 import { TopBar } from "@/components/TopBar";
+import MapView, { type PickedPlace } from "@/components/MapView";
 import { SG_LANDMARKS } from "@/lib/geo";
 import { hoursBetween, nowISO } from "@/lib/time";
 import {
@@ -23,6 +24,7 @@ import type { PipelineResult } from "@/agents/orchestrator";
 
 type Step = "welcome" | "form" | "tier" | "confirm" | "processing" | "track";
 
+// Fallback area choices, used only when the map / geocoder can't load.
 const AREA_KEYS = Object.keys(SG_LANDMARKS) as (keyof typeof SG_LANDMARKS)[];
 
 function estPrice(categoryValue: string, tier: Tier): number {
@@ -37,10 +39,14 @@ export default function BookPage() {
     customer_email: "",
     customer_phone: "",
     address: "",
+    /** Set by the map picker (or the fallback area dropdown). */
+    location: null as { lat: number; lng: number } | null,
+    /** Fallback only — which SG_LANDMARKS key is selected if the map failed. */
     area: "cityHall" as keyof typeof SG_LANDMARKS,
     problem_category: PROBLEM_CATEGORIES[0].value,
     problem_description: "",
   });
+  const [mapUnavailable, setMapUnavailable] = useState(false);
   const [tier, setTier] = useState<Tier>("standard");
   const [result, setResult] = useState<PipelineResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -49,6 +55,26 @@ export default function BookPage() {
   function upd<K extends keyof typeof form>(k: K, v: (typeof form)[K]) {
     setForm((f) => ({ ...f, [k]: v }));
   }
+
+  function onPickPlace(p: PickedPlace) {
+    setForm((f) => ({
+      ...f,
+      location: { lat: p.lat, lng: p.lng },
+      address: p.address || f.address,
+    }));
+  }
+
+  // When the map can't load, fall back to the landmark dropdown: seed the
+  // location from the currently-selected area so the form still works.
+  function onMapUnavailable() {
+    setMapUnavailable(true);
+    setForm((f) => ({
+      ...f,
+      location: f.location ?? SG_LANDMARKS[f.area],
+    }));
+  }
+
+  const locationReady = Boolean(form.location);
 
   async function submit() {
     setBusy(true);
@@ -65,7 +91,7 @@ export default function BookPage() {
         customer_email: form.customer_email,
         customer_phone: form.customer_phone,
         address: form.address,
-        location: SG_LANDMARKS[form.area],
+        location: form.location ?? SG_LANDMARKS[form.area],
         problem_category: form.problem_category,
         problem_description: form.problem_description,
         photo_url: null,
@@ -117,17 +143,50 @@ export default function BookPage() {
                   <input className="inp" value={form.customer_phone} onChange={(e) => upd("customer_phone", e.target.value)} />
                 </Field>
               </div>
-              <Field label="Address">
-                <input className="inp" placeholder="Block, street, unit" value={form.address} onChange={(e) => upd("address", e.target.value)} />
+              <Field
+                label={
+                  mapUnavailable
+                    ? "Area (for routing)"
+                    : "Where's the aircon? Pin it on the map"
+                }
+              >
+                {!mapUnavailable && (
+                  <MapView
+                    mode="pick"
+                    value={
+                      form.location
+                        ? { ...form.location, address: form.address }
+                        : null
+                    }
+                    onPick={onPickPlace}
+                    onUnavailable={onMapUnavailable}
+                    height={240}
+                  />
+                )}
+                {mapUnavailable && (
+                  <select
+                    className="inp"
+                    value={form.area}
+                    onChange={(e) => {
+                      const area = e.target.value as keyof typeof SG_LANDMARKS;
+                      setForm((f) => ({ ...f, area, location: SG_LANDMARKS[area] }));
+                    }}
+                  >
+                    {AREA_KEYS.map((k) => (
+                      <option key={k} value={k}>
+                        {k}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </Field>
-              <Field label="Area (for routing)">
-                <select className="inp" value={form.area} onChange={(e) => upd("area", e.target.value as keyof typeof SG_LANDMARKS)}>
-                  {AREA_KEYS.map((k) => (
-                    <option key={k} value={k}>
-                      {k}
-                    </option>
-                  ))}
-                </select>
+              <Field label="Address (for the technician)">
+                <input
+                  className="inp"
+                  placeholder="Block, street, unit — auto-filled from the map, edit if needed"
+                  value={form.address}
+                  onChange={(e) => upd("address", e.target.value)}
+                />
               </Field>
               <Field label="Problem type">
                 <select
@@ -156,7 +215,13 @@ export default function BookPage() {
               <button className="btn btn-ghost" onClick={() => setStep("welcome")}>Back</button>
               <button
                 className="btn btn-primary"
-                disabled={!form.customer_name || !form.customer_email || !form.address || !form.problem_description}
+                disabled={
+                  !form.customer_name ||
+                  !form.customer_email ||
+                  !form.address ||
+                  !locationReady ||
+                  !form.problem_description
+                }
                 onClick={() => setStep("tier")}
               >
                 Next: choose speed
@@ -232,11 +297,21 @@ export default function BookPage() {
             <dl style={{ fontSize: 13, display: "grid", gridTemplateColumns: "120px 1fr", gap: "6px 12px", marginTop: 12 }}>
               <dt className="muted">Name</dt><dd style={{ margin: 0 }}>{form.customer_name}</dd>
               <dt className="muted">Contact</dt><dd style={{ margin: 0 }}>{form.customer_email} · {form.customer_phone}</dd>
-              <dt className="muted">Address</dt><dd style={{ margin: 0 }}>{form.address} ({form.area})</dd>
+              <dt className="muted">Address</dt><dd style={{ margin: 0 }}>{form.address}</dd>
               <dt className="muted">Problem</dt><dd style={{ margin: 0 }}>{PROBLEM_CATEGORIES.find((c) => c.value === form.problem_category)?.label}</dd>
               <dt className="muted">Details</dt><dd style={{ margin: 0 }}>{form.problem_description}</dd>
               <dt className="muted">Tier</dt><dd style={{ margin: 0 }}>{TIER_META[tier].emoji} {TIER_META[tier].label} · ~{estPrice(form.problem_category, tier)} SGD</dd>
             </dl>
+            {form.location && !mapUnavailable && (
+              <div style={{ marginTop: 14 }}>
+                <MapView
+                  mode="display"
+                  customer={{ ...form.location, address: form.address }}
+                  onUnavailable={() => setMapUnavailable(true)}
+                  height={170}
+                />
+              </div>
+            )}
             {err && <p style={{ color: "var(--tier-urgent)", fontSize: 13 }}>{err}</p>}
             <div className="row" style={{ gap: 8, marginTop: 16 }}>
               <button className="btn btn-ghost" onClick={() => setStep("tier")}>Back</button>
@@ -347,6 +422,7 @@ function TrackView({ result }: { result: PipelineResult }) {
   // page loads, and the customer should see that without a refresh.
   const [job, setJob] = useState<Job>(result.job);
   const [tech, setTech] = useState<Technician | null>(null);
+  const [mapOk, setMapOk] = useState(true);
   const jobId = result.job.job_id;
 
   const load = useCallback(async () => {
@@ -372,6 +448,9 @@ function TrackView({ result }: { result: PipelineResult }) {
     Math.round(hoursBetween(j.freeze_point, j.scheduled_time)),
   );
   const rescheduled = j.reschedule_history.length > 0;
+  const techEnRoute = j.status === "in_progress";
+  const showTechOnMap =
+    !!tech && ["assigned", "frozen", "in_progress"].includes(j.status);
 
   const milestones = [
     { key: "received", label: "Request received", done: true },
@@ -425,6 +504,42 @@ function TrackView({ result }: { result: PipelineResult }) {
               {tech.experience_level} · arriving {etaText(j.scheduled_time)} ({fmtWhen(j.scheduled_time)})
             </div>
           </div>
+        </div>
+      )}
+
+      {/* live service map — customer address + assigned technician */}
+      {mapOk ? (
+        <div style={{ marginTop: 12 }}>
+          <MapView
+            mode="display"
+            customer={{
+              lat: j.location.lat,
+              lng: j.location.lng,
+              address: j.location.address,
+            }}
+            technician={
+              showTechOnMap && tech
+                ? { lat: tech.location.lat, lng: tech.location.lng, name: tech.name }
+                : null
+            }
+            active={techEnRoute}
+            onUnavailable={() => setMapOk(false)}
+            height={230}
+          />
+        </div>
+      ) : (
+        <div
+          style={{
+            marginTop: 12,
+            padding: "10px 12px",
+            borderRadius: 10,
+            background: "var(--surface-2)",
+            border: "1px solid var(--border)",
+            fontSize: 12.5,
+          }}
+        >
+          <span className="muted">Service address: </span>
+          {j.location.address}
         </div>
       )}
 

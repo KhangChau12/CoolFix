@@ -61,8 +61,9 @@ other. Nine agents, one typed pipeline, every decision logged.
 ### 2 · Clean booking — full autonomy (90s)
 
 **Customer** (`/book`): submit a **Standard** "routine servicing / cleaning"
-booking, area **Clementi**, description *"Routine cleaning of two wall units,
-no rush."*
+booking. On the address step, search **"Clementi MRT"** on the map (or drop
+the pin there) — it geocodes to a real coordinate. Description *"Routine
+cleaning of two wall units, no rush."*
 
 → Switch to **Admin dashboard**. Watch the Agent Reasoning Feed stream the
 booking group, in pipeline order:
@@ -76,13 +77,14 @@ booking group, in pipeline order:
 
 → Auto-committed, no human. Point at the Orchestrator row: *"Zero impact on
 other jobs → full autonomy."* The customer tab now shows the live six-step
-tracker completed and the assigned technician + ETA.
+tracker completed, a **real map** with the customer pin and the assigned
+technician (with the straight-line distance), and the technician + ETA.
 
 ### 3 · Low-impact disruption — the agent decides on its own (2 min)
 
-**Customer**: submit an **Urgent** booking, area **Bishan**, category "not
-cooling", description *"No cold air at all, refrigerant leak suspected.
-Urgent."*
+**Customer**: submit an **Urgent** booking, search **"Bishan MRT"** on the
+map, category "not cooling", description *"No cold air at all, refrigerant
+leak suspected. Urgent."*
 
 Every refrigerant-certified technician is already booked at the urgent slot
 (seed jobs 2005 / 2006 / 2007), so the formula finds no free eligible
@@ -109,9 +111,9 @@ Show the audit trail on `/admin/jobs/<id>` — the reschedule row reads
 
 ### 4 · High-impact disruption — the agent stops and asks (2 min)
 
-**Customer**: submit another **Urgent** booking, this time area **Buona
-Vista**, category "not cooling", description *"Aircon dead, no cold air,
-refrigerant leak suspected. Urgent!"*
+**Customer**: submit another **Urgent** booking, this time search **"Buona
+Vista MRT"** on the map, category "not cooling", description *"Aircon dead,
+no cold air, refrigerant leak suspected. Urgent!"*
 
 Same setup, but this bump lands on Daniel's `job_2006`. Daniel is the only
 refrigerant+chiller technician and the rest of his day is full (`job_2010` /
@@ -240,8 +242,8 @@ the three-mode client is that the pipeline doesn't care which is behind it.
 | Architecture & reasoning loop | `orchestrator.ts` — typed pipeline, `AgentContext` holds explicit state |
 | Tool use & typed schemas | `agents/schemas.ts` — `validate*` at every boundary; the LLM is handed a legal space and may only reference into it |
 | Autonomy & HITL | `disruption.ts` `replanQualifiesForAutoCommit` — the safety rails; `/admin/approvals`; the threshold is a live dial in Settings; freeze window is absolute |
-| Safety & guardrails | `llm.ts` injection framing; skill hard-constraint; two-layer LLM re-validation with deterministic fallback; least-privilege in Technician-State; RLS in `0001_init.sql`; input size cap; LLM call budget |
-| Observability & eval | `agent_decision_log` → live feed + `/admin/jobs/[id]` replay + `/admin/flow` line map + customer tracker; `scripts/eval.ts` (invariant-based, passes on stub and gateway) + `robustness` / `fuzz` / `concurrency` probes |
+| Safety & guardrails | `llm.ts` injection framing; skill hard-constraint; two-layer LLM re-validation with deterministic fallback; least-privilege in Technician-State; RLS in `0001_init.sql`; input size cap; LLM call budget; booking coordinate validated against a Singapore bounding box at the schema boundary |
+| Observability & eval | `agent_decision_log` → live feed + `/admin/jobs/[id]` replay + `/admin/flow` line map + customer tracker (six-step pipeline view + a real map of the customer and assigned technician); `scripts/eval.ts` (invariant-based, passes on stub and gateway) + `robustness` / `fuzz` / `concurrency` probes |
 | Platform & orchestration | Next.js + Supabase Realtime; deploys to AWS Lightsail; LLM via the organisers' AWS gateway (`LLM_MODE=gateway`, one client, three interchangeable modes); every hand-off visible, no framework magic |
 
 ---

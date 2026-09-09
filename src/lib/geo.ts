@@ -32,3 +32,41 @@ export const SG_LANDMARKS = {
   changi: { lat: 1.3644, lng: 103.9915 },
   clementi: { lat: 1.3162, lng: 103.7649 },
 } as const;
+
+/**
+ * Mainland Singapore + immediate islands, with a small margin. A booking
+ * whose geocoded coordinate falls outside this box is rejected at the
+ * schema boundary (`validateBookingRequest`) — the fleet only serves SG,
+ * and it stops a malformed / injected coordinate from reaching the
+ * scoring formula. Also used client-side by the address picker to keep a
+ * dropped pin inside the service area.
+ */
+export const SG_BOUNDS = {
+  minLat: 1.15,
+  maxLat: 1.48,
+  minLng: 103.6,
+  maxLng: 104.1,
+} as const;
+
+/** Geographic centre of Singapore — the map picker's initial view. */
+export const SG_CENTER = { lat: 1.3521, lng: 103.8198 } as const;
+
+export function isWithinSG(p: { lat: number; lng: number }): boolean {
+  return (
+    Number.isFinite(p.lat) &&
+    Number.isFinite(p.lng) &&
+    p.lat >= SG_BOUNDS.minLat &&
+    p.lat <= SG_BOUNDS.maxLat &&
+    p.lng >= SG_BOUNDS.minLng &&
+    p.lng <= SG_BOUNDS.maxLng
+  );
+}
+
+/** Clamp a coordinate into the SG service box (used when a pin is dragged
+ * just past the edge — snap it back rather than reject outright). */
+export function clampToSG(p: { lat: number; lng: number }): { lat: number; lng: number } {
+  return {
+    lat: Math.min(Math.max(p.lat, SG_BOUNDS.minLat), SG_BOUNDS.maxLat),
+    lng: Math.min(Math.max(p.lng, SG_BOUNDS.minLng), SG_BOUNDS.maxLng),
+  };
+}

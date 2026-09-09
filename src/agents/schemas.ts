@@ -7,6 +7,7 @@
 
 import type { GeoPoint, SkillTag, Tier } from "@/lib/types";
 import { SKILL_TAGS, TIERS } from "@/lib/types";
+import { isWithinSG } from "@/lib/geo";
 
 export class SchemaError extends Error {
   constructor(where: string, detail: string) {
@@ -44,6 +45,19 @@ export function validateBookingRequest(x: unknown): BookingRequest {
   assert(b.location && typeof (b.location as GeoPoint).lat === "number", "booking", "location.lat required");
   assert(TIERS.includes(b.tier as Tier), "booking", `tier must be one of ${TIERS.join("|")}`);
   assert(typeof b.problem_description === "string", "booking", "problem_description required");
+  // The service coordinate must be a real point inside Singapore. The
+  // address picker geocodes the customer's free-text address to a
+  // lat/lng before submit; this rejects a coordinate that is malformed,
+  // out of range, or an injected value trying to skew the routing score.
+  const loc = {
+    lat: Number((b.location as GeoPoint).lat),
+    lng: Number((b.location as GeoPoint).lng),
+  };
+  assert(
+    isWithinSG(loc),
+    "booking",
+    "location must be a valid coordinate within Singapore",
+  );
   // Neutralise obviously oversized free-text (DoS / token-bomb guard).
   const desc = String(b.problem_description).slice(0, 2000);
   return {
@@ -51,7 +65,7 @@ export function validateBookingRequest(x: unknown): BookingRequest {
     customer_email: String(b.customer_email).slice(0, 200),
     customer_phone: String(b.customer_phone ?? "").slice(0, 40),
     address: String(b.address).slice(0, 300),
-    location: { lat: Number((b.location as GeoPoint).lat), lng: Number((b.location as GeoPoint).lng) },
+    location: loc,
     problem_category: String(b.problem_category ?? "").slice(0, 120),
     problem_description: desc,
     photo_url: b.photo_url ? String(b.photo_url).slice(0, 500) : null,

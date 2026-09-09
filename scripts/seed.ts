@@ -5,7 +5,7 @@
 // Requires .env.local with SUPABASE_SERVICE_ROLE_KEY.
 
 import "./_env";
-import { seedTechnicians, seedJobs } from "../src/data/seed";
+import { seedTechnicians, seedJobs, seedAgentActivity } from "../src/data/seed";
 import { DEFAULT_CONFIG } from "../src/lib/types";
 import * as repo from "../src/lib/repo";
 
@@ -31,6 +31,13 @@ async function main() {
   const jobs = seedJobs(DEFAULT_CONFIG.freezeWindowHours);
   for (const j of jobs) await repo.upsertJob(j);
   console.log(`Inserted ${jobs.length} jobs.`);
+
+  const { decisions, notifications } = seedAgentActivity(jobs, techs);
+  for (const d of decisions) await repo.insertDecision(d);
+  for (const n of notifications) await repo.insertNotification(n);
+  console.log(
+    `Inserted ${decisions.length} agent decision-log rows + ${notifications.length} notifications (synthetic pipeline trail).`,
+  );
 
   await repo.updateConfig(DEFAULT_CONFIG);
   console.log("Reset runtime_config to defaults.");
