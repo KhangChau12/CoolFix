@@ -143,7 +143,7 @@ export default function ApprovalsPage() {
                 {job.customer_name} · {job.location.address}
               </div>
             )}
-            <div style={{ fontSize: 12.5, color: "#4a4741", lineHeight: 1.6, marginBottom: 11 }}>
+            <div style={{ fontSize: 12.5, color: "#3c3a4a", lineHeight: 1.6, marginBottom: 11 }}>
               {job
                 ? `${job.tier} · needs ${job.skill_required.join(", ")}`
                 : `Job ${a.job_id}`}
@@ -179,7 +179,7 @@ export default function ApprovalsPage() {
                   border: "1px solid var(--border)",
                   background: "var(--surface-2)",
                   fontSize: 12.5,
-                  color: "#4a4741",
+                  color: "#3c3a4a",
                   lineHeight: 1.6,
                   marginBottom: 13,
                 }}
@@ -233,7 +233,7 @@ export default function ApprovalsPage() {
                         marginTop: 6,
                         fontSize: 11,
                         fontStyle: "italic",
-                        color: "#5a564e",
+                        color: "#514f5d",
                         lineHeight: 1.6,
                       }}
                     >
@@ -249,7 +249,7 @@ export default function ApprovalsPage() {
                       borderRadius: 6,
                       padding: "9px 10px",
                       fontSize: 11,
-                      color: "#4a4741",
+                      color: "#3c3a4a",
                       lineHeight: 1.7,
                       whiteSpace: "pre-wrap",
                     }}
