@@ -10,7 +10,7 @@ const CARDS = [
     emoji: "🖥️",
     title: "Company",
     sub: "Dispatch dashboard — live Agent Reasoning Feed, master schedule, HITL approvals. The primary demo surface.",
-    accent: "#2563eb",
+    accent: "#4f46e5",
   },
   {
     href: "/book",
@@ -18,7 +18,7 @@ const CARDS = [
     emoji: "📝",
     title: "Customer",
     sub: "Aircon servicing booking form. Pick a response tier, describe the problem, track the status live.",
-    accent: "#16a34a",
+    accent: "#45825a",
   },
   {
     href: "/tech",
@@ -26,7 +26,7 @@ const CARDS = [
     emoji: "📱",
     title: "Technician",
     sub: "The technician's personal schedule app. Receive jobs, acknowledge notifications, update from the field.",
-    accent: "#e07a1f",
+    accent: "#b07830",
   },
 ];
 
@@ -37,7 +37,7 @@ const PIPELINE = [
   { name: "Tech-State", kind: "RULE", color: "var(--agent-techstate)" },
   { name: "Assignment", kind: "LLM/RULE", color: "var(--agent-assignment)" },
   { name: "Disruption", kind: "LLM", color: "var(--agent-disruption)" },
-  { name: "Notification", kind: "LLM", color: "#77736d" },
+  { name: "Notification", kind: "LLM", color: "#706c64" },
 ];
 
 export default function Home() {
@@ -67,7 +67,7 @@ export default function Home() {
             borderRadius: 7,
             display: "grid",
             placeItems: "center",
-            background: "linear-gradient(150deg, var(--brand) 0%, #4f46e5 100%)",
+            background: "linear-gradient(150deg, var(--brand) 0%, #7c6ff0 100%)",
             boxShadow: "0 0 0 1px rgba(255,255,255,0.12), 0 2px 8px -2px rgba(37,99,235,0.6)",
           }}
         >

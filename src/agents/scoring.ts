@@ -347,6 +347,30 @@ function usedShiftMinutes(
   );
 }
 
+/**
+ * Real utilisation [0,1] for `techId` on the SGT day of `scheduledTime` —
+ * hours already committed that day ÷ their shift length. Exported so any
+ * agent that needs "is this technician's day actually full" (the
+ * tie-break agent's "strained lone candidate" check, for one) reads the
+ * same number the scoring engine's own `loadBalance` component uses,
+ * instead of falling back to `Technician.current_workload` — a lifetime
+ * running counter seeded once and bumped +1/-1 forever with no day
+ * boundary, which stopped meaning "today" the moment the seed grew from
+ * 10 hand-placed jobs to a real multi-day schedule (see
+ * coolfix-pipeline-audit-8agent, đợt 14/15).
+ */
+export function techUtilisationToday(
+  ctx: AgentContext,
+  techId: string,
+  scheduledTime: string,
+  ignoreJobId: string,
+): number {
+  const t = ctx.getTechnician(techId);
+  if (!t) return 0;
+  const used = usedShiftMinutes(ctx, techId, scheduledTime, ignoreJobId);
+  return clamp01(used / Math.max(shiftMinutes(t.working_hours), 1));
+}
+
 function fleetMedianUtil(ctx: AgentContext, scheduledTime: string): number {
   const utils = ctx.technicians.map((t) => {
     const shiftMin = shiftMinutes(t.working_hours);

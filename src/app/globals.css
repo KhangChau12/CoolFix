@@ -6,77 +6,77 @@
 
 :root {
   /* Brand */
-  --bg: #edebe7;
-  --bg-customer: #faf9f6;
+  --bg: #f6f6f4;
+  --bg-customer: #fbfaf8;
   --surface: #ffffff;
-  --surface-2: #f6f5f2;
-  --border: #e0ddd7;
-  --border-strong: #c9c5be;
-  --text: #1a1917;
-  --text-muted: #77736d;
-  --text-faint: #8b8781;
-  --brand: #2563eb; /* accent / links */
-  --brand-ink: #1d4ed8;
-  --brand-tint: #eff6ff;
+  --surface-2: #f4f3f0;
+  --border: #e4e2dd;
+  --border-strong: #cfccc5;
+  --text: #26241f;
+  --text-muted: #706c64;
+  --text-faint: #918d84;
+  --brand: #4f46e5; /* accent / links — indigo, not the default Tailwind blue */
+  --brand-ink: #4338ca;
+  --brand-tint: #eeedfc;
 
   /* Dark "ink" surfaces — top bar, dark agent-feed panel */
-  --ink: #171613;
-  --ink-2: #1c1a16;
-  --ink-3: #14130f;
-  --ink-border: #2e2b25;
-  --ink-text: #f2f0ec;
-  --ink-text-muted: #a29d95;
-  --ink-text-faint: #6d6963;
+  --ink: #1c1a2e;
+  --ink-2: #201e33;
+  --ink-3: #171628;
+  --ink-border: #34314d;
+  --ink-text: #f0efec;
+  --ink-text-muted: #a6a3b8;
+  --ink-text-faint: #6e6b85;
 
-  /* Tier colours */
-  --tier-urgent: #d0342c;   /* 🔴 Urgent (24h) */
-  --tier-priority: #e07a1f; /* 🟠 Priority (3 days) */
-  --tier-standard: #2563eb; /* 🔵 Standard (1 week) */
-  --tier-flexible: #16a34a; /* 🟢 Flexible (2 weeks) */
-  --tier-urgent-bg: #fdf1f0;
-  --tier-priority-bg: #fdf6ee;
-  --tier-standard-bg: #eff6ff;
-  --tier-flexible-bg: #eef7f1;
+  /* Tier colours — muted, lower-saturation reads (no alarm-red/traffic-orange) */
+  --tier-urgent: #b2483f;   /* 🔴 Urgent (24h) */
+  --tier-priority: #b07830; /* 🟠 Priority (3 days) */
+  --tier-standard: #3d68b0; /* 🔵 Standard (1 week) */
+  --tier-flexible: #45825a; /* 🟢 Flexible (2 weeks) */
+  --tier-urgent-bg: #faf0ef;
+  --tier-priority-bg: #f9f2e8;
+  --tier-standard-bg: #eef2fa;
+  --tier-flexible-bg: #edf5ef;
 
   /* Job status colours */
-  --status-pending: #8b8781;      /* Grey = pending */
-  --status-soon: #e07a1f;         /* Amber = upcoming */
-  --status-frozen: #15803d;       /* Dark green = schedule locked (frozen) */
-  --status-disrupting: #d0342c;   /* Red = agent considering a reschedule */
+  --status-pending: #928e85;      /* Grey = pending */
+  --status-soon: #b07830;         /* Amber = upcoming */
+  --status-frozen: #3d7a52;       /* Dark green = schedule locked (frozen) */
+  --status-disrupting: #b2483f;   /* Red = agent considering a reschedule */
 
   /* Agent accent colours for the feed (dark-panel palette) */
-  --agent-pricing: #a78bfa;
-  --agent-intake: #34d399;
-  --agent-capacity: #a78bfa;
-  --agent-techstate: #94a3b8;
-  --agent-assignment: #4ea1ff;
-  --agent-disruption: #fb923c;
-  --agent-notification: #f0eee9;
-  --agent-orchestrator: #f2f0ec;
+  --agent-pricing: #ab98f0;
+  --agent-intake: #5cc9a7;
+  --agent-capacity: #ab98f0;
+  --agent-techstate: #9c9ab3;
+  --agent-assignment: #6fa8f5;
+  --agent-disruption: #e2a06b;
+  --agent-notification: #ece9f5;
+  --agent-orchestrator: #efedf7;
 
   /* Same agent accents, re-tuned to read on a WHITE card (the Agent Flow
      Map's stations) rather than the dark feed panel above. Used only by
      AgentFlowMap.tsx as var(--agent-flow-<name>). */
-  --agent-flow-pricing: #7c3aed;
-  --agent-flow-intake: #0d9488;
-  --agent-flow-capacity: #7c3aed;
-  --agent-flow-techstate: #64748b;
-  --agent-flow-assignment: #2563eb;
-  --agent-flow-disruption: #ea580c;
+  --agent-flow-pricing: #6d4fd6;
+  --agent-flow-intake: #128271;
+  --agent-flow-capacity: #6d4fd6;
+  --agent-flow-techstate: #6b6a86;
+  --agent-flow-assignment: #4f46e5;
+  --agent-flow-disruption: #b9702f;
   --agent-flow-notification: #57534e;
   --agent-flow-orchestrator: #57534e;
 
   /* Promoted one-off hex values (previously hardcoded inline) */
-  --success: #15803d;
-  --success-bg: #eef7f1;
-  --success-border: #cfe6d8;
-  --danger-strong: #991b1b;
-  --llm-tint: #f5f3ff;
-  --llm-ink: #6d28d9;
-  --llm-border: #ddd6fe;
-  --frozen-border: #052e16;
-  --disrupted-border: #7f1d1d;
-  --skill-chip-border: #a5f3fc;
+  --success: #3d7a52;
+  --success-bg: #edf5ef;
+  --success-border: #cee2d3;
+  --danger-strong: #8a352e;
+  --llm-tint: #f2f0fc;
+  --llm-ink: #5b3fc4;
+  --llm-border: #dad3f5;
+  --frozen-border: #17331f;
+  --disrupted-border: #5c211d;
+  --skill-chip-border: #b9d9de;
 
   --radius: 10px;
   --radius-sm: 7px;
@@ -138,11 +138,11 @@ h1, h2, h3, h4 { margin: 0 0 0.4em; line-height: 1.25; }
   border-color: var(--ink);
   color: #fff;
 }
-.btn-primary:hover { background: #242220; }
+.btn-primary:hover { background: #2b2846; }
 .btn-approve { background: var(--success); border-color: var(--success); color: #fff; }
-.btn-approve:hover { background: #116932; }
+.btn-approve:hover { background: #2f6242; }
 .btn-danger { background: var(--tier-urgent); border-color: var(--tier-urgent); color: #fff; }
-.btn-danger:hover { background: #b32b24; }
+.btn-danger:hover { background: #973b33; }
 .btn-ghost { border-color: transparent; background: transparent; }
 .btn-lg { padding: 13px 22px; font-size: 15px; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -225,7 +225,7 @@ h1, h2, h3, h4 { margin: 0 0 0.4em; line-height: 1.25; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .live-dot {
   width: 8px; height: 8px; border-radius: 999px;
-  background: #16a34a;
+  background: var(--success);
   animation: pulse 1.6s ease-in-out infinite;
 }
 
@@ -280,7 +280,7 @@ h1, h2, h3, h4 { margin: 0 0 0.4em; line-height: 1.25; }
 .fm-dot-2 { animation-delay: 0.18s; }
 .fm-dot-3 { animation-delay: 0.36s; }
 
-.fm-train { filter: drop-shadow(0 1px 3px rgba(224, 122, 31, 0.5)); }
+.fm-train { filter: drop-shadow(0 1px 3px rgba(176, 120, 48, 0.5)); }
 
 @media (prefers-reduced-motion: reduce) {
   .fm-halo { animation: none; opacity: 0.7; }

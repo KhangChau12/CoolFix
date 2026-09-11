@@ -118,24 +118,10 @@ export interface CapacityResult {
   utilisation: { total_today: number; flexible_today: number };
 }
 
-// ── Technician-State Agent output ─────────────────────────────────
-
-export interface TechCandidate {
-  technician_id: string;
-  name: string;
-  skill_tags: SkillTag[];
-  experience_level: "junior" | "senior";
-  location: GeoPoint;
-  current_workload: number;
-  within_working_hours: boolean;
-}
-
-export interface TechStateResult {
-  candidates: TechCandidate[];
-  as_of: string;
-}
-
 // ── Assignment/Scoring Agent output ──────────────────────────────
+// (There used to be a separate Technician-State Agent output type here —
+// folded into the Assignment Agent, which now reads the roster straight
+// from AgentContext. See assignment.ts's header note.)
 
 export interface AssignmentResult {
   assigned_technician_id: string | null;

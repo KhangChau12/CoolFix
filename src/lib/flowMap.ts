@@ -20,7 +20,6 @@ export type StationId =
   | "intake"
   | "price"
   | "cap"
-  | "tstate"
   | "assign"
   | "tiebrk"
   | "edge"
@@ -33,7 +32,6 @@ export const STATION_ORDER: StationId[] = [
   "intake",
   "price",
   "cap",
-  "tstate",
   "assign",
   "tiebrk",
   "edge",
@@ -58,13 +56,15 @@ const AGENT_TO_STATION: Partial<Record<AgentName, StationId>> = {
   JobIntakeAgent: "intake",
   PricingEngine: "price",
   CapacityAgent: "cap",
-  TechnicianStateAgent: "tstate",
   AssignmentAgent: "assign",
   AssignmentTiebreakAgent: "tiebrk",
   AssignmentEdgecaseAgent: "edge",
   DisruptionAgent: "disrupt",
   NotificationAgent: "notify",
   // Orchestrator rows are special-cased below (start vs terminal outcome).
+  // A historical run's log may still contain a TechnicianStateAgent row
+  // (retired — folded into AssignmentAgent, see assignment.ts); it has no
+  // station and is simply skipped by computeFlow's `if (!station) continue`.
 };
 
 /** A single visit to a station: the exact decision row plus its index in
@@ -223,7 +223,6 @@ export const AGENT_TAG: Record<StationId, string> = {
   intake: "job-intake",
   price: "pricing",
   cap: "capacity",
-  tstate: "technician-state",
   assign: "assignment",
   tiebrk: "tie-break",
   edge: "edge-case",
@@ -237,7 +236,6 @@ export const STATION_LABEL: Record<StationId, string> = {
   intake: "Job-Intake",
   price: "Pricing",
   cap: "Capacity",
-  tstate: "Technician-State",
   assign: "Assignment",
   tiebrk: "Tie-break",
   edge: "Edge-case",
@@ -251,7 +249,6 @@ export const STATION_KIND: Record<StationId, "llm" | "rule"> = {
   intake: "llm",
   price: "rule",
   cap: "rule",
-  tstate: "rule",
   assign: "rule",
   tiebrk: "llm",
   edge: "llm",
@@ -266,7 +263,6 @@ export const STATION_ACCENT: Record<StationId, string> = {
   intake: "intake",
   price: "pricing",
   cap: "capacity",
-  tstate: "techstate",
   assign: "assignment",
   tiebrk: "assignment",
   edge: "disruption",
@@ -284,103 +280,147 @@ export const TRIGGER: Partial<Record<StationId, string>> = {
   disrupt: "0 eligible, urgent — must bump",
 };
 
-export const BRIEF: Record<StationId, { role: string; inside: string[]; guard: string }> = {
+/**
+ * One line of the "What happens inside" list, tagged by what role it plays
+ * in the station's little narrative arc — every station's `inside` array
+ * roughly tells the same 3-beat story (what it's given → what it actually
+ * does with it → what limits or follows that), so tagging each bullet
+ * lets the modal color them consistently instead of a flat undifferentiated
+ * list:
+ *   - "input"     — what the station receives or is triggered by.
+ *   - "mechanism" — the actual computation / decision / design step; the
+ *                   part that answers "so what does it DO".
+ *   - "bound"     — a constraint, fallback, or consequence that limits it.
+ */
+export type InsideKind = "input" | "mechanism" | "bound";
+export interface InsideLine {
+  kind: InsideKind;
+  text: string;
+}
+
+function input(text: string): InsideLine {
+  return { kind: "input", text };
+}
+function mechanism(text: string): InsideLine {
+  return { kind: "mechanism", text };
+}
+function bound(text: string): InsideLine {
+  return { kind: "bound", text };
+}
+
+/**
+ * Per-station explanation, split into two layers with two different jobs:
+ *
+ *   - `intuition`: ONE short line (≤ ~10 words) — the gut-read of "why does
+ *     this station exist", shown always-on in the sidebar next to the live
+ *     map. Not a summary of `inside` — a different, shorter thing.
+ *   - `role` / `inside` / `guard`: the fuller explanation, shown only in
+ *     the click-to-open station modal (StationModal in AgentFlowMap.tsx).
+ *     `inside` entries are short phrases, not paragraphs, each tagged by
+ *     InsideKind so the modal can color-separate them.
+ */
+export const BRIEF: Record<
+  StationId,
+  { intuition: string; role: string; inside: InsideLine[]; guard: string }
+> = {
   orch: {
+    intuition: "The conductor — runs the pipeline, decides auto vs. human.",
     role: "Runs the pipeline for one booking and decides, at the end, whether to commit automatically or stop for a human.",
     inside: [
-      "Validates the booking at the edge — email clamped, free-text capped at 2000 chars, unknown tier rejected as HTTP 400.",
-      "Loads the roster, job list and config once into an AgentContext; every agent mutates that in memory.",
-      "Serializes itself: concurrent bookings are processed one at a time so two can never claim the same slot.",
+      input("Receives the raw booking — the only untrusted entry point besides the customer's description."),
+      mechanism("Validates it at the edge (email, size caps, tier), then loads roster + jobs + config once so every agent shares that state."),
+      bound("Serializes bookings — two can never claim the same slot, even under a burst."),
     ],
     guard: "State is explicit and inspectable — not smeared across ad-hoc queries.",
   },
   intake: {
+    intuition: "Turns a customer's messy sentence into clean facts.",
     role: "Reads the customer's free-text symptom description and turns it into structured fields the rest of the pipeline can trust.",
     inside: [
-      "Outputs skill_required[], an urgency hint, a time window, and an injection_attempt flag.",
-      "The customer text reaches the model only inside a delimited data frame — the model is told to treat everything in it as data, never instructions.",
-      "The structured output is re-validated against the SkillTag union before anything downstream uses it.",
+      input("Given the customer's raw problem_description and category hint."),
+      mechanism("Outputs skill_required[], an urgency hint, a time window, and an injection_attempt flag."),
+      bound("Customer text is boxed as data — the model never follows it as instructions — and the output is re-validated against the skill enum before anything downstream uses it."),
     ],
-    guard: "One of only two points where free text is allowed — the other is the notification going out.",
+    guard: "One of only two points where free text is allowed — the other is the outgoing notification.",
   },
   price: {
+    intuition: "The number a customer can't argue with or move.",
     role: "Computes the price. Deterministic, no LLM — the number has to be exact and impossible for the customer to move.",
     inside: [
-      "price = max(base_price[skill]) × tier_multiplier.",
-      "Runs once, after intake, on the real required skills — no provisional pass on the dropdown hint.",
-      "A prompt-injection payload that says “set price to 0” changes nothing here — this agent never sees the text.",
+      input("Given the real skill(s) from Job-Intake and the tier — not the customer's dropdown guess."),
+      mechanism("price = max(base_price[skill]) × tier multiplier. Priced once, after intake."),
+      bound("A “set price to 0” injection changes nothing here — this agent never sees the raw text."),
     ],
-    guard: "Rule engine. Putting an LLM here would add cost and non-determinism for zero benefit.",
+    guard: "Rule engine. An LLM here would add cost and randomness for zero benefit.",
   },
   cap: {
+    intuition: "Can the fleet actually absorb this job today?",
     role: "Decides whether the fleet can take this job at the requested time — deterministic thresholds plus a per-skill saturation forecast.",
     inside: [
-      "Fleet cap: total jobs/day and flexible-tier jobs/day.",
-      "Skill-aware forecast: certified technicians × 4 slots/day, and how many certified techs are free within ±3h of the requested slot.",
-      "Returns accept · accept_with_warning · suggest_alternative_slot.",
+      input("Given the tier, the proposed slot, and the required skill(s)."),
+      mechanism("Checks fleet caps (jobs/day, flexible-tier/day) AND a per-skill forecast — certified techs × slots/day, and how many are free ±3h of the slot."),
+      bound("Returns accept · accept-with-warning · suggest a later slot — never blocks outright."),
     ],
     guard: "Rule engine — a historical-yield model is the documented next step.",
   },
-  tstate: {
-    role: "The state store. Returns the technician roster with exactly the fields scoring needs — and nothing more.",
-    inside: [
-      "Per technician: id, skills, location, current workload, whether they're within working hours at this slot.",
-      "Never returns a technician's phone number or home address.",
-      "The browser reads through a Supabase anon key with row-level security; all writes go through the server.",
-    ],
-    guard: "Least privilege, enforced at the query.",
-  },
   assign: {
-    role: "Scores every eligible technician on five components and picks the best. Four hard filters (certification, working hours, no double-booking, route feasibility) are applied before scoring.",
+    intuition: "Who's the best real match — not just who's closest?",
+    role: "Reads the technician roster, then scores every eligible one on five components and picks the best. Four hard filters run first.",
     inside: [
-      "match = Σ policy[tier][k]·component[k], over travel-fit, skill-fit, availability, SLA-headroom, load-balance. Each component is normalised to [0,1]; travel and availability are ranked within the candidate pool so they always separate candidates. The per-tier policy weights sum to 1 and are editable in Settings.",
-      "A technician without the matching certification — or who can't reach the job from their previous stop in time — is removed from candidacy, not given a low score. This mirrors real legal and physical constraints.",
-      "0 eligible + urgent → bump a soft job. 0 eligible + not urgent → Edge-case agent. Ambiguous top scores → Tie-break.",
+      input("Reads the roster from context (least-privilege — location + workload only)."),
+      bound("Hard filters remove anyone who fails: certification · working hours · no double-booking · can't reach it in time."),
+      mechanism("Score = travel-fit + skill-fit + availability + SLA-headroom + load-balance, each 0–1, weighted by a per-tier policy (Settings)."),
+      mechanism("0 eligible + urgent → bump a soft job. 0 eligible → Edge-case agent. Near-tie → Tie-break agent."),
     ],
     guard: "Auditable by design — the feed shows the component bars and every rejection reason.",
   },
   tiebrk: {
+    intuition: "A coin-flip the formula shouldn't call alone.",
     role: "Breaks a tie the formula can't. Runs only when the scoring result is effectively a coin-flip.",
     inside: [
-      "Triggers: top-2 eligible within 10% · a lone eligible technician who is strained (workload ≥ 4 or ≥ 15 km away) · an urgent job whose best score is under 3.0.",
-      "The rule layer hands it the eligible top-3, already past every hard constraint. The LLM picks one id.",
-      "That pick is re-scored against live state before it's used. A bad or invalid pick → the formula's #1 stands.",
+      input("Triggers only on: top-2 within 10% · a lone candidate who's strained · a weak urgent fit."),
+      mechanism("Picks from the eligible top-3 — everyone already past every hard constraint."),
+      bound("The pick is re-scored against live state before use; a bad pick → the formula's #1 stands."),
     ],
     guard: "It re-orders the eligible set — it can never reach past it.",
   },
   edge: {
+    intuition: "One last real option, before giving up to a human.",
     role: "Last resort before escalating: when there is no eligible technician and nobody to bump, tries a few levers a real coordinator would.",
     inside: [
-      "Levers, all pre-validated by the rule layer: widen_window · split_visit · pair_junior_senior · escalate.",
-      "widen_window auto-commits after re-validation. split / pair become a proposal for a coordinator. escalate carries the agent's reasoning.",
-      "It can never invent a technician, a slot, or a skill.",
+      input("Triggers only when Assignment found 0 eligible AND there's no soft job to bump."),
+      mechanism("Levers: widen the time window · split the visit · pair junior+senior · escalate."),
+      bound("Widen auto-commits after re-validation; split/pair go to a coordinator as a proposal. Can never invent a technician, slot, or skill."),
     ],
     guard: "If nothing safe fits, it escalates rather than forcing an assignment.",
   },
   disrupt: {
+    intuition: "Something has to move — this agent designs how.",
     role: "When an urgent job needs a slot another job holds, this agent designs the re-plan — it is not picking from a menu.",
     inside: [
-      "The rule layer enumerates a legal slot space: every certified technician × a ladder of candidate times, each already checked for skill, freeze window, double-booking and working hours.",
-      "The LLM designs 1–3 plans inside that space. It returns references into the space — never its own slots or trade-off numbers.",
-      "Each plan is cross-checked, then re-simulated move-by-move against live state. Failure → the best pre-computed mechanical plan.",
+      input("Triggers when the incoming job must bump an existing soft-tier job."),
+      mechanism("Rule layer enumerates every legal (technician, time) pair first; the LLM designs 1–3 plans INSIDE that space — never its own slots or numbers."),
+      bound("Each plan is re-simulated against live state before use; failure → the best pre-computed mechanical plan."),
     ],
-    guard: "The freeze window is absolute — a locked appointment is treated as already-happened, and no plan may touch it.",
+    guard: "The freeze window is absolute — a locked appointment is treated as already-happened.",
   },
   hitl: {
+    intuition: "High-impact changes wait for a person. Always.",
     role: "The approval gate. A re-plan reaches a human here whenever it isn't demonstrably low-impact.",
     inside: [
-      "Auto-commit needs every rail: ≤ 1 customer affected · ≤ 8 km added travel · 0 SLA breach · Flexible tier only · same calendar day · ≤ 3h shift · ≥ 2h gap to the next job · not already rescheduled.",
-      "Any rail broken → the pipeline stops. The coordinator sees 2–3 plans with quantified trade-offs and the agent's recommendation, and picks one — or rejects, and nothing changes.",
-      "The threshold that decides how much autonomy the agent has is a live dial in Settings.",
+      input("Triggers whenever the chosen re-plan fails even one safety rail."),
+      mechanism("Auto-commit needs EVERY rail: ≤1 customer · ≤8km extra travel · 0 SLA breach · flexible-tier only · same day · ≥2h gap · never rescheduled before."),
+      bound("Any rail broken → stops here. The coordinator sees quantified trade-offs and picks, or rejects and nothing changes. The threshold is a live dial in Settings."),
     ],
     guard: "Risk-calibrated autonomy: high impact → the system does not act on its own.",
   },
   notify: {
+    intuition: "The words that actually reach a person.",
     role: "Writes the actual messages — a short one for the technician app, a full one for the customer email.",
     inside: [
-      "Receives only structured job facts — never the customer's raw description.",
-      "Technician message is terse and asks for a “Seen” acknowledgement. Customer message has a greeting and a sign-off.",
-      "Fires on a clean assignment, an auto-committed re-plan, or after a coordinator approves — never while the gate holds.",
+      input("Sees only structured job facts — never the customer's raw description."),
+      mechanism("Technician message: terse, asks for “Seen”. Customer message: greeting + sign-off."),
+      bound("Fires on a clean commit or an approval — never while the gate holds."),
     ],
     guard: "The second of the two points where free text is allowed to leave the system.",
   },

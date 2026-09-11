@@ -5,7 +5,9 @@ import { apiGet, apiSend } from "@/lib/client";
 import { useRealtime } from "@/components/useRealtime";
 import { Toast } from "@/components/ui";
 import { SG_LANDMARKS } from "@/lib/geo";
+import { sgDayKey, nowISO, fmtSGTime } from "@/lib/time";
 import {
+  estimatedJobMinutes,
   SKILL_LABEL,
   SKILL_CERT,
   SKILL_TAGS,
@@ -34,12 +36,33 @@ export default function TechniciansPage() {
     load();
   }, [load]);
 
-  // Rough utilisation: assigned open jobs vs a nominal capacity of 5/day.
-  function util(techId: string) {
-    const n = jobs.filter(
-      (j) => j.assigned_technician_id === techId && j.status !== "completed",
-    ).length;
-    return Math.min(100, Math.round((n / 5) * 100));
+  // Real hours committed TODAY against the technician's own shift length —
+  // not a headcount of every job on their board against a guessed
+  // nominal capacity. A tech's board can hold a dozen jobs spread across
+  // the coming week without today itself being full; counting all of
+  // them the same as "today's load" is the exact "workload as a job
+  // counter" flaw the Assignment Agent's scoring was rewritten to avoid
+  // (see coolfix-scoring-engine) — this page had its own, separate copy
+  // of that same bug.
+  const todayKey = sgDayKey(nowISO());
+  function loadFor(t: Technician) {
+    const active = jobs.filter(
+      (j) => j.assigned_technician_id === t.technician_id && j.status !== "completed",
+    );
+    const today = active.filter((j) => sgDayKey(j.scheduled_time) === todayKey);
+    const usedMin = today.reduce((s, j) => s + estimatedJobMinutes(j.skill_required), 0);
+    const [sh, sm] = t.working_hours.start.split(":").map(Number);
+    const [eh, em] = t.working_hours.end.split(":").map(Number);
+    const shiftMin = Math.max(1, eh * 60 + em - (sh * 60 + sm));
+    const next = today
+      .slice()
+      .sort((a, b) => a.scheduled_time.localeCompare(b.scheduled_time))[0];
+    return {
+      pct: Math.min(100, Math.round((usedMin / shiftMin) * 100)),
+      todayCount: today.length,
+      upcomingCount: active.length,
+      next: next ?? null,
+    };
   }
 
   return (
@@ -73,7 +96,7 @@ export default function TechniciansPage() {
         style={{ gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))" }}
       >
         {techs.map((t) => {
-          const u = util(t.technician_id);
+          const load = loadFor(t);
           return (
             <div key={t.technician_id} className="card" style={{ padding: 16 }}>
               <div className="row" style={{ gap: 12 }}>
@@ -106,20 +129,32 @@ export default function TechniciansPage() {
 
               <div style={{ marginTop: 12 }}>
                 <div className="spread" style={{ fontSize: 11 }}>
-                  <span className="muted">Utilisation</span>
-                  <span className="mono">{u}% · load {t.current_workload}</span>
+                  <span
+                    className="muted"
+                    title="Real hours committed today ÷ this technician's shift length — not a headcount of every job on their board."
+                  >
+                    Today&apos;s utilisation
+                  </span>
+                  <span className="mono">
+                    {load.todayCount === 0 ? "free today" : `${load.pct}%`}
+                  </span>
                 </div>
                 <span style={{ display: "block", height: 8, background: "var(--surface-2)", borderRadius: 999, marginTop: 4 }}>
                   <span
                     style={{
                       display: "block",
                       height: "100%",
-                      width: `${u}%`,
-                      background: u > 80 ? "var(--tier-urgent)" : u > 50 ? "var(--tier-priority)" : "var(--tier-flexible)",
+                      width: `${Math.max(load.pct, load.todayCount ? 6 : 0)}%`,
+                      background: load.pct > 80 ? "var(--tier-urgent)" : load.pct > 50 ? "var(--tier-priority)" : "var(--tier-flexible)",
                       borderRadius: 999,
                     }}
                   />
                 </span>
+                <div className="faint mono" style={{ fontSize: 10, marginTop: 5 }}>
+                  {load.todayCount} job{load.todayCount === 1 ? "" : "s"} today
+                  {load.upcomingCount > load.todayCount && ` · ${load.upcomingCount} on the board this week`}
+                  {load.next && ` · next ${fmtSGTime(load.next.scheduled_time)} · ${load.next.location.address}`}
+                </div>
               </div>
             </div>
           );

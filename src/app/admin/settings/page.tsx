@@ -358,7 +358,7 @@ function PolicyTierCard({
   const off = Math.abs(sum - 1) > 0.005;
   const active = matchPreset(row);
   const compColor: Record<ScoreComponent, string> = {
-    travel: "var(--brand)",
+    travel: "#3d68b0",
     skillFit: "#6b8e23",
     availability: "#c98a3c",
     slaHeadroom: "#b0453b",

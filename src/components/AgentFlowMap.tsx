@@ -28,6 +28,7 @@ import {
   type StationId,
   type StationRuntime,
   type FlowStep,
+  type InsideKind,
 } from "@/lib/flowMap";
 import { Candidates, ReplanOptions } from "./PipelineReplay";
 import { ScoreBars, ScoringExplainer } from "./scoring";
@@ -35,14 +36,17 @@ import type { AgentDecisionLog, Job } from "@/lib/types";
 
 // ── layout — a 3-tier "Z" grid, no diagonal or overlapping routes ──
 // Tier 1: Orchestrator → Job-Intake → Pricing (left to right).
-// Tier 2: Capacity → Technician-State → Assignment → Notification — the
-//   line drops down under Orchestrator's column and continues rightward,
-//   like a paragraph wrapping to its next line. Cards are large because
-//   nothing is squeezed to fit 7 stations across one row.
+// Tier 2: Capacity → Assignment → Notification — the line drops down
+//   under Orchestrator's column and continues rightward, like a
+//   paragraph wrapping to its next line. Cards are large because nothing
+//   is squeezed to fit many stations across one row.
 // Tier 3: Tie-break / Edge-case / Disruption / Approvals gate — the three
-//   independent branches Assignment can take, well below tier 2, each
-//   under its own column so a straight vertical drop never crosses a
-//   card that isn't its endpoint.
+//   independent branches Assignment can take, well below tier 2, laid out
+//   left-to-right from the same PAD_X margin as every other tier (its own,
+//   narrower column pitch — tier 3 has one more slot than tier 2). None of
+//   the four is guaranteed to share an x with Assignment now that tier 2
+//   has fewer columns, so every tier-2 → tier-3 branch uses the same short
+//   elbow (wrapDown) rather than a plain vertical drop.
 const CW = 188;
 const CH = 56;
 // Tier-3 cards (the 3 branches off Assignment) are taller: the "fires
@@ -59,21 +63,23 @@ const T3_Y = T2_Y + TIER_GAP;
 const PAD_X = 110;
 
 const TIER1_IDS: StationId[] = ["orch", "intake", "price"];
-const TIER2_IDS: StationId[] = ["cap", "tstate", "assign", "notify"]; // columns 0-3
-// Tier 3, evenly spaced across the same 4 columns as tier 2. Disruption
-// lands at column 2 by construction — directly under Assignment (also
-// column 2) — which is the one branch whose drop must be a plain
-// vertical line; the other two use a short elbow so exact alignment
-// doesn't matter for them.
-const TIER3_IDS: StationId[] = ["tiebrk", "edge", "disrupt", "hitl"];
+const TIER2_IDS: StationId[] = ["cap", "assign", "notify"]; // columns 0-2
+const TIER3_IDS: StationId[] = ["tiebrk", "edge", "disrupt", "hitl"]; // columns 0-3
+const TIER3_COL_W = 205;
 
 const POS: Record<StationId, { cx: number; cy: number }> = Object.fromEntries([
   ...TIER1_IDS.map((id, i) => [id, { cx: PAD_X + COL_W * i, cy: T1_Y }] as const),
   ...TIER2_IDS.map((id, i) => [id, { cx: PAD_X + COL_W * i, cy: T2_Y }] as const),
-  ...TIER3_IDS.map((id, i) => [id, { cx: PAD_X + COL_W * i, cy: T3_Y }] as const),
+  ...TIER3_IDS.map((id, i) => [id, { cx: PAD_X + TIER3_COL_W * i, cy: T3_Y }] as const),
 ]) as Record<StationId, { cx: number; cy: number }>;
 
-const VW = PAD_X + COL_W * 3 + CW / 2 + 60;
+const VW =
+  Math.max(
+    PAD_X + COL_W * (TIER2_IDS.length - 1),
+    PAD_X + TIER3_COL_W * (TIER3_IDS.length - 1),
+  ) +
+  CW / 2 +
+  60;
 // Bottom margin has to clear: the tall tier-3 card + a visible gap +
 // the return-arc's dip + a bit of breathing room below that.
 const VH = T3_Y + CH3 - CH / 2 + 70;
@@ -105,18 +111,10 @@ const R = 16;
 function seg(ax: number, ay: number, bx: number, by: number) {
   return `M ${ax} ${ay} L ${bx} ${by}`;
 }
-// A straight vertical drop from A's bottom into B's top — only valid
-// when A and B share a column (used for the tier-2 → tier-3 branches,
-// which are laid out under Assignment's column and to its right, one per
-// column, precisely so this never needs a horizontal jog).
-function dropStraight(a: StationId, b: StationId) {
-  const A = edgePt(a, "b");
-  const B = edgePt(b, "t");
-  return seg(A.x, A.y, B.x, B.y);
-}
-// The tier-1 → tier-2 "line wrap": down from A's bottom, one rounded
-// corner, left across to B's column, one more rounded corner, down into
-// B's top. Used once, for Pricing → Capacity.
+// The "line wrap": down from A's bottom, one rounded corner, across to B's
+// column, one more rounded corner, down into B's top. Degrades to a plain
+// straight drop when A and B already share a column. Used for the tier-1 →
+// tier-2 wrap (Pricing → Capacity) and every tier-2 → tier-3 branch.
 function wrapDown(a: StationId, b: StationId) {
   const A = edgePt(a, "b");
   const B = edgePt(b, "t");
@@ -154,20 +152,18 @@ const RAILS: RailDef[] = [
   { id: "price-cap", a: "price", b: "cap", cls: "main", d: wrapDown("price", "cap") },
 
   // tier 2, straight across
-  { id: "cap-tstate", a: "cap", b: "tstate", cls: "main", d: seg(edgePt("cap", "r").x, edgePt("cap", "r").y, edgePt("tstate", "l").x, edgePt("tstate", "l").y) },
-  { id: "tstate-assign", a: "tstate", b: "assign", cls: "main", d: seg(edgePt("tstate", "r").x, edgePt("tstate", "r").y, edgePt("assign", "l").x, edgePt("assign", "l").y) },
+  { id: "cap-assign", a: "cap", b: "assign", cls: "main", d: seg(edgePt("cap", "r").x, edgePt("cap", "r").y, edgePt("assign", "l").x, edgePt("assign", "l").y) },
   { id: "assign-notify", a: "assign", b: "notify", cls: "main", d: seg(edgePt("assign", "r").x, edgePt("assign", "r").y, edgePt("notify", "l").x, edgePt("notify", "l").y) },
 
   // tier 2 → tier 3: Tie-break, Edge-case and Disruption are three
   // INDEPENDENT alternatives from Assignment — only one ever runs per
-  // booking. Disruption sits directly under Assignment (both column 2),
-  // so that drop is a plain vertical line; Tie-break and Edge-case sit
-  // one and two columns to its left, reached by a short elbow (down,
-  // across, down) that stays entirely in the gap between tier 2 and
-  // tier 3 — never over a card.
+  // booking. None shares an exact column with Assignment (tier 3 has its
+  // own, narrower pitch), so every branch uses the same short elbow (down,
+  // across, down) that stays entirely in the gap between tier 2 and tier
+  // 3 — never over a card.
   { id: "assign-tiebrk", a: "assign", b: "tiebrk", cls: "branch dim", d: wrapDown("assign", "tiebrk") },
   { id: "assign-edge", a: "assign", b: "edge", cls: "branch dim", d: wrapDown("assign", "edge") },
-  { id: "assign-disrupt", a: "assign", b: "disrupt", cls: "branch", d: dropStraight("assign", "disrupt") },
+  { id: "assign-disrupt", a: "assign", b: "disrupt", cls: "branch", d: wrapDown("assign", "disrupt") },
 
   // Disruption's own two outcomes: escalate to a human (→ Approvals gate,
   // same tier, straight across) or clear every safety rail and continue
@@ -346,30 +342,32 @@ export function AgentFlowMap({ jobId, job }: Props) {
 
   const isCatchingUp = shownStepCount < steps.length;
 
-  // ── selection: hover / click a station, or auto-follow the active one ──
-  const [pinnedId, setPinnedId] = useState<StationId | null>(null);
+  // ── selection ────────────────────────────────────────────────────
+  // The sidebar just FOLLOWS the train — hover overrides it, but there's
+  // nothing to "pin" there anymore: clicking a station opens the modal
+  // instead (StationModal, below), which has its own independent
+  // prev/next station cursor and its own visit index.
   const [hoverId, setHoverId] = useState<StationId | null>(null);
-  const [panelView, setPanelView] = useState<"did" | "role">("did");
   const [visitIdx, setVisitIdx] = useState(0);
+  const [modalId, setModalId] = useState<StationId | null>(null);
 
   const activeId = useMemo<StationId | null>(() => {
     for (const id of STATION_ORDER) if (visibleFlow.stations[id].state === "active") return id;
     return null;
   }, [visibleFlow]);
 
-  // Auto-follow the active/most-recent station while nothing is pinned.
+  // Auto-follow the active/most-recent station while nothing is hovered.
   const lastDoneId = useMemo<StationId | null>(() => {
     let last: StationId | null = null;
     for (let i = 0; i < shownStepCount; i++) last = steps[i].to;
     return last;
   }, [steps, shownStepCount]);
 
-  const shownId = pinnedId ?? hoverId ?? activeId ?? lastDoneId;
+  const shownId = hoverId ?? activeId ?? lastDoneId;
 
   useEffect(() => {
     // reset to the latest visit whenever the shown station changes
     setVisitIdx(0);
-    setPanelView("did");
   }, [shownId]);
 
   return (
@@ -383,7 +381,7 @@ export function AgentFlowMap({ jobId, job }: Props) {
         <LegendSwatch cls="halt" label="HITL · needs a human" />
         <LegendSwatch cls="dim" label="Not in service this run" />
         <span className="row" style={{ gap: 6, fontFamily: "var(--mono)", fontSize: 9.5, letterSpacing: "0.02em", textTransform: "uppercase" }}>
-          <span style={{ width: 10, height: 7, borderRadius: 2, background: "var(--train, #e07a1f)", boxShadow: "0 0 6px rgba(224,122,31,0.55)" }} />
+          <span style={{ width: 10, height: 7, borderRadius: 2, background: "var(--train, #b07830)", boxShadow: "0 0 6px rgba(176,120,48,0.5)" }} />
           the train = one hand-off, moving between agents
         </span>
         <span className="spread" style={{ marginLeft: "auto", gap: 6 }}>
@@ -423,10 +421,10 @@ export function AgentFlowMap({ jobId, job }: Props) {
                     stations={visibleFlow.stations}
                     train={train}
                     hoverId={hoverId}
-                    pinnedId={pinnedId}
+                    pinnedId={modalId}
                     onHover={setHoverId}
                     onLeave={() => setHoverId(null)}
-                    onClick={(id) => setPinnedId((p) => (p === id ? null : id))}
+                    onClick={(id) => setModalId(id)}
                   />
                 </svg>
               </div>
@@ -439,12 +437,10 @@ export function AgentFlowMap({ jobId, job }: Props) {
           shownId={shownId}
           station={shownId ? visibleFlow.stations[shownId] : null}
           isLive={shownId !== null && shownId === activeId}
-          pinned={pinnedId !== null && pinnedId === shownId}
-          view={panelView}
-          setView={setPanelView}
           visitIdx={visitIdx}
           setVisitIdx={setVisitIdx}
           catchingUp={isCatchingUp}
+          onOpenModal={() => shownId && setModalId(shownId)}
         />
       </div>
 
@@ -453,10 +449,351 @@ export function AgentFlowMap({ jobId, job }: Props) {
           Each station is a real <code>agent_decision_log</code> row — agent, <code>reasoning_kind</code>,{" "}
           <code>latency_ms</code>, score breakdown, candidates, re-plan options, guardrails — drawn as a live line
           map instead of a list. The train animates one hand-off; a dashed station is an agent that did not run
-          this time; the red station is the HITL gate. Hover or click any station for its role and, once it has
-          run, exactly what it decided.
+          this time; the red station is the HITL gate. Hover a station to follow it here, or click it to open the
+          full explanation.
         </div>
       )}
+
+      {modalId && (
+        <StationModal
+          id={modalId}
+          station={visibleFlow.stations[modalId]}
+          isLive={modalId === activeId}
+          onClose={() => setModalId(null)}
+          onNav={(next) => setModalId(next)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Station modal ──────────────────────────────────────────────────
+// Click any station to open this: the full "why does this exist" / "what
+// happens inside" explanation, plus what it actually decided for this
+// booking if it ran. Centered overlay (same pattern as the schedule
+// page's PinnedJobModal) with ← → arrows to page through every station in
+// pipeline order without closing — reading the whole pipeline end to end
+// is then a few key-taps, not nine separate clicks.
+
+// One color per InsideKind — every station's "what happens inside" list
+// tells roughly the same 3-beat story (what it's given → what it actually
+// does → what bounds it), so these three colors mean the same thing on
+// every station, the same way SCORE_COMPONENT_COLOR means the same thing
+// everywhere a score breakdown is drawn.
+const INSIDE_KIND_COLOR: Record<InsideKind, string> = {
+  input: "#5a7d9a", // blue-grey — what feeds the station
+  mechanism: "#b0453b", // warm red — the actual decision/computation
+  bound: "#6b8e23", // green — what limits, guards, or follows it
+};
+const INSIDE_KIND_LABEL: Record<InsideKind, string> = {
+  input: "given",
+  mechanism: "does",
+  bound: "bounded by",
+};
+
+function InsideLineCard({ kind, text }: { kind: InsideKind; text: string }) {
+  const color = INSIDE_KIND_COLOR[kind];
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "62px 1fr",
+        gap: 10,
+        alignItems: "baseline",
+        padding: "8px 10px",
+        borderRadius: 7,
+        background: `color-mix(in srgb, ${color} 7%, var(--surface))`,
+        borderLeft: `3px solid ${color}`,
+      }}
+    >
+      <span
+        className="mono"
+        style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color }}
+      >
+        {INSIDE_KIND_LABEL[kind]}
+      </span>
+      <span style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>{text}</span>
+    </div>
+  );
+}
+
+function StationModal({
+  id,
+  station,
+  isLive,
+  onClose,
+  onNav,
+}: {
+  id: StationId;
+  station: StationRuntime;
+  isLive: boolean;
+  onClose: () => void;
+  onNav: (next: StationId) => void;
+}) {
+  const [visitIdx, setVisitIdx] = useState(0);
+  useEffect(() => setVisitIdx(0), [id]);
+
+  const idx = STATION_ORDER.indexOf(id);
+  const prevId = idx > 0 ? STATION_ORDER[idx - 1] : null;
+  const nextId = idx < STATION_ORDER.length - 1 ? STATION_ORDER[idx + 1] : null;
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+      else if (e.key === "ArrowLeft" && prevId) onNav(prevId);
+      else if (e.key === "ArrowRight" && nextId) onNav(nextId);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose, onNav, prevId, nextId]);
+
+  const b = BRIEF[id];
+  const hasRun = station.visits.length > 0;
+  const vIdx = Math.min(visitIdx, hasRun ? station.visits.length - 1 : 0);
+  const visit = hasRun ? station.visits[station.visits.length - 1 - vIdx] : null;
+  const row = visit?.row ?? null;
+  const kind = STATION_KIND[id];
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 100,
+        background: "rgba(23,22,19,0.45)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 20,
+        animation: "fm-modal-fade 0.12s ease",
+      }}
+    >
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          if (prevId) onNav(prevId);
+        }}
+        disabled={!prevId}
+        aria-label="Previous station"
+        className="btn fm-modal-side-nav"
+        style={{
+          flexShrink: 0,
+          marginRight: 14,
+          width: 38,
+          height: 38,
+          padding: 0,
+          borderRadius: 999,
+          fontSize: 16,
+          opacity: prevId ? 1 : 0.25,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        ←
+      </button>
+
+      <div
+        className="card"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${STATION_LABEL[id]} — agent detail`}
+        style={{
+          width: "min(980px, 100%)",
+          maxHeight: "calc(100vh - 40px)",
+          overflowY: "auto",
+          padding: 0,
+          boxShadow: "var(--shadow-lg)",
+        }}
+      >
+        <div
+          className="spread"
+          style={{
+            padding: "16px 20px",
+            borderBottom: "1px solid var(--border)",
+            position: "sticky",
+            top: 0,
+            background: "var(--surface)",
+            zIndex: 2,
+          }}
+        >
+          <div>
+            <div className="row" style={{ gap: 8, marginBottom: 3 }}>
+              <strong style={{ fontSize: 16 }}>{STATION_LABEL[id]}</strong>
+              <span
+                className="mono"
+                style={{
+                  fontSize: 8,
+                  fontWeight: 700,
+                  letterSpacing: "0.05em",
+                  textTransform: "uppercase",
+                  padding: "2px 6px",
+                  borderRadius: 999,
+                  color: kind === "llm" ? "var(--llm-ink)" : "var(--text-muted)",
+                  background: kind === "llm" ? "var(--llm-tint)" : "var(--surface-2)",
+                  border: `1px solid ${kind === "llm" ? "var(--llm-border)" : "var(--border)"}`,
+                }}
+              >
+                {kind === "llm" ? "LLM AGENT" : "RULE ENGINE"}
+              </span>
+              {isLive && (
+                <span
+                  className="row"
+                  style={{
+                    gap: 5,
+                    fontFamily: "var(--mono)",
+                    fontSize: 8,
+                    fontWeight: 700,
+                    letterSpacing: "0.05em",
+                    textTransform: "uppercase",
+                    color: "var(--tier-priority)",
+                    background: "var(--tier-priority-bg)",
+                    border: "1px solid var(--tier-priority)",
+                    borderRadius: 999,
+                    padding: "2px 7px",
+                  }}
+                >
+                  <span style={{ width: 5, height: 5, borderRadius: 999, background: "var(--tier-priority)" }} />
+                  now
+                </span>
+              )}
+            </div>
+            <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>{b.intuition}</div>
+          </div>
+          <button className="btn btn-ghost" style={{ padding: "5px 9px", fontSize: 15 }} onClick={onClose} aria-label="Close">
+            ✕
+          </button>
+        </div>
+
+        <div className="fm-modal-cols" style={{ padding: 20 }}>
+          {/* left column — the explanation: role, what happens inside, guard */}
+          <div>
+            <p style={{ fontSize: 13, color: "var(--text-muted)", lineHeight: 1.55, margin: "0 0 14px" }}>{b.role}</p>
+
+            <div style={{ padding: "13px 0", borderTop: "1px solid var(--border)" }}>
+              <div className="mono faint" style={{ fontSize: 9.5, letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 9 }}>
+                What happens inside
+              </div>
+              <div style={{ display: "grid", gap: 8 }}>
+                {b.inside.map((line, i) => (
+                  <InsideLineCard key={i} kind={line.kind} text={line.text} />
+                ))}
+              </div>
+            </div>
+
+            {id === "assign" && (
+              <div style={{ padding: "13px 0", borderTop: "1px solid var(--border)" }}>
+                <div className="mono faint" style={{ fontSize: 9.5, letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 9 }}>
+                  How the score is computed
+                </div>
+                <ScoringExplainer compact />
+              </div>
+            )}
+
+            <div
+              style={{
+                margin: "13px 0 0",
+                padding: "10px 12px",
+                borderRadius: 7,
+                background: "var(--surface-2)",
+                border: "1px solid var(--border)",
+                fontSize: 11.5,
+                color: "var(--text-muted)",
+                lineHeight: 1.5,
+              }}
+            >
+              {b.guard}
+            </div>
+          </div>
+
+          {/* right column — what actually happened for this booking */}
+          <div className="fm-modal-decided">
+            <div className="mono faint" style={{ fontSize: 9.5, letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 9 }}>
+              {isLive ? "What it's deciding" : hasRun ? "What it decided" : "This booking"}
+            </div>
+            {row ? (
+              <DecidedView row={row} />
+            ) : (
+              <div className="faint" style={{ fontSize: 11.5, lineHeight: 1.5 }}>
+                Hasn&apos;t run for this booking — either it's still upstream, or this run took a
+                different branch.
+              </div>
+            )}
+            {hasRun && station.visits.length > 1 && (
+              <div className="row" style={{ gap: 6, marginTop: 12, fontSize: 10.5 }}>
+                <span className="faint">{station.visits.length} messages from this agent —</span>
+                <button
+                  className="btn"
+                  style={{ padding: "3px 8px", fontSize: 10.5 }}
+                  disabled={vIdx >= station.visits.length - 1}
+                  onClick={() => setVisitIdx(vIdx + 1)}
+                >
+                  ← older
+                </button>
+                <button
+                  className="btn"
+                  style={{ padding: "3px 8px", fontSize: 10.5 }}
+                  disabled={vIdx <= 0}
+                  onClick={() => setVisitIdx(vIdx - 1)}
+                >
+                  newer →
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* mobile nav — the side arrows (below) are hidden on narrow screens */}
+        <div className="spread fm-modal-bottom-nav" style={{ padding: "12px 20px", borderTop: "1px solid var(--border)" }}>
+          <button className="btn" disabled={!prevId} onClick={() => prevId && onNav(prevId)} style={{ fontSize: 12 }}>
+            ← {prevId ? STATION_LABEL[prevId] : ""}
+          </button>
+          <button className="btn" disabled={!nextId} onClick={() => nextId && onNav(nextId)} style={{ fontSize: 12 }}>
+            {nextId ? STATION_LABEL[nextId] : ""} →
+          </button>
+        </div>
+      </div>
+
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          if (nextId) onNav(nextId);
+        }}
+        disabled={!nextId}
+        aria-label="Next station"
+        className="btn fm-modal-side-nav"
+        style={{
+          flexShrink: 0,
+          marginLeft: 14,
+          width: 38,
+          height: 38,
+          padding: 0,
+          borderRadius: 999,
+          fontSize: 16,
+          opacity: nextId ? 1 : 0.25,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        →
+      </button>
+
+      <style>{`
+        @keyframes fm-modal-fade { from { opacity: 0 } to { opacity: 1 } }
+        .fm-modal-side-nav { display: flex; }
+        .fm-modal-bottom-nav { display: none; }
+        .fm-modal-cols { display: grid; grid-template-columns: 1fr; gap: 18px; }
+        .fm-modal-decided { padding-top: 13px; border-top: 1px solid var(--border); }
+        @media (min-width: 760px) {
+          .fm-modal-cols { grid-template-columns: 1.15fr 1fr; gap: 26px; }
+          .fm-modal-decided { padding-top: 0; border-top: none; border-left: 1px solid var(--border); padding-left: 26px; }
+        }
+        @media (max-width: 720px) {
+          .fm-modal-side-nav { display: none; }
+          .fm-modal-bottom-nav { display: flex; }
+        }
+      `}</style>
     </div>
   );
 }
@@ -654,8 +991,8 @@ function Station({
   const boxH = trigger ? CH3 : CH;
   const halfH = boxH / 2;
   // The card is anchored to the SAME top edge as the plain CH box (so
-  // rail connections drawn with edgePt/dropStraight still land exactly
-  // on the card's top/side edges) but grows downward to fit the caption.
+  // rail connections drawn with edgePt still land exactly on the card's
+  // top/side edges) but grows downward to fit the caption.
   const topY = -CH / 2;
 
   const ringColor =
@@ -867,116 +1204,85 @@ function DetailPanel({
   shownId,
   station,
   isLive,
-  pinned,
-  view,
-  setView,
   visitIdx,
   setVisitIdx,
   catchingUp,
+  onOpenModal,
 }: {
   jobId: string | null;
   shownId: StationId | null;
   station: StationRuntime | null;
   isLive: boolean;
-  pinned: boolean;
-  view: "did" | "role";
-  setView: (v: "did" | "role") => void;
   visitIdx: number;
   setVisitIdx: (n: number) => void;
   catchingUp: boolean;
+  onOpenModal: () => void;
 }) {
   if (!jobId || !shownId) {
     return (
       <div className="card" style={{ padding: 15 }}>
         <div className="muted" style={{ fontSize: 13 }}>
-          Waiting for a booking. This panel shows exactly what the hovered / active agent decided.
+          Waiting for a booking. This panel follows whichever agent is running.
         </div>
       </div>
     );
   }
 
   const hasRun = station !== null && station.visits.length > 0;
-  const effectiveView = hasRun ? view : "role";
   const idx = Math.min(visitIdx, hasRun ? station!.visits.length - 1 : 0);
   const visit = hasRun ? station!.visits[station!.visits.length - 1 - idx] : null;
   const row = visit?.row ?? null;
 
   return (
-    <div className={`card panel ${pinned ? "pinned" : ""}`} style={{ padding: 0, overflow: "hidden", position: "sticky", top: 14 }}>
-      <div className="spread" style={{ padding: "12px 15px", borderBottom: "1px solid var(--border)" }}>
-        <span className="row" style={{ gap: 8 }}>
-          <span className="mono" style={{ fontSize: 11, fontWeight: 600, color: STATION_KIND[shownId] === "llm" ? "var(--llm-ink)" : "var(--text-muted)" }}>
-            [{AGENT_TAG[shownId]}]
+    <div className="card panel" style={{ padding: 0, overflow: "hidden", position: "sticky", top: 14 }}>
+      <button
+        onClick={onOpenModal}
+        title="Click for the full explanation"
+        style={{
+          display: "block",
+          width: "100%",
+          textAlign: "left",
+          padding: "12px 15px",
+          background: "none",
+          border: "none",
+          borderBottom: "1px solid var(--border)",
+          cursor: "pointer",
+        }}
+      >
+        <span className="spread">
+          <span className="row" style={{ gap: 8 }}>
+            <span className="mono" style={{ fontSize: 11, fontWeight: 600, color: STATION_KIND[shownId] === "llm" ? "var(--llm-ink)" : "var(--text-muted)" }}>
+              [{AGENT_TAG[shownId]}]
+            </span>
+            <span
+              className="mono"
+              style={{
+                fontSize: 8,
+                fontWeight: 700,
+                letterSpacing: "0.05em",
+                textTransform: "uppercase",
+                padding: "2px 6px",
+                borderRadius: 999,
+                color: STATION_KIND[shownId] === "llm" ? "var(--llm-ink)" : "var(--text-muted)",
+                background: STATION_KIND[shownId] === "llm" ? "var(--llm-tint)" : "var(--surface-2)",
+                border: `1px solid ${STATION_KIND[shownId] === "llm" ? "var(--llm-border)" : "var(--border)"}`,
+              }}
+            >
+              {STATION_KIND[shownId] === "llm" ? "LLM AGENT" : "RULE ENGINE"}
+            </span>
           </span>
-          <span
-            className="mono"
-            style={{
-              fontSize: 8,
-              fontWeight: 700,
-              letterSpacing: "0.05em",
-              textTransform: "uppercase",
-              padding: "2px 6px",
-              borderRadius: 999,
-              color: STATION_KIND[shownId] === "llm" ? "var(--llm-ink)" : "var(--text-muted)",
-              background: STATION_KIND[shownId] === "llm" ? "var(--llm-tint)" : "var(--surface-2)",
-              border: `1px solid ${STATION_KIND[shownId] === "llm" ? "var(--llm-border)" : "var(--border)"}`,
-            }}
-          >
-            {STATION_KIND[shownId] === "llm" ? "LLM AGENT" : "RULE ENGINE"}
-          </span>
+          {row && row.latency_ms > 0 && (
+            <span className="mono faint" style={{ fontSize: 10 }}>
+              {row.latency_ms.toLocaleString()} ms
+            </span>
+          )}
         </span>
-        {pinned && (
-          <span className="mono" style={{ fontSize: 8.5, color: "var(--brand)", letterSpacing: "0.04em", textTransform: "uppercase" }}>
-            ● pinned
-          </span>
-        )}
-        {!pinned && row && row.latency_ms > 0 && (
-          <span className="mono faint" style={{ fontSize: 10 }}>
-            {row.latency_ms.toLocaleString()} ms
-          </span>
-        )}
-      </div>
+        <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6, lineHeight: 1.4 }}>
+          {BRIEF[shownId].intuition}
+        </div>
+      </button>
 
-      <div style={{ padding: 15, maxHeight: 620, overflowY: "auto" }}>
-        {hasRun && (
-          <div
-            className="row"
-            style={{ border: "1px solid var(--border)", borderRadius: 7, overflow: "hidden", marginBottom: 13 }}
-          >
-            <button
-              onClick={() => setView("did")}
-              style={{
-                flex: 1,
-                fontWeight: 600,
-                fontSize: 10.5,
-                padding: "6px 8px",
-                border: "none",
-                cursor: "pointer",
-                background: effectiveView === "did" ? "var(--text)" : "var(--surface)",
-                color: effectiveView === "did" ? "var(--surface)" : "var(--text-muted)",
-              }}
-            >
-              {isLive ? "What it is deciding" : "What it decided"}
-            </button>
-            <button
-              onClick={() => setView("role")}
-              style={{
-                flex: 1,
-                fontWeight: 600,
-                fontSize: 10.5,
-                padding: "6px 8px",
-                border: "none",
-                borderLeft: "1px solid var(--border)",
-                cursor: "pointer",
-                background: effectiveView === "role" ? "var(--text)" : "var(--surface)",
-                color: effectiveView === "role" ? "var(--surface)" : "var(--text-muted)",
-              }}
-            >
-              Its role
-            </button>
-          </div>
-        )}
-
+      <div style={{ padding: 15, maxHeight: 500, overflowY: "auto" }}>
         {isLive && (
           <div
             className="row"
@@ -1001,10 +1307,16 @@ function DetailPanel({
           </div>
         )}
 
-        {effectiveView === "did" && row ? (
-          <DecidedView row={row} station={shownId} />
+        <div className="mono faint" style={{ fontSize: 9.5, letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 8 }}>
+          {isLive ? "What it's deciding" : hasRun ? "What it decided" : "Hasn't run this booking"}
+        </div>
+
+        {row ? (
+          <DecidedView row={row} />
         ) : (
-          <RoleView station={shownId} />
+          <div className="faint" style={{ fontSize: 11.5, lineHeight: 1.5 }}>
+            No decision recorded for this station yet.
+          </div>
         )}
 
         {hasRun && station!.visits.length > 1 && (
@@ -1029,13 +1341,20 @@ function DetailPanel({
             catching up to the live feed…
           </div>
         )}
+
+        <button
+          className="btn"
+          style={{ marginTop: 14, width: "100%", fontSize: 11.5 }}
+          onClick={onOpenModal}
+        >
+          What does this agent do? →
+        </button>
       </div>
     </div>
   );
 }
 
-function DecidedView({ row, station }: { row: AgentDecisionLog; station: StationId }) {
-  const color = `var(--agent-flow-${STATION_ACCENT[station]})`;
+function DecidedView({ row }: { row: AgentDecisionLog }) {
   return (
     <div>
       <p style={{ fontFamily: "var(--font)", fontWeight: 600, fontSize: 14, lineHeight: 1.42, margin: "0 0 12px" }}>{row.headline}</p>
@@ -1062,7 +1381,7 @@ function DecidedView({ row, station }: { row: AgentDecisionLog; station: Station
 
       {row.score_breakdown && (
         <div style={{ padding: "12px 0", borderTop: "1px solid var(--border)" }}>
-          <ScoreBars b={row.score_breakdown} color={color} />
+          <ScoreBars b={row.score_breakdown} />
         </div>
       )}
       {row.candidates && row.candidates.length > 0 && (
@@ -1091,53 +1410,6 @@ function DecidedView({ row, station }: { row: AgentDecisionLog; station: Station
         </div>
       )}
 
-      <div
-        style={{
-          fontSize: 11,
-          color: "var(--text-muted)",
-          lineHeight: 1.5,
-          padding: "10px 0 0",
-          marginTop: 12,
-          borderTop: "1px solid var(--border)",
-        }}
-      >
-        <span className="mono faint" style={{ fontSize: 9, letterSpacing: "0.04em", textTransform: "uppercase", display: "block", marginBottom: 4 }}>
-          What this agent is for
-        </span>
-        {BRIEF[station].role}
-      </div>
-    </div>
-  );
-}
-
-function RoleView({ station }: { station: StationId }) {
-  const b = BRIEF[station];
-  return (
-    <div>
-      <p style={{ fontSize: 12.5, color: "var(--text-muted)", lineHeight: 1.55, margin: "0 0 12px" }}>{b.role}</p>
-      <div style={{ padding: "12px 0", borderTop: "1px solid var(--border)" }}>
-        <div className="mono faint" style={{ fontSize: 9.5, letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 8 }}>
-          What happens inside
-        </div>
-        <ul style={{ margin: 0, paddingLeft: 15 }}>
-          {b.inside.map((x, i) => (
-            <li key={i} style={{ fontSize: 11.5, color: "var(--text-muted)", lineHeight: 1.55, marginBottom: 6 }}>
-              {x}
-            </li>
-          ))}
-        </ul>
-      </div>
-      {station === "assign" && (
-        <div style={{ marginTop: 14, padding: "12px 0", borderTop: "1px solid var(--border)" }}>
-          <div className="mono faint" style={{ fontSize: 9.5, letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 8 }}>
-            How the score is computed
-          </div>
-          <ScoringExplainer compact />
-        </div>
-      )}
-      <div style={{ marginTop: 12, padding: "10px 11px", borderRadius: 7, background: "var(--surface-2)", border: "1px solid var(--border)", fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5 }}>
-        {b.guard}
-      </div>
     </div>
   );
 }
@@ -1199,10 +1471,6 @@ function summarize(row: AgentDecisionLog): [string, string][] {
     case "CapacityAgent":
       push("decision", (o as { decision?: string }).decision, true);
       push("fleet today", `${i.total_today} / ${(i.caps as { total?: number } | undefined)?.total}`);
-      break;
-    case "TechnicianStateAgent":
-      push("candidates", o.candidate_count);
-      push("within hours", o.within_hours);
       break;
     case "AssignmentAgent":
       push("assigned", (o as { assigned_technician_id?: string }).assigned_technician_id ?? "none");

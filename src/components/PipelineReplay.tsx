@@ -109,7 +109,7 @@ export function PipelineReplay({ jobId }: { jobId: string }) {
                       height: 22,
                       borderRadius: 999,
                       background: m.color,
-                      color: "#1a1917",
+                      color: "#26241f",
                       fontSize: 10,
                       fontWeight: 700,
                       fontFamily: "var(--mono)",
@@ -197,7 +197,7 @@ export function PipelineReplay({ jobId }: { jobId: string }) {
                         background: "var(--surface)",
                       }}
                     >
-                      {r.score_breakdown && <ScoreBars b={r.score_breakdown} color={m.color} />}
+                      {r.score_breakdown && <ScoreBars b={r.score_breakdown} />}
                       {(r.agent_name === "AssignmentAgent" ||
                         r.agent_name === "AssignmentTiebreakAgent") &&
                         r.score_breakdown && (

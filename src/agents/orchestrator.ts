@@ -3,7 +3,7 @@
 // booking, wiring typed outputs from each agent into the next, deciding
 // auto-commit vs. HITL, and flushing all state + logs at the end.
 //
-//   Intake → Pricing → Capacity → Technician-State → Assignment
+//   Intake → Pricing → Capacity → Assignment
 //     ├─ no conflict ─────────────→ commit + notify
 //     └─ conflict ─→ Disruption ─→ auto-commit + notify
 //                              └─→ HITL approval gate (stop here)
@@ -16,7 +16,6 @@ import { logDecision } from "./log";
 import { runPricingEngine } from "./pricing";
 import { runJobIntakeAgent } from "./jobIntake";
 import { runCapacityAgent } from "./capacity";
-import { runTechnicianStateAgent } from "./technicianState";
 import { runAssignmentAgent } from "./assignment";
 import {
   detectAmbiguity,
@@ -223,13 +222,10 @@ async function runBookingPipelineUnsafe(
     // We accepted at a later slot; continue assigning at that slot.
   }
 
-  // ── 4. Technician-State (rule) ──────────────────────────────────
-  const techState = runTechnicianStateAgent(ctx, {
-    jobId,
-    scheduledTime,
-  });
-
-  // ── 5. Assignment / Scoring (rule) ─────────────────────────────
+  // ── 4. Assignment / Scoring (rule) ──────────────────────────────
+  // Reads the technician roster straight from AgentContext (loaded once,
+  // least-privilege by construction) — see assignment.ts's header note on
+  // why there is no separate Technician-State stage anymore.
   const assignment = runAssignmentAgent(ctx, {
     jobId,
     jobLocation: booking.location,
@@ -238,12 +234,11 @@ async function runBookingPipelineUnsafe(
     urgencyHint: intake.urgency_hint,
     scheduledTime,
     jobCreatedAt: now,
-    techState,
   });
 
   const decisionLogIds = () => ctx.decisions.map((d) => d.log_id);
 
-  // ── 5·½. Assignment tie-break (LLM, ambiguity-only) ────────────
+  // ── 4·½. Assignment tie-break (LLM, ambiguity-only) ────────────
   // The formula gives a clean, deterministic ranking. But when the top
   // pick is effectively a coin-flip, or the only eligible technician is
   // strained, a coordinator would weigh things the formula does not — so
@@ -261,6 +256,8 @@ async function runBookingPipelineUnsafe(
         ctx,
         eligible[0].technician_id,
         booking.location,
+        scheduledTime,
+        jobId,
       );
     }
 
@@ -287,7 +284,7 @@ async function runBookingPipelineUnsafe(
     }
   }
 
-  // 5a. No technician from the formula — try the LLM edge-case levers
+  // 4a. No technician from the formula — try the LLM edge-case levers
   // before giving up, then escalate if nothing safe fits.
   if (!assignment.assigned_technician_id) {
     if (assignment.needs_llm_edgecase) {
@@ -443,7 +440,7 @@ async function runBookingPipelineUnsafe(
     };
   }
 
-  // 5b. Clean assignment, no conflict → auto-commit.
+  // 4b. Clean assignment, no conflict → auto-commit.
   if (!assignment.conflict) {
     job = {
       ...job,
@@ -479,7 +476,7 @@ async function runBookingPipelineUnsafe(
     };
   }
 
-  // 5c. Conflict → Disruption Agent.
+  // 4c. Conflict → Disruption Agent.
   // Stage the incoming job onto its intended technician + slot FIRST, so
   // every clash check inside the Disruption Agent (candidate-space
   // generation and plan re-validation) treats it as a real obstacle. Without
@@ -500,7 +497,7 @@ async function runBookingPipelineUnsafe(
     assignment,
   });
 
-  // 5c-i. Freeze window is absolute: if every mechanical option would
+  // 4c-i. Freeze window is absolute: if every mechanical option would
   // touch a frozen job, no re-plan is proposed at all. Report unassignable
   // so the customer/coordinator can pick a different time instead of the
   // pipeline ever offering to break a locked appointment.
@@ -608,7 +605,7 @@ async function runBookingPipelineUnsafe(
     };
   }
 
-  // 5d. High impact → HITL approval gate. STOP here.
+  // 4d. High impact → HITL approval gate. STOP here.
   // (Freeze window can never be the reason we land here — that case
   // already returned above as "unassignable".)
   const approval: ApprovalRequest = {

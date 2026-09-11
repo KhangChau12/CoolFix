@@ -4,6 +4,7 @@ import {
   addHours,
   computeFreezePoint,
   DISPATCH_SERVICE_HOURS,
+  hoursBetween,
   nowISO,
   sgHour,
   snapToServiceHours,
@@ -23,8 +24,15 @@ export function urgentSlotISO(): string {
 }
 
 // ── Seed technicians ────────────────────────────────────────────────
-// 6 technicians with deliberately uneven skill coverage so scoring and
-// the skill hard-constraint are visible in the demo.
+// 9 technicians with deliberately uneven skill coverage so scoring and
+// the skill hard-constraint are visible in the demo. The last 3 (Amir,
+// Farah, Kelvin) were added to round the roster out to a more convincing
+// fleet size — deliberately holding ONLY basic_maintenance/electrical_work,
+// the two skills already best-covered, so they add realistic day-to-day
+// volume without changing the certified-technician counts the bump/HITL
+// and Capacity-Agent chiller-saturation scenarios depend on exactly:
+// refrigerant_handling stays at 3 (Marcus/Daniel/Gopal), commercial_chiller
+// stays at 2 (Daniel/Hui Ling). Do not give any of these three either skill.
 
 export function seedTechnicians(): Technician[] {
   return [
@@ -101,6 +109,39 @@ export function seedTechnicians(): Technician[] {
       current_workload: 2,
       phone: "+65 8123 4006",
     },
+    {
+      technician_id: "tech_amir",
+      name: "Amir Rashid",
+      photo_url: "https://i.pravatar.cc/120?img=14",
+      skill_tags: ["basic_maintenance", "electrical_work"],
+      experience_level: "junior",
+      location: SG_LANDMARKS.punggol,
+      working_hours: { start: "09:00", end: "19:00" },
+      current_workload: 1,
+      phone: "+65 8123 4007",
+    },
+    {
+      technician_id: "tech_farah",
+      name: "Farah Lim",
+      photo_url: "https://i.pravatar.cc/120?img=47",
+      skill_tags: ["basic_maintenance", "electrical_work"],
+      experience_level: "senior",
+      location: SG_LANDMARKS.sengkang,
+      working_hours: { start: "08:00", end: "18:00" },
+      current_workload: 2,
+      phone: "+65 8123 4008",
+    },
+    {
+      technician_id: "tech_kelvin",
+      name: "Kelvin Ong",
+      photo_url: "https://i.pravatar.cc/120?img=53",
+      skill_tags: ["basic_maintenance"],
+      experience_level: "junior",
+      location: SG_LANDMARKS.yishun,
+      working_hours: { start: "09:00", end: "20:00" },
+      current_workload: 1,
+      phone: "+65 8123 4009",
+    },
   ];
 }
 
@@ -142,12 +183,213 @@ interface SeedJobSpec {
    * "urgent_offset"— urgent_slot + `hour` (used as an hour offset, may be
    *                  negative), snapped to service hours. Fills a
    *                  technician's day around the urgent slot.
+   * "today_offset" — `hour` is hours-from-`now` directly (snapped into
+   *                  service hours), NOT the anchor grid — guarantees the
+   *                  job lands inside Capacity Agent's rolling "next 24h
+   *                  from now" window regardless of what time the
+   *                  demo/seed runs at. Used by the filler jobs meant to
+   *                  read as "today's load"; the anchor grid (09:00 SGT
+   *                  block) and the rolling window are two different time
+   *                  bases that don't line up at every wall-clock hour.
    */
-  hourMode?: "fixed" | "frozen_soon" | "urgent_slot" | "urgent_offset";
+  hourMode?: "fixed" | "frozen_soon" | "urgent_slot" | "urgent_offset" | "today_offset";
   status: Job["status"];
   tech: string | null;
   stage: Job["pipeline_stage"];
   createdHoursAgo?: number;
+}
+
+// ── Filler jobs (job_3001+) ─────────────────────────────────────────
+// The 10 hand-crafted jobs below exist to drive specific demo scenarios
+// (bump→HITL, auto-commit, frozen, …) — deliberately light so nobody's
+// schedule was accidentally full. That also means the fleet-wide and
+// per-skill thresholds the Capacity Agent checks (`capacityTotalPerDay`,
+// `capacityFlexiblePerDay`, certified-techs × slots/day) never had a
+// realistic chance to fire: 10 jobs across 6 technicians is nowhere near
+// a busy day. These ~30 filler jobs round the seeded day out to a
+// realistic SME volume (30-40 total) WITHOUT touching any of the
+// hand-crafted timing the existing scenarios depend on:
+//   - `hourMode: "fixed"` on a fixed dayOffset/hour grid — a completely
+//     different time basis than the dynamic "urgent_slot"/"urgent_offset"
+//     jobs (which resolve relative to `now` at seed time), so there's no
+//     way to hand-collide with them by construction.
+//   - `resolveFillerClashes()` in `seedJobs()` still nudges any filler
+//     that happens to land within 90 min of ANY other job on the same
+//     technician (including the dynamic ones, once resolved) forward by
+//     1h, repeatedly, until clear — belt-and-braces against the timing
+//     coincidence the fixed/dynamic split can't rule out on its own.
+//   - Every filler is assigned to a technician who actually holds the
+//     skill required, so the pipeline trail stays believable.
+// commercial_chiller is deliberately over-represented on Daniel + Hui
+// Ling — the only 2 certified technicians — so a new incoming chiller
+// job has a real, reliable chance to see that skill's day-capacity
+// (2 techs × 4 slots = 8) saturated and trigger `suggest_alternative_slot`
+// without needing to also push the whole fleet near its 24/day cap.
+const FILLER_ADDRESSES: { address: string; loc: { lat: number; lng: number } }[] = [
+  { address: "Blk 115 Bishan St 12, #03-221", loc: { lat: 1.351, lng: 103.849 } },
+  { address: "22 Sin Ming Lane, #02-15", loc: { lat: 1.3545, lng: 103.837 } },
+  { address: "Blk 302 Jurong East St 32, #05-88", loc: { lat: 1.3495, lng: 103.73 } },
+  { address: "60 Jurong West Central 3, #12-04", loc: { lat: 1.3405, lng: 103.706 } },
+  { address: "Blk 410 Tampines St 41, #08-176", loc: { lat: 1.3535, lng: 103.955 } },
+  { address: "9 Tampines Ave 2, #01-30", loc: { lat: 1.3555, lng: 103.94 } },
+  { address: "Blk 780 Woodlands Cres, #04-99", loc: { lat: 1.4405, lng: 103.795 } },
+  { address: "1 Woodlands Sq, #06-12", loc: { lat: 1.4358, lng: 103.786 } },
+  { address: "18 Commonwealth Ln, #03-05", loc: { lat: 1.3025, lng: 103.799 } },
+  { address: "Blk 55 Holland Close, #09-112", loc: { lat: 1.3115, lng: 103.792 } },
+  { address: "30 Changi South Ave 6, #01-20", loc: { lat: 1.3235, lng: 103.951 } },
+  { address: "Blk 220 Changi Village Rd, #02-08", loc: { lat: 1.3885, lng: 103.988 } },
+  { address: "88 Clementi Rd, #04-40", loc: { lat: 1.3155, lng: 103.77 } },
+  { address: "Blk 502 West Coast Dr, #11-266", loc: { lat: 1.311, lng: 103.762 } },
+  { address: "Blk 172 Punggol Field, #06-88", loc: { lat: 1.4025, lng: 103.907 } },
+  { address: "12 Punggol Walk, #03-14", loc: { lat: 1.406, lng: 103.898 } },
+  { address: "Blk 261 Sengkang East Way, #09-102", loc: { lat: 1.3895, lng: 103.895 } },
+  { address: "Blk 605 Yishun St 61, #04-33", loc: { lat: 1.4285, lng: 103.837 } },
+];
+
+interface FillerPlan {
+  tech: string;
+  skill: Job["skill_required"][number];
+  category: string;
+  desc: string;
+  tier: Job["tier"];
+  /** How many fillers land TODAY (day 0) for this plan. */
+  todayCount: number;
+  /** How many more land later in the week (days 2-4), for volume/variety
+   *  without adding to today's density. */
+  laterCount: number;
+}
+
+/**
+ * Marcus and Daniel are excluded from day-0/1 filler load entirely —
+ * job_2005 needs Marcus free mid-afternoon TODAY for the auto-commit
+ * scenario, and Daniel's afternoon is already intentionally packed
+ * (job_2006/2010/2011) for the HITL scenario. Adding same-day filler load
+ * to either would risk silently flipping which of those two stories the
+ * demo lands on depending on wall-clock time — exactly the kind of
+ * "looks unrelated but breaks the scenario" bug worth avoiding by
+ * construction rather than catching with a test after the fact.
+ */
+const NO_TODAY_FILLER_TECHS = new Set(["tech_marcus", "tech_daniel"]);
+
+function buildFillerSpecs(): SeedJobSpec[] {
+  // Wei Jie / Priya / Gopal / Hui Ling carry the bulk of TODAY's volume —
+  // enough to bring the fleet within reach of capacityTotalPerDay (24) so
+  // Capacity Agent's fleet-wide cap is a real, reachable trigger, not just
+  // the narrow per-skill one. Marcus and Daniel's extra volume (see
+  // NO_TODAY_FILLER_TECHS) lands later in the week instead. commercial_
+  // chiller is deliberately concentrated on Hui Ling (the one of its 2
+  // certified techs free today) so that skill's own day-capacity
+  // (2 techs × 4 slots = 8) has a real chance to saturate on its own,
+  // independent of the fleet-wide cap.
+  const plans: FillerPlan[] = [
+    { tech: "tech_marcus", skill: "basic_maintenance", category: "routine", desc: "Routine servicing, filter clean.", tier: "flexible", todayCount: 0, laterCount: 3 },
+    { tech: "tech_marcus", skill: "refrigerant_handling", category: "not_cooling", desc: "Aircon cooling weakly, gas top-up check.", tier: "standard", todayCount: 0, laterCount: 2 },
+    { tech: "tech_wei_jie", skill: "basic_maintenance", category: "routine", desc: "Scheduled servicing, 2 units.", tier: "flexible", todayCount: 3, laterCount: 1 },
+    { tech: "tech_wei_jie", skill: "electrical_work", category: "install_electrical", desc: "New unit wiring, power point added.", tier: "standard", todayCount: 2, laterCount: 1 },
+    { tech: "tech_priya", skill: "basic_maintenance", category: "routine", desc: "Aircon cleaning, annual servicing.", tier: "flexible", todayCount: 3, laterCount: 2 },
+    { tech: "tech_gopal", skill: "basic_maintenance", category: "routine", desc: "Filter and coil cleaning.", tier: "flexible", todayCount: 2, laterCount: 1 },
+    { tech: "tech_gopal", skill: "refrigerant_handling", category: "not_cooling", desc: "Not cooling, suspected leak.", tier: "standard", todayCount: 2, laterCount: 1 },
+    { tech: "tech_gopal", skill: "electrical_work", category: "install_electrical", desc: "New bedroom unit, wiring check.", tier: "priority", todayCount: 1, laterCount: 0 },
+    { tech: "tech_daniel", skill: "commercial_chiller", category: "commercial", desc: "Quarterly chiller plant inspection.", tier: "priority", todayCount: 0, laterCount: 4 },
+    { tech: "tech_hui_ling", skill: "commercial_chiller", category: "commercial", desc: "Office chiller preventive maintenance.", tier: "standard", todayCount: 6, laterCount: 2 },
+    { tech: "tech_hui_ling", skill: "electrical_work", category: "install_electrical", desc: "Electrical fault, panel inspection.", tier: "standard", todayCount: 1, laterCount: 2 },
+    // Amir / Farah / Kelvin — added to round the roster out to 9 (see the
+    // header note on seedTechnicians). Only basic_maintenance/electrical_work,
+    // so they add real volume without touching the certified-tech counts
+    // the bump/HITL/chiller-saturation scenarios depend on.
+    { tech: "tech_amir", skill: "basic_maintenance", category: "routine", desc: "Aircon servicing, standard unit.", tier: "flexible", todayCount: 3, laterCount: 2 },
+    { tech: "tech_amir", skill: "electrical_work", category: "install_electrical", desc: "Power point relocation for new unit.", tier: "standard", todayCount: 1, laterCount: 1 },
+    { tech: "tech_farah", skill: "basic_maintenance", category: "routine", desc: "Aircon cleaning, 3 units.", tier: "flexible", todayCount: 2, laterCount: 2 },
+    { tech: "tech_farah", skill: "electrical_work", category: "install_electrical", desc: "New installation, electrical fault check.", tier: "priority", todayCount: 2, laterCount: 1 },
+    { tech: "tech_kelvin", skill: "basic_maintenance", category: "routine", desc: "Routine servicing, filter clean.", tier: "flexible", todayCount: 3, laterCount: 2 },
+  ];
+
+  const customers = [
+    "Wong Mei Ling", "Farid Iskandar", "Tan Boon Keng", "Suresh Kumar", "Chua Li Wen",
+    "Amir Hakim", "Ong Hui Fang", "Bala Krishnan", "Ng Wei Ting", "Rashid Ali",
+    "Koh Sze Min", "Vijay Nathan", "Lim Poh Choo", "Zainab Aziz", "Tan Jun Hao",
+    "Priscilla Goh", "Hafiz Rahman", "Chen Xiu Ying", "Kavitha Rao", "Wong Zi Xuan",
+    "Muthu Selvam", "Angeline Teo", "Danish Iqbal", "Lee Kah Wei", "Nur Aisyah",
+    "Marcus Lau", "Hema Malini", "Timothy Ho", "Siti Nurhaliza", "Ravi Chandran",
+  ];
+
+  const specs: SeedJobSpec[] = [];
+  let n = 0;
+
+  function pushJob(
+    tech: string,
+    plan: FillerPlan,
+    args: { hourMode: "today_offset" | "fixed"; dayOffset: number; hour: number },
+  ) {
+    const idx = n % FILLER_ADDRESSES.length;
+    const loc = FILLER_ADDRESSES[idx];
+    const customer = customers[n % customers.length];
+    n++;
+    specs.push({
+      id: `job_3${String(n).padStart(3, "0")}`,
+      customer,
+      email: `${customer.toLowerCase().replace(/\s+/g, ".")}@example.sg`,
+      phone: `+65 9222 ${String(1000 + n).slice(-4)}`,
+      address: loc.address,
+      loc: loc.loc,
+      desc: plan.desc,
+      category: plan.category,
+      skill: [plan.skill],
+      tier: plan.tier,
+      dayOffset: args.dayOffset,
+      hour: args.hourMode === "today_offset" ? args.hour : Math.round(args.hour),
+      hourMode: args.hourMode,
+      status: "assigned",
+      tech,
+      stage: "assigned",
+      createdHoursAgo: 6 + (n % 20),
+    });
+  }
+
+  // ── "Today" fillers ─────────────────────────────────────────────
+  // Anchored to `now` directly (today_offset), not the anchor grid —
+  // that's what guarantees they land inside Capacity Agent's rolling 24h
+  // window no matter what wall-clock hour the demo/seed runs at (see the
+  // hourMode doc comment on why the two time bases don't otherwise line
+  // up). Same-tech fillers land ~2.2h apart, clear of the ±90min clash
+  // window.
+  const todayCursor: Record<string, number> = {};
+  for (const plan of plans) {
+    if (plan.todayCount === 0 || NO_TODAY_FILLER_TECHS.has(plan.tech)) continue;
+    for (let i = 0; i < plan.todayCount; i++) {
+      const c = todayCursor[plan.tech] ?? 0;
+      todayCursor[plan.tech] = c + 1;
+      pushJob(plan.tech, plan, { hourMode: "today_offset", dayOffset: 0, hour: 1 + c * 2.2 });
+    }
+  }
+
+  // ── "Later" fillers ─────────────────────────────────────────────
+  // Flattened across ALL plans first, then dealt round-robin across days
+  // 2-6 (5 days) — one job per day per pass — so the week comes out
+  // EVENLY loaded regardless of how the per-plan counts happen to add up.
+  // Assigning day-by-day per tech (the earlier version of this generator)
+  // let whichever tech had the biggest laterCount dictate how full each
+  // day got, which is how a demo run ended up with 27/3/15 jobs on three
+  // consecutive days instead of a believable week. Day 1 (tomorrow) is
+  // skipped — job_2004/2008 and the dynamic "+24h" re-plan/capacity
+  // scenarios already use it, and piling fillers on top narrows how much
+  // room those scenarios have.
+  const LATER_DAYS = [2, 3, 4, 5, 6];
+  type LaterReq = { tech: string; plan: FillerPlan };
+  const laterQueue: LaterReq[] = [];
+  for (const plan of plans) {
+    for (let i = 0; i < plan.laterCount; i++) laterQueue.push({ tech: plan.tech, plan });
+  }
+  const hourCursorByTechDay = new Map<string, number>();
+  laterQueue.forEach((req, i) => {
+    const dayOffset = LATER_DAYS[i % LATER_DAYS.length];
+    const key = `${req.tech}|${dayOffset}`;
+    const slot = hourCursorByTechDay.get(key) ?? 0;
+    hourCursorByTechDay.set(key, slot + 1);
+    pushJob(req.tech, req.plan, { hourMode: "fixed", dayOffset, hour: 9 + slot * 3 });
+  });
+
+  return specs;
 }
 
 const SPECS: SeedJobSpec[] = [
@@ -392,6 +634,7 @@ const SPECS: SeedJobSpec[] = [
     stage: "assigned",
     createdHoursAgo: 8,
   },
+  ...buildFillerSpecs(),
 ];
 
 /**
@@ -415,7 +658,7 @@ export function seedJobs(freezeWindowHours: number): Job[] {
   const now = nowISO();
   const anchor = anchorDay();
 
-  return SPECS.map((s) => {
+  const jobs = SPECS.map((s) => {
     let scheduled: string;
     if (s.hourMode === "frozen_soon") {
       scheduled = addHours(now, 2);
@@ -427,6 +670,13 @@ export function seedJobs(freezeWindowHours: number): Job[] {
         0,
         DISPATCH_SERVICE_HOURS,
       );
+    } else if (s.hourMode === "today_offset") {
+      // Snapped into service hours like the dynamic slots — an offset that
+      // would land at 2am gets pulled to the next open hour instead. The
+      // offsets fillers use are small enough (≤ ~15h) that this never
+      // pushes the job outside the "next 24h" window it exists to fall
+      // inside of.
+      scheduled = snapToServiceHours(addHours(now, s.hour), 0, DISPATCH_SERVICE_HOURS);
     } else {
       const dt = new Date(
         anchor.getTime() + s.dayOffset * 24 * 3600_000 + (s.hour - 9) * 3600_000,
@@ -460,6 +710,52 @@ export function seedJobs(freezeWindowHours: number): Job[] {
       reschedule_history: [],
     };
   });
+
+  resolveFillerClashes(jobs, freezeWindowHours);
+  return jobs;
+}
+
+/**
+ * Belt-and-braces pass: nudge any filler job (`job_3xxx`) that lands within
+ * 90 min of ANY other job on the same technician — including the 10
+ * hand-crafted jobs, whose dynamic slots (`urgent_slot`/`urgent_offset`)
+ * are only known after they're resolved above. Fillers are on a separate,
+ * fixed time basis by construction (see `buildFillerSpecs`) so this should
+ * rarely fire, but a real coincidence is cheap to rule out here rather than
+ * leave a double-booking in the seed. Mutates `jobs` in place.
+ */
+function resolveFillerClashes(jobs: Job[], freezeWindowHours: number): void {
+  const byTech = new Map<string, Job[]>();
+  for (const j of jobs) {
+    if (!j.assigned_technician_id) continue;
+    const arr = byTech.get(j.assigned_technician_id) ?? [];
+    arr.push(j);
+    byTech.set(j.assigned_technician_id, arr);
+  }
+  const isFiller = (id: string) => id.startsWith("job_3");
+
+  for (const [, techJobs] of byTech) {
+    // Fixed (non-filler) jobs are ground truth and never move; fillers are
+    // nudged forward, in id order, until clear of everyone already placed.
+    const fixed = techJobs.filter((j) => !isFiller(j.job_id));
+    const fillers = techJobs
+      .filter((j) => isFiller(j.job_id))
+      .sort((a, b) => a.job_id.localeCompare(b.job_id));
+    const placed = [...fixed];
+    for (const job of fillers) {
+      let guard = 0;
+      while (
+        placed.some(
+          (p) => Math.abs(hoursBetween(p.scheduled_time, job.scheduled_time)) < 1.5,
+        ) &&
+        guard++ < 48
+      ) {
+        job.scheduled_time = addHours(job.scheduled_time, 1);
+        job.freeze_point = computeFreezePoint(job.scheduled_time, freezeWindowHours);
+      }
+      placed.push(job);
+    }
+  }
 }
 
 function basePriceFor(skills: Job["skill_required"]): number {
@@ -610,20 +906,6 @@ export function seedAgentActivity(
         guardrails: ["Skill-aware saturation check (certified technicians for this skill in the next 24h)."],
       },
       {
-        agent: "TechnicianStateAgent",
-        kind: "rule",
-        input: { scheduled_time: job.scheduled_time },
-        output: {
-          roster_size: techs.length,
-          certified_for_skill: techs.filter((t) =>
-            job.skill_required.every((s) => t.skill_tags.includes(s)),
-          ).length,
-        },
-        headline: `Roster read — ${techs.length} technicians, location + workload only (no PII)`,
-        outcome: "info",
-        guardrails: ["Least-privilege: home address / phone never exposed to the scoring pass."],
-      },
-      {
         agent: "AssignmentAgent",
         kind: "rule",
         input: {
@@ -631,6 +913,7 @@ export function seedAgentActivity(
           required_certification: certs,
           tier,
           policy: DISPATCH_POLICY[tier],
+          roster_size: techs.length,
         },
         output: {
           assigned_technician_id: job.assigned_technician_id,
@@ -640,6 +923,7 @@ export function seedAgentActivity(
         outcome: "auto_commit",
         score: sb,
         guardrails: [
+          "Reads the roster from context — least-privilege by construction: location and workload only, never phone or home address.",
           "Four hard constraints filter the pool before scoring (certification, working hours, no double-booking, route feasibility); scoring is travel + skill-fit + availability + SLA-headroom + load-balance, each in [0,1], weighted by the tier's dispatch policy.",
         ],
       },

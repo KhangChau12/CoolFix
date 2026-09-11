@@ -7,24 +7,50 @@
 // (no data-fetching imports) means a page can show the explainer without
 // pulling in the whole replay component.
 
-import type { AgentDecisionLog } from "@/lib/types";
+import type { AgentDecisionLog, ScoreComponent } from "@/lib/types";
+
+// ── Shared per-component color palette ──────────────────────────────
+// One color per scoring component, used everywhere a breakdown is drawn
+// (score bars, the component explainer, Settings' policy sliders) so the
+// same idea always reads as the same color — travel is always this blue,
+// skill-fit always this green, etc. Distinct from the tier/status palette
+// on purpose: these are literal hex values, not CSS tokens, because they
+// need to read consistently on both the dark AgentFeed panel and light
+// cards, and neither tokenised palette is built for 5 flat swatches.
+export const SCORE_COMPONENT_COLOR: Record<ScoreComponent, string> = {
+  travel: "#3d68b0",
+  skillFit: "#6b8e23",
+  availability: "#c98a3c",
+  slaHeadroom: "#b0453b",
+  loadBalance: "#5a7d9a",
+};
+
+const BAR_PARTS: [ScoreComponent, string][] = [
+  ["travel", "travel fit"],
+  ["skillFit", "skill fit"],
+  ["availability", "availability"],
+  ["slaHeadroom", "SLA headroom"],
+  ["loadBalance", "load balance"],
+];
+const BAR_KEY: Record<ScoreComponent, keyof NonNullable<AgentDecisionLog["score_breakdown"]>> = {
+  travel: "travel",
+  skillFit: "skill_fit",
+  availability: "availability",
+  slaHeadroom: "sla_headroom",
+  loadBalance: "load_balance",
+};
 
 // ── The score, component by component, as bars ─────────────────────
+// Each bar takes its own component color (SCORE_COMPONENT_COLOR) instead
+// of one flat color for the whole breakdown — the point is to tell the
+// five ideas apart at a glance, not to tint them all the same as the
+// agent that produced them.
 
 export function ScoreBars({
   b,
-  color,
 }: {
   b: NonNullable<AgentDecisionLog["score_breakdown"]>;
-  color: string;
 }) {
-  const parts: [string, number][] = [
-    ["travel fit", b.travel],
-    ["skill fit", b.skill_fit],
-    ["availability", b.availability],
-    ["SLA headroom", b.sla_headroom],
-    ["load balance", b.load_balance],
-  ];
   const total = b.total || 0.001;
   return (
     <div>
@@ -32,18 +58,24 @@ export function ScoreBars({
         match = Σ policy[tier][k] · component[k] · each component ∈ [0,1], weights sum to 1
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {parts.map(([label, v]) => (
-          <div
-            key={label}
-            style={{ display: "grid", gridTemplateColumns: "82px minmax(0,1fr) 52px", alignItems: "center", gap: 9 }}
-          >
-            <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{label}</div>
-            <div style={{ height: 6, background: "var(--surface-2)", borderRadius: 4, overflow: "hidden" }}>
-              <div style={{ height: "100%", width: `${(v / total) * 100}%`, background: color, borderRadius: 4 }} />
+        {BAR_PARTS.map(([key, label]) => {
+          const v = b[BAR_KEY[key]] as number;
+          return (
+            <div
+              key={key}
+              style={{ display: "grid", gridTemplateColumns: "82px minmax(0,1fr) 52px", alignItems: "center", gap: 9 }}
+            >
+              <div className="row" style={{ gap: 6, fontSize: 11, color: "var(--text-muted)" }}>
+                <span style={{ width: 8, height: 8, borderRadius: 2, background: SCORE_COMPONENT_COLOR[key], flexShrink: 0 }} />
+                {label}
+              </div>
+              <div style={{ height: 6, background: "var(--surface-2)", borderRadius: 4, overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${(v / total) * 100}%`, background: SCORE_COMPONENT_COLOR[key], borderRadius: 4 }} />
+              </div>
+              <div className="mono" style={{ fontSize: 10, textAlign: "right" }}>{v.toFixed(2)}</div>
             </div>
-            <div className="mono" style={{ fontSize: 10, textAlign: "right" }}>{v.toFixed(2)}</div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <div
         className="spread"
@@ -68,7 +100,7 @@ export function ScoreBars({
 // Map, above the score bars in the job replay, and in Settings.
 
 export const SCORING_COMPONENTS: {
-  key: string;
+  key: ScoreComponent;
   label: string;
   weightNote: string;
   measures: string;
@@ -148,32 +180,44 @@ export function ScoringExplainer({ compact = false }: { compact?: boolean }) {
         Why each component matters
       </div>
       <div style={{ display: "grid", gap: 10 }}>
-        {SCORING_COMPONENTS.map((c) => (
-          <div key={c.key}>
-            <div className="row" style={{ gap: 8, alignItems: "baseline", marginBottom: 2 }}>
-              <strong style={{ fontSize: 12 }}>{c.label}</strong>
-              <span className="mono faint" style={{ fontSize: 9.5 }}>
-                {c.weightNote}
-              </span>
-            </div>
-            <div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5 }}>
-              {c.measures}
-            </div>
+        {SCORING_COMPONENTS.map((c) => {
+          const color = SCORE_COMPONENT_COLOR[c.key];
+          return (
             <div
+              key={c.key}
               style={{
-                fontSize: 11,
-                color: "var(--text-muted)",
-                lineHeight: 1.5,
-                marginTop: 3,
-                paddingLeft: 9,
-                borderLeft: "2px solid var(--border-strong)",
+                padding: "10px 12px",
+                borderRadius: 8,
+                background: `color-mix(in srgb, ${color} 6%, var(--surface))`,
+                borderLeft: `3px solid ${color}`,
               }}
             >
-              <span className="faint" style={{ fontSize: 10 }}>Why it matters — </span>
-              {c.why}
+              <div className="row" style={{ gap: 8, alignItems: "baseline", marginBottom: 2 }}>
+                <span style={{ width: 9, height: 9, borderRadius: 2, background: color, flexShrink: 0 }} />
+                <strong style={{ fontSize: 12, color }}>{c.label}</strong>
+                <span className="mono faint" style={{ fontSize: 9.5 }}>
+                  {c.weightNote}
+                </span>
+              </div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5 }}>
+                {c.measures}
+              </div>
+              <div
+                style={{
+                  fontSize: 11,
+                  color: "var(--text-muted)",
+                  lineHeight: 1.5,
+                  marginTop: 5,
+                  paddingTop: 5,
+                  borderTop: `1px dashed color-mix(in srgb, ${color} 35%, var(--border))`,
+                }}
+              >
+                <span className="faint" style={{ fontSize: 10 }}>Why it matters — </span>
+                {c.why}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <div
         style={{

@@ -54,7 +54,7 @@ export function TopBar({
             flexShrink: 0,
             display: "grid",
             placeItems: "center",
-            background: "linear-gradient(150deg, var(--brand) 0%, #4f46e5 100%)",
+            background: "linear-gradient(150deg, var(--brand) 0%, #7c6ff0 100%)",
             boxShadow: "0 0 0 1px rgba(255,255,255,0.12), 0 2px 8px -2px rgba(37,99,235,0.6)",
           }}
         >
@@ -133,10 +133,10 @@ export function TopBar({
         .tb-tab.is-active {
           color: var(--ink-text);
           font-weight: 500;
-          background: linear-gradient(180deg, #3d3a35 0%, #322f2b 100%);
+          background: linear-gradient(180deg, #38355a 0%, #2a2846 100%);
           box-shadow: inset 0 1px 0 rgba(255,255,255,0.07), 0 1px 2px rgba(0,0,0,0.3);
         }
-        .tb-tab.is-active:hover { background: linear-gradient(180deg, #423f39 0%, #37332f 100%); }
+        .tb-tab.is-active:hover { background: linear-gradient(180deg, #3e3b63 0%, #302d4e 100%); }
         @media (max-width: 560px) {
           .tb-context { display: none; }
         }

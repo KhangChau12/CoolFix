@@ -4,9 +4,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { apiGet } from "@/lib/client";
 import { useRealtime } from "./useRealtime";
+import { SCORE_COMPONENT_COLOR } from "./scoring";
 import { fmtSGTime } from "@/lib/time";
 import { TIER_META } from "@/lib/types";
-import type { AgentDecisionLog, AgentName, Job, Tier } from "@/lib/types";
+import type { AgentDecisionLog, AgentName, Job, ScoreComponent, Tier } from "@/lib/types";
 
 const AGENT_META: Record<AgentName, { icon: string; color: string; short: string }> = {
   PricingEngine: { icon: "$", color: "var(--agent-pricing)", short: "Pricing" },
@@ -419,7 +420,7 @@ export function AgentFeed({ limit = 60 }: { limit?: number }) {
 
                         {isOpen && (
                           <div style={{ borderTop: "1px solid var(--ink-border)", padding: "11px 13px 13px" }}>
-                            {r.score_breakdown && <ScoreBars b={r.score_breakdown} color={m.color} />}
+                            {r.score_breakdown && <ScoreBars b={r.score_breakdown} />}
                             {r.candidates && r.candidates.length > 0 && <Candidates rows={r.candidates} />}
                             {r.replan_options && r.replan_options.length > 0 && (
                               <ReplanOptions
@@ -503,14 +504,27 @@ export function AgentFeed({ limit = 60 }: { limit?: number }) {
   );
 }
 
-function ScoreBars({ b, color }: { b: NonNullable<AgentDecisionLog["score_breakdown"]>; color: string }) {
-  const parts: [string, number][] = [
-    ["travel fit", b.travel],
-    ["skill fit", b.skill_fit],
-    ["availability", b.availability],
-    ["SLA headroom", b.sla_headroom],
-    ["load balance", b.load_balance],
-  ];
+const FEED_BAR_PARTS: [ScoreComponent, string][] = [
+  ["travel", "travel fit"],
+  ["skillFit", "skill fit"],
+  ["availability", "availability"],
+  ["slaHeadroom", "SLA headroom"],
+  ["loadBalance", "load balance"],
+];
+const FEED_BAR_KEY: Record<ScoreComponent, keyof NonNullable<AgentDecisionLog["score_breakdown"]>> = {
+  travel: "travel",
+  skillFit: "skill_fit",
+  availability: "availability",
+  slaHeadroom: "sla_headroom",
+  loadBalance: "load_balance",
+};
+
+// Dark-panel variant of components/scoring.tsx's ScoreBars — AgentFeed
+// renders on a dark card (--ink-* tokens), the shared one assumes a light
+// surface, so this stays a separate small component. Same per-component
+// SCORE_COMPONENT_COLOR palette though, so a color always means the same
+// thing whether you're looking at the feed or the flow map.
+function ScoreBars({ b }: { b: NonNullable<AgentDecisionLog["score_breakdown"]> }) {
   const total = b.total || 0.001;
   return (
     <div>
@@ -518,15 +532,22 @@ function ScoreBars({ b, color }: { b: NonNullable<AgentDecisionLog["score_breakd
         match = Σ policy[tier][k] · component[k] &nbsp;·&nbsp; each component ∈ [0,1], weights sum to 1
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-        {parts.map(([label, v]) => (
-          <div key={label} style={{ display: "grid", gridTemplateColumns: "88px minmax(0,1fr) 60px", alignItems: "center", gap: 10 }}>
-            <div style={{ fontSize: 11.5, color: "var(--ink-text-muted)" }}>{label}</div>
-            <div style={{ height: 7, background: "var(--ink-border)", borderRadius: 4, overflow: "hidden" }}>
-              <div style={{ height: "100%", width: `${(v / total) * 100}%`, background: color, borderRadius: 4 }} />
+        {FEED_BAR_PARTS.map(([key, label]) => {
+          const v = b[FEED_BAR_KEY[key]] as number;
+          const color = SCORE_COMPONENT_COLOR[key];
+          return (
+            <div key={key} style={{ display: "grid", gridTemplateColumns: "88px minmax(0,1fr) 60px", alignItems: "center", gap: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, color: "var(--ink-text-muted)" }}>
+                <span style={{ width: 8, height: 8, borderRadius: 2, background: color, flexShrink: 0 }} />
+                {label}
+              </div>
+              <div style={{ height: 7, background: "var(--ink-border)", borderRadius: 4, overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${(v / total) * 100}%`, background: color, borderRadius: 4 }} />
+              </div>
+              <div style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--ink-text)", textAlign: "right" }}>{v.toFixed(2)}</div>
             </div>
-            <div style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--ink-text)", textAlign: "right" }}>{v.toFixed(2)}</div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12, paddingTop: 10, borderTop: "1px dashed var(--ink-border)", fontFamily: "var(--mono)" }}>
         <span style={{ fontSize: 11, color: "var(--ink-text-faint)" }}>match score</span>
@@ -627,8 +648,8 @@ function ReplanOptions({
             style={{
               padding: "11px 12px",
               borderRadius: 8,
-              border: `1px solid ${o.recommended ? "#3f6f4a" : "var(--ink-border)"}`,
-              background: o.recommended ? "#17251b" : "#191713",
+              border: `1px solid ${o.recommended ? "#3d6248" : "var(--ink-border)"}`,
+              background: o.recommended ? "#182219" : "#1e1c30",
             }}
           >
             <div style={{ fontSize: 12, fontWeight: 600, color: "var(--ink-text)", marginBottom: 4 }}>

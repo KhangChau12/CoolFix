@@ -223,7 +223,7 @@ function AgentFlowPageInner() {
                   textTransform: "uppercase",
                   color: "var(--brand-ink)",
                   background: "var(--brand-tint)",
-                  border: "1px solid #bfdbfe",
+                  border: "1px solid #d3cef7",
                   borderRadius: 999,
                   padding: "2px 8px",
                 }}

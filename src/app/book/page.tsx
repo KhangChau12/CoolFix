@@ -390,7 +390,7 @@ function Stepper({ step }: { step: Step }) {
             fontSize: 11.5,
             fontWeight: i === idx ? 600 : 400,
             color: i === idx ? "var(--text)" : "var(--text-faint)",
-            background: i === idx ? "#eae7e1" : "transparent",
+            background: i === idx ? "#eeecf6" : "transparent",
             border: `1px solid ${i === idx ? "var(--border-strong)" : "transparent"}`,
             borderRadius: 20,
             padding: "6px 12px",
@@ -759,7 +759,7 @@ function ProcessingView({
             padding: "9px 12px",
             borderRadius: 8,
             background: "var(--brand-tint)",
-            border: "1px solid #bfdbfe",
+            border: "1px solid #d3cef7",
           }}
         >
           Still working — thanks for your patience. Complex jobs sometimes take a
@@ -810,7 +810,7 @@ const CUSTOMER_STEPS: {
     key: "match",
     label: "Matching a certified technician",
     active: "Comparing certified technicians by skill, distance and workload",
-    agents: ["TechnicianStateAgent", "AssignmentAgent", "AssignmentTiebreakAgent", "AssignmentEdgecaseAgent"],
+    agents: ["AssignmentAgent", "AssignmentTiebreakAgent", "AssignmentEdgecaseAgent"],
   },
   {
     key: "schedule",

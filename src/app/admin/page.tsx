@@ -6,6 +6,7 @@ import { apiGet } from "@/lib/client";
 import { useRealtime } from "@/components/useRealtime";
 import { AgentFeed } from "@/components/AgentFeed";
 import {
+  estimatedJobMinutes,
   PIPELINE_STAGES,
   TIER_META,
   TIERS,
@@ -14,7 +15,7 @@ import {
   type NotificationRecord,
   type Technician,
 } from "@/lib/types";
-import { hoursBetween, nowISO, sgHour } from "@/lib/time";
+import { hoursBetween, nowISO, sgDayKey, sgHour } from "@/lib/time";
 
 const STAGE_DOT: Record<string, string> = {
   intake: "var(--agent-intake)",
@@ -26,8 +27,6 @@ const STAGE_DOT: Record<string, string> = {
   awaiting_approval: "var(--tier-priority)",
   done: "var(--border-strong)",
 };
-
-const NOMINAL_SLOTS_PER_DAY = 5; // one technician's realistic working-day capacity
 
 function sgClock(d: Date): string {
   return new Intl.DateTimeFormat("en-GB", {
@@ -114,40 +113,57 @@ export default function Dashboard() {
   ).length;
 
   // ── Fleet load ──────────────────────────────────────────────────
-  // Per-technician open assignments vs a nominal 5-slot day.
+  // "Today" means real Singapore calendar-day, not "every active job ever
+  // assigned" — a technician's board can legitimately hold a dozen jobs
+  // spread across the coming week (see the seed's 30+ filler jobs) without
+  // their actual day being full. Utilisation is real hours committed
+  // today (estimatedJobMinutes per job, same figure the Assignment
+  // Agent's `availability` scoring component uses) against their own
+  // shift length — not a flat headcount against a guessed nominal slot
+  // count, which is the exact "workload as a job counter" flaw the
+  // scoring engine was rewritten to avoid (see coolfix-scoring-engine).
+  const todayKey = sgDayKey(now);
   const fleet = useMemo(() => {
     return techs
       .map((t) => {
         const assigned = activeJobs.filter(
           (j) => j.assigned_technician_id === t.technician_id,
         );
+        const todaysJobs = assigned.filter(
+          (j) => sgDayKey(j.scheduled_time) === todayKey,
+        );
+        const upcomingCount = assigned.length;
+        const usedMinToday = todaysJobs.reduce(
+          (s, j) => s + estimatedJobMinutes(j.skill_required),
+          0,
+        );
+        const [sh, sm] = t.working_hours.start.split(":").map(Number);
+        const [eh, em] = t.working_hours.end.split(":").map(Number);
+        const shiftMin = Math.max(1, eh * 60 + em - (sh * 60 + sm));
         const nextJob = assigned
           .filter((j) => hoursBetween(now, j.scheduled_time) > -1.5)
           .sort((a, b) => a.scheduled_time.localeCompare(b.scheduled_time))[0];
         const busyNow =
           nowHour !== null &&
-          assigned.some((j) => Math.abs(sgHour(j.scheduled_time) - nowHour) < 1.5);
+          todaysJobs.some((j) => Math.abs(sgHour(j.scheduled_time) - nowHour) < 1.5);
         return {
           id: t.technician_id,
           name: t.name,
           level: t.experience_level,
-          load: assigned.length,
-          pct: Math.min(100, Math.round((assigned.length / NOMINAL_SLOTS_PER_DAY) * 100)),
+          todayCount: todaysJobs.length,
+          upcomingCount,
+          pct: Math.min(100, Math.round((usedMinToday / shiftMin) * 100)),
           busyNow,
           next: nextJob ?? null,
         };
       })
-      .sort((a, b) => b.load - a.load || a.name.localeCompare(b.name));
+      .sort((a, b) => b.pct - a.pct || a.name.localeCompare(b.name));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [techs, jobs, nowHour]);
+  }, [techs, jobs, nowHour, todayKey]);
 
   const freeNow = fleet.filter((f) => !f.busyNow).length;
   const fleetUtil = fleet.length
-    ? Math.round(
-        (fleet.reduce((s, f) => s + f.load, 0) /
-          (fleet.length * NOMINAL_SLOTS_PER_DAY)) *
-          100,
-      )
+    ? Math.round(fleet.reduce((s, f) => s + f.pct, 0) / fleet.length)
     : 0;
 
   // ── Throughput by tier (active jobs) ────────────────────────────
@@ -421,7 +437,9 @@ export default function Dashboard() {
                 className="spread"
                 style={{ fontSize: 11, marginBottom: 9 }}
               >
-                <span className="muted">Fleet utilisation</span>
+                <span className="muted" title="Real hours committed today ÷ each technician's shift length, averaged across the roster — not a headcount of every job on their board.">
+                  Today&apos;s utilisation
+                </span>
                 <span className="mono">{fleetUtil}%</span>
               </div>
               <span
@@ -481,7 +499,7 @@ export default function Dashboard() {
                         <span className="faint" style={{ fontSize: 9.5 }}>{f.level}</span>
                       </span>
                       <span className="mono faint" style={{ fontSize: 10.5, flexShrink: 0 }}>
-                        {f.load ? `${f.load} open` : "idle"}
+                        {f.todayCount === 0 ? "free today" : `${f.pct}% today`}
                       </span>
                     </div>
                     <span
@@ -497,7 +515,7 @@ export default function Dashboard() {
                         style={{
                           display: "block",
                           height: "100%",
-                          width: `${Math.max(f.pct, f.load ? 8 : 0)}%`,
+                          width: `${Math.max(f.pct, f.todayCount ? 8 : 0)}%`,
                           background:
                             f.pct > 80
                               ? "var(--tier-urgent)"
@@ -509,11 +527,11 @@ export default function Dashboard() {
                         }}
                       />
                     </span>
-                    {f.next && (
-                      <span className="faint mono" style={{ fontSize: 9.5 }}>
-                        next {fmtSlot(f.next.scheduled_time)} · {f.next.location.address}
-                      </span>
-                    )}
+                    <span className="faint mono" style={{ fontSize: 9.5 }}>
+                      {f.todayCount} job{f.todayCount === 1 ? "" : "s"} today
+                      {f.upcomingCount > f.todayCount && ` · ${f.upcomingCount} on the board this week`}
+                      {f.next && ` · next ${fmtSlot(f.next.scheduled_time)} · ${f.next.location.address}`}
+                    </span>
                   </div>
                 ))}
                 {fleet.length === 0 && (

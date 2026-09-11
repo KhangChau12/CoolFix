@@ -76,6 +76,9 @@ export const SG_LANDMARKS = {
   buonaVista: { lat: 1.3068, lng: 103.7900 },
   changi: { lat: 1.3644, lng: 103.9915 },
   clementi: { lat: 1.3162, lng: 103.7649 },
+  punggol: { lat: 1.4041, lng: 103.9025 },
+  sengkang: { lat: 1.3868, lng: 103.8914 },
+  yishun: { lat: 1.4304, lng: 103.8354 },
 } as const;
 
 /**

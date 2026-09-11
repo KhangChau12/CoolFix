@@ -7,9 +7,10 @@
 //                            10% of each other. The formula "picked" one
 //                            but it is effectively a coin flip.
 //   • single_strained     — exactly one eligible candidate, and that
-//                            candidate is heavily loaded (workload >= 4)
-//                            or far away (>= 15 km). Worth a second look
-//                            before committing.
+//                            candidate is already ≥75% booked today (real
+//                            hours, not a job headcount) or far away
+//                            (>= 15 km). Worth a second look before
+//                            committing.
 //   • urgent_weak_fit     — an urgent job whose best score is still low
 //                            (< 3.0). Important job, nobody is a great
 //                            fit — flag the reasoning.
@@ -30,6 +31,7 @@ import { distanceKm } from "@/lib/geo";
 import { hoursBetween } from "@/lib/time";
 import { logDecision } from "./log";
 import { scoreOneTech } from "./assignment";
+import { techUtilisationToday } from "./scoring";
 import { validateTiebreakChoice } from "./schemas";
 import type { AssignmentResult, IntakeResult } from "./schemas";
 import type { ScoreBreakdown, SkillTag, Tier } from "@/lib/types";
@@ -37,8 +39,9 @@ import type { AgentContext } from "./context";
 
 /** Top two eligible scores within this fraction of each other → ambiguous. */
 const CLOSE_SCORE_FRACTION = 0.1;
-/** A lone eligible candidate this loaded is "strained". */
-const STRAINED_WORKLOAD = 4;
+/** A lone eligible candidate this booked-up today (fraction of shift
+ *  already committed) is "strained". */
+const STRAINED_UTIL_TODAY = 0.75;
 /** A lone eligible candidate this far away is "strained" (km). */
 const STRAINED_DISTANCE_KM = 15;
 /** An urgent job whose best match score is below this (scores are 0-1 now)
@@ -57,12 +60,12 @@ You are given:
 - job: tier, required skills, address.
 - candidates: 1-3 technicians. EVERY candidate has already passed all hard constraints
   (certification, working hours, no schedule clash). For each you get the formula score,
-  distance to the job, current workload today, seniority, and whether they are already on
-  a job near this address.
+  distance to the job, booked_today_pct (% of today's shift already committed), seniority,
+  and whether they are already on a job near this address.
 
 Pick ONE technician by id. Prefer, in this order:
 1. a technician already working near this address (no cold start, no extra travel),
-2. the lighter workload when scores are close (keep the day balanced),
+2. the lower booked_today_pct when scores are close (keep the day balanced),
 3. the shorter distance,
 4. seniority for an urgent or difficult job.
 Only pick from the given ids. If none is clearly better, pick the one with the highest
@@ -147,19 +150,27 @@ export function detectAmbiguity(
  * Same "strained lone candidate" check, but it needs the live technician
  * record so it lives here rather than in detectAmbiguity (which only sees
  * the score rows). Called by the orchestrator with the single eligible id.
+ * Workload is real hours committed TODAY (`techUtilisationToday`, shared
+ * with the scoring engine's own load-balance component) — not
+ * `Technician.current_workload`, a lifetime running counter with no day
+ * boundary that stopped meaning "today" once the seed grew past a
+ * handful of hand-placed jobs.
  */
 export function loneCandidateIsStrained(
   ctx: AgentContext,
   technicianId: string,
   jobLocation: { lat: number; lng: number },
+  scheduledTime: string,
+  ignoreJobId: string,
 ): TiebreakTrigger | null {
   const t = ctx.getTechnician(technicianId);
   if (!t) return null;
   const dist = distanceKm(t.location, jobLocation);
-  if (t.current_workload >= STRAINED_WORKLOAD) {
+  const utilToday = techUtilisationToday(ctx, technicianId, scheduledTime, ignoreJobId);
+  if (utilToday >= STRAINED_UTIL_TODAY) {
     return {
       code: "single_strained",
-      text: `The only eligible technician (${t.name}) already has ${t.current_workload} jobs today.`,
+      text: `The only eligible technician (${t.name}) is already ${Math.round(utilToday * 100)}% booked today.`,
     };
   }
   if (dist >= STRAINED_DISTANCE_KM) {
@@ -224,7 +235,9 @@ export async function runAssignmentTiebreakAgent(
         technician_name: t.name,
         score_total: bd?.total ?? 0,
         distance_km: Math.round(distanceKm(t.location, input.jobLocation) * 10) / 10,
-        current_workload: t.current_workload,
+        booked_today_pct: Math.round(
+          techUtilisationToday(ctx, t.technician_id, input.scheduledTime, input.jobId) * 100,
+        ),
         experience_level: t.experience_level,
         recent_job_nearby: technicianHasNearbyJob(
           ctx,

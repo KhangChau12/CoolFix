@@ -709,7 +709,7 @@ function BigJobCard({
       <p style={{ fontSize: 12.5, margin: "10px 0", opacity: 0.92, lineHeight: 1.5 }}>{job.problem_description}</p>
       <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
         <button
-          style={{ flex: 1, minWidth: 100, fontFamily: "inherit", fontSize: 13, fontWeight: 600, background: "#fff", color: "#1a1917", border: "none", borderRadius: 8, padding: 11, cursor: "pointer" }}
+          style={{ flex: 1, minWidth: 100, fontFamily: "inherit", fontSize: 13, fontWeight: 600, background: "#fff", color: "#26241f", border: "none", borderRadius: 8, padding: 11, cursor: "pointer" }}
           onClick={() => onStatus(job.job_id, "en_route")}
         >
           En route

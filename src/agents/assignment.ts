@@ -4,10 +4,20 @@
 //
 // The scoring maths lives in `scoring.ts` so the tie-break / edge-case
 // agents re-score candidates the exact same way. This module is the
-// pipeline entry point: it takes the technician-state roster, drops anyone
-// who fails a HARD CONSTRAINT, scores the rest as a pool, and picks the
-// top — or, for an urgent job with no free eligible technician, looks for a
-// lower-tier job to bump.
+// pipeline entry point: it reads the technician roster straight from
+// AgentContext (loaded once, least-privilege by construction — the roster
+// in memory never carries phone / home address; see `Technician` in
+// types.ts), drops anyone who fails a HARD CONSTRAINT, scores the rest as
+// a pool, and picks the top — or, for an urgent job with no free eligible
+// technician, looks for a lower-tier job to bump.
+//
+// (There used to be a separate Technician-State Agent between
+// Capacity and Assignment that re-shaped the roster into a "candidate"
+// view before handing it here. It was folded into this agent: the fields
+// it computed — within_working_hours, current_workload — were already
+// being recomputed from scratch by the hard-constraint checks and the
+// scoring engine below, so it was a pipeline stage whose output nothing
+// downstream actually read. One fewer hop, same guarantees.)
 //
 // Hard constraints (a technician failing any of these is removed before
 // scoring and never gets a number — CLAUDE.md §3.3):
@@ -28,7 +38,7 @@ import {
 } from "@/lib/time";
 import { logDecision } from "./log";
 import { canReachInTime, scoreOneTech, scorePool } from "./scoring";
-import type { AssignmentResult, IntakeResult, TechStateResult } from "./schemas";
+import type { AssignmentResult, IntakeResult } from "./schemas";
 import type { CandidateScore, ScoreBreakdown, SkillTag, Tier } from "@/lib/types";
 import type { AgentContext } from "./context";
 
@@ -44,7 +54,6 @@ export interface AssignmentInput {
   scheduledTime: string;
   /** Booking creation time — feeds the SLA-headroom component. */
   jobCreatedAt?: string;
-  techState: TechStateResult;
 }
 
 export function runAssignmentAgent(
@@ -61,30 +70,32 @@ export function runAssignmentAgent(
     tier: input.tier,
   };
 
+  const roster = ctx.technicians;
+
   // Score the eligible pool in one pass (min-max normalises travel +
   // availability across the survivors). Then walk the full roster to attach
   // a rejection reason to everyone who didn't make the pool, for the feed.
   const pool = scorePool(
     ctx,
-    input.techState.candidates.map((c) => c.technician_id),
+    roster.map((t) => t.technician_id),
     common,
   );
   const breakdownById = new Map(pool.map((p) => [p.technician_id, p.breakdown]));
 
-  const candidates: CandidateScore[] = input.techState.candidates.map((c) => {
-    const bd = breakdownById.get(c.technician_id);
+  const candidates: CandidateScore[] = roster.map((t) => {
+    const bd = breakdownById.get(t.technician_id);
     if (bd) {
       return {
-        technician_id: c.technician_id,
-        technician_name: c.name,
+        technician_id: t.technician_id,
+        technician_name: t.name,
         eligible: true,
         reject_reason: null,
         breakdown: bd,
       };
     }
     return reject(
-      { technician_id: c.technician_id, name: c.name },
-      rejectionReason(ctx, input, c.technician_id),
+      { technician_id: t.technician_id, name: t.name },
+      rejectionReason(ctx, input, t.technician_id),
     );
   });
 
@@ -141,7 +152,7 @@ export function runAssignmentAgent(
       tier: input.tier,
       urgency: input.urgencyHint,
       policy: policySnapshot(ctx, input.tier),
-      candidate_pool: input.techState.candidates.length,
+      roster_size: roster.length,
     },
     output: {
       assigned_technician_id: assignedId,
@@ -155,6 +166,7 @@ export function runAssignmentAgent(
     candidates,
     requiresApproval: !assignedId,
     guardrailNotes: [
+      "Reads the technician roster from context — least-privilege by construction: location and workload only, never a technician's phone or home address.",
       "Four hard constraints filter the pool before scoring: certification, working hours, no double-booking, and route feasibility (can reach the job from the previous stop in time). Technicians that fail are removed, not penalised.",
       "Scoring: travel + skill-fit + availability + SLA-headroom + load-balance, each normalised to [0,1]; travel and availability are ranked within the candidate pool so they always separate candidates. Weights are the tier's dispatch policy and sum to 1, so the score is itself in [0,1].",
       result.needs_llm_edgecase

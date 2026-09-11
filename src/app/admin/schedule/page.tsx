@@ -18,7 +18,7 @@ import { fmtSGDateTime, fmtSGTime, sgHour } from "@/lib/time";
 const DAY_START = 7;
 const DAY_END = 20;
 const HOURS = Array.from({ length: DAY_END - DAY_START }, (_, i) => DAY_START + i);
-const AVATAR_COLORS = ["#2563eb", "#e07a1f", "#7c3aed", "#16a34a", "#d0342c", "#0891b2"];
+const AVATAR_COLORS = ["#4f46e5", "#b07830", "#6d4fd6", "#45825a", "#b2483f", "#2f7d8c"];
 const WEEK_SPAN = 7; // days shown in the week strip / week matrix
 
 /** Singapore-local hour-of-day as a decimal (e.g. 14.5 = 14:30), for smooth positioning. */
@@ -1164,7 +1164,7 @@ function DayGantt({
                   <div className="faint" style={{ fontSize: 10 }}>
                     {isFree
                       ? "free all day"
-                      : `${dayJobs.length} job${dayJobs.length === 1 ? "" : "s"} · load ${t.current_workload}`}
+                      : `${dayJobs.length} job${dayJobs.length === 1 ? "" : "s"} this day`}
                   </div>
                 </div>
               </div>
