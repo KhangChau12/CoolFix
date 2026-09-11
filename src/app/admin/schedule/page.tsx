@@ -599,18 +599,19 @@ function PinnedJobModal({
                 style={{ gap: 6, alignItems: "baseline", marginBottom: 8 }}
               >
                 <strong className="mono" style={{ fontSize: 20 }}>
-                  {sb.total}
+                  {Math.round(sb.total * 100)}%
                 </strong>
                 <span className="faint" style={{ fontSize: 11 }}>
-                  weighted total
+                  match score
                 </span>
               </div>
               <div style={{ display: "grid", gap: 5 }}>
                 {[
-                  ["Distance", sb.distance],
-                  ["Skill match", sb.skill_match],
-                  ["Urgency", sb.urgency],
-                  ["Workload", sb.workload],
+                  ["Travel fit", sb.travel],
+                  ["Skill fit", sb.skill_fit],
+                  ["Availability", sb.availability],
+                  ["SLA headroom", sb.sla_headroom],
+                  ["Load balance", sb.load_balance],
                 ].map(([label, val]) => {
                   const v = val as number;
                   const pct = Math.max(2, Math.min(100, (v / Math.max(sb.total, 0.001)) * 100));
@@ -638,12 +639,19 @@ function PinnedJobModal({
                         />
                       </span>
                       <span className="mono faint" style={{ width: 36, textAlign: "right" }}>
-                        {v}
+                        {v.toFixed(2)}
                       </span>
                     </div>
                   );
                 })}
               </div>
+              {sb.raw && (
+                <div className="faint" style={{ fontSize: 10, marginTop: 7 }}>
+                  +{sb.raw.detour_min} min detour · {sb.raw.util_pct}% of shift used
+                  {sb.raw.hours_to_deadline != null &&
+                    ` · ${sb.raw.hours_to_deadline}h to SLA deadline`}
+                </div>
+              )}
             </div>
           )}
 

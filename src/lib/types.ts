@@ -141,7 +141,14 @@ export interface Technician {
   experience_level: "junior" | "senior";
   location: GeoPoint;
   working_hours: { start: string; end: string }; // "HH:mm"
-  current_workload: number; // jobs assigned today; feeds scoring
+  /**
+   * Head-count of jobs assigned today. Kept for the roster UI and as a
+   * cheap fallback, but the Assignment Agent no longer scores off this
+   * directly — it computes an hours-based utilisation from the live job
+   * list instead (a 45-min clean and a 3-hour chiller job are not the same
+   * "1"). See `ESTIMATED_DURATION_MIN` and `src/agents/scoring.ts`.
+   */
+  current_workload: number;
   phone: string; // extension: notification target
 }
 
@@ -153,12 +160,39 @@ export type JobStatus =
   | "completed"
   | "disrupted";
 
+/**
+ * The Assignment Agent's score, component by component. Every component is
+ * normalised to [0, 1] (1 = ideal for this job, 0 = worst in the candidate
+ * pool) and the fields below are already multiplied by that tier's policy
+ * weight, so they sum to `total` and `total` itself is in [0, 1] — a score
+ * you can read as "how good a match is this technician for this job".
+ *
+ * This replaces the older additive `w1·(1/dist) + w2·skill + …` formula,
+ * where the terms had different units and scales so skill and urgency were
+ * effectively constant offsets that never separated one candidate from
+ * another. See `src/agents/scoring.ts` and `DISPATCH_POLICY`.
+ */
 export interface ScoreBreakdown {
-  distance: number;
-  skill_match: number;
-  urgency: number;
-  workload: number;
+  /** Marginal detour this job adds to the technician's route today. */
+  travel: number;
+  /** Certification + right seniority for the job's complexity, minus a
+   *  small penalty for sending an over-qualified technician to easy work. */
+  skill_fit: number;
+  /** Hours left in the technician's shift after taking this job. */
+  availability: number;
+  /** How close the job is to its SLA deadline (0 if this technician would
+   *  make it miss the deadline). */
+  sla_headroom: number;
+  /** Pulls work toward technicians who are below the fleet's median load. */
+  load_balance: number;
+  /** Sum of the five weighted components, in [0, 1]. */
   total: number;
+  /** Raw inputs behind the components, for the feed / tooltips. Not scored. */
+  raw?: {
+    detour_min: number;
+    util_pct: number;
+    hours_to_deadline: number | null;
+  };
 }
 
 export interface Job {
@@ -348,7 +382,15 @@ export interface NotificationRecord {
 
 export interface RuntimeConfig {
   freezeWindowHours: number;
-  scoreWeights: { w1: number; w2: number; w3: number; w4: number };
+  /**
+   * How the Assignment Agent weighs the five scoring components, per tier.
+   * Each tier's five weights should sum to 1 (the config API normalises them
+   * if they don't). This is where a coordinator expresses dispatch policy:
+   * "urgent = speed + the right person", "flexible = spread the work and
+   * keep costs even". Replaces the old flat `scoreWeights` — see
+   * `DISPATCH_POLICY` for the shipped defaults and `src/agents/scoring.ts`.
+   */
+  dispatchPolicy: Record<Tier, Record<ScoreComponent, number>>;
   /** Disruption auto-commit threshold: max customers affected. */
   hitlMaxCustomersAffected: number;
   /** Disruption auto-commit threshold: max added travel km. */
@@ -360,6 +402,93 @@ export interface RuntimeConfig {
   /** Base price (SGD) per required skill. */
   basePrice: Record<SkillTag, number>;
   llmMode: "stub" | "gateway" | "openai";
+}
+
+// ── Assignment scoring ────────────────────────────────────────────
+// The five components the Assignment Agent scores a technician on. Each is
+// a pure function returning [0, 1] (see src/agents/scoring.ts); the tier's
+// DISPATCH_POLICY weights decide how much each one counts.
+
+export type ScoreComponent =
+  | "travel"
+  | "skillFit"
+  | "availability"
+  | "slaHeadroom"
+  | "loadBalance";
+
+export const SCORE_COMPONENTS: ScoreComponent[] = [
+  "travel",
+  "skillFit",
+  "availability",
+  "slaHeadroom",
+  "loadBalance",
+];
+
+export const SCORE_COMPONENT_LABEL: Record<ScoreComponent, string> = {
+  travel: "Travel fit",
+  skillFit: "Skill fit",
+  availability: "Availability",
+  slaHeadroom: "SLA headroom",
+  loadBalance: "Load balance",
+};
+
+/**
+ * Default dispatch policy per tier. Each row sums to 1.0. Read it as the
+ * business rule it is:
+ *   • urgent   — get there fast, with the right person; deadline pressure
+ *                matters; don't spend effort balancing the day.
+ *   • priority — still lean on speed and skill, but start balancing load.
+ *   • standard — travel still counts, but an even, sustainable day matters
+ *                as much.
+ *   • flexible — the customer has weeks of slack; spread the work to
+ *                whoever is under-loaded and keep routes tight.
+ */
+export const DISPATCH_POLICY: Record<Tier, Record<ScoreComponent, number>> = {
+  urgent: { travel: 0.42, skillFit: 0.28, availability: 0.12, slaHeadroom: 0.18, loadBalance: 0.0 },
+  priority: { travel: 0.34, skillFit: 0.26, availability: 0.15, slaHeadroom: 0.12, loadBalance: 0.13 },
+  standard: { travel: 0.28, skillFit: 0.22, availability: 0.17, slaHeadroom: 0.05, loadBalance: 0.28 },
+  flexible: { travel: 0.22, skillFit: 0.18, availability: 0.18, slaHeadroom: 0.02, loadBalance: 0.4 },
+};
+
+/**
+ * Estimated on-site duration per skill (minutes). Used by the scoring pass
+ * (availability / load-balance from real hours, not a job head-count) and
+ * by the route-feasibility hard constraint (can the technician get from
+ * their previous job to this one before it starts?). A job needing several
+ * skills takes the longest of them, plus a small buffer per extra skill.
+ */
+export const ESTIMATED_DURATION_MIN: Record<SkillTag, number> = {
+  basic_maintenance: 60,
+  refrigerant_handling: 90,
+  electrical_work: 120,
+  commercial_chiller: 180,
+};
+
+/** Minutes added per required skill beyond the first (a multi-skill visit
+ *  runs longer than the single longest task). */
+export const MULTI_SKILL_BUFFER_MIN = 30;
+
+/** Estimated on-site minutes for a job needing `skills`. */
+export function estimatedJobMinutes(skills: SkillTag[]): number {
+  if (skills.length === 0) return ESTIMATED_DURATION_MIN.basic_maintenance;
+  const longest = Math.max(...skills.map((s) => ESTIMATED_DURATION_MIN[s]));
+  return longest + Math.max(0, skills.length - 1) * MULTI_SKILL_BUFFER_MIN;
+}
+
+/**
+ * Is a job "complex" — one where sending a senior technician genuinely
+ * matters (chiller plant, a multi-skill visit, or a high-urgency call where
+ * a wrong diagnosis is expensive)? Drives the `skillFit` seniority term.
+ */
+export function jobIsComplex(
+  skills: SkillTag[],
+  urgencyHint: "low" | "medium" | "high",
+): boolean {
+  return (
+    skills.includes("commercial_chiller") ||
+    skills.length >= 2 ||
+    urgencyHint === "high"
+  );
 }
 
 /**
@@ -384,7 +513,7 @@ export const AUTO_REPLAN_LIMITS = {
 
 export const DEFAULT_CONFIG: RuntimeConfig = {
   freezeWindowHours: 2,
-  scoreWeights: { w1: 1.0, w2: 2.0, w3: 1.5, w4: 1.0 },
+  dispatchPolicy: DISPATCH_POLICY,
   // 1 = a re-plan that moves ONE customer's appointment may auto-commit —
   // but only if it also clears every rail in AUTO_REPLAN_LIMITS (Flexible
   // tier only, same-day, <=3h shift, >=2h gap, no SLA breach, not already

@@ -73,6 +73,42 @@ async function goldenCleanAssignment() {
     JSON.stringify(r.job.skill_required),
   );
   check("score breakdown present", !!r.job.score_breakdown);
+  const sb = r.job.score_breakdown;
+  if (sb) {
+    check(
+      "match score is a normalised [0,1] value",
+      sb.total >= 0 && sb.total <= 1,
+      `total=${sb.total}`,
+    );
+    check(
+      "all five scoring components present and in [0,1]",
+      [sb.travel, sb.skill_fit, sb.availability, sb.sla_headroom, sb.load_balance].every(
+        (v) => typeof v === "number" && v >= 0 && v <= 1,
+      ),
+      JSON.stringify(sb),
+    );
+    check(
+      "components sum to the total (weighted-sum invariant)",
+      Math.abs(
+        sb.travel + sb.skill_fit + sb.availability + sb.sla_headroom + sb.load_balance - sb.total,
+      ) < 0.01,
+      `Σ vs total: ${sb.total}`,
+    );
+  }
+  // The Assignment Agent row must show more than one eligible candidate
+  // being separated by the score — i.e. scoring actually discriminates,
+  // it isn't a near-constant.
+  const alog = await repo.listDecisions(30);
+  const arow = alog.find((d) => d.agent_name === "AssignmentAgent");
+  const scored = (arow?.candidates ?? []).filter((c) => c.eligible && c.breakdown);
+  if (scored.length >= 2) {
+    const totals = scored.map((c) => c.breakdown!.total);
+    check(
+      "scoring separates candidates (pool has score spread)",
+      Math.max(...totals) - Math.min(...totals) > 0.001,
+      `totals=${JSON.stringify(totals)}`,
+    );
+  }
   check("scheduled inside service hours", withinHours(r.job.scheduled_time));
   check("technician + customer notified", r.notificationsSent >= 2, `${r.notificationsSent}`);
   check("exactly 1 LLM call for intake path", r.llmCalls >= 1);

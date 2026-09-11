@@ -21,6 +21,51 @@ function toRad(deg: number): number {
   return (deg * Math.PI) / 180;
 }
 
+// ── Drive-time estimate ─────────────────────────────────────────────
+// The scoring pass and the route-feasibility check need "how long to drive
+// from A to B", not straight-line km. There is no maps API (offline-safe,
+// zero per-call cost), so this is a deterministic estimate: great-circle
+// distance × an urban-road factor × a peak-hour multiplier. Singapore is
+// small and dense; ~2.4 road-minutes per straight-line km is a reasonable
+// blended figure for the CBD + expressway mix. Drop in a real routing
+// service here later without touching any caller.
+
+/** Blended road minutes per great-circle km for Singapore. */
+export const ROAD_MIN_PER_KM = 2.4;
+/** Fixed park/find-unit overhead added to every leg (minutes). */
+export const TRIP_OVERHEAD_MIN = 6;
+
+/** Peak-hour multiplier on drive time for a Singapore-local hour (0-23). */
+export function peakFactor(sgHourOfDay: number): number {
+  const morning = sgHourOfDay >= 7 && sgHourOfDay < 10;
+  const evening = sgHourOfDay >= 17 && sgHourOfDay < 20;
+  return morning || evening ? 1.5 : 1.0;
+}
+
+/**
+ * Estimated driving minutes from `a` to `b`, leaving around `atISO` (used
+ * only to pick the peak-hour multiplier — pass the departure time). Always
+ * ≥ TRIP_OVERHEAD_MIN so two points at the same address still cost the
+ * park-and-walk overhead.
+ */
+export function estimateDriveMinutes(
+  a: GeoPoint,
+  b: GeoPoint,
+  atISO?: string,
+): number {
+  const km = distanceKm(a, b);
+  let hour = 12;
+  if (atISO) {
+    // Asia/Singapore is UTC+8, no DST — cheap local hour without Intl here
+    // (this file is imported by isomorphic test scripts).
+    hour = new Date(new Date(atISO).getTime() + 8 * 3600_000).getUTCHours();
+  }
+  return (
+    Math.round((TRIP_OVERHEAD_MIN + km * ROAD_MIN_PER_KM * peakFactor(hour)) * 10) /
+    10
+  );
+}
+
 /** A few Singapore anchor points for the seed data. */
 export const SG_LANDMARKS = {
   cityHall: { lat: 1.2931, lng: 103.8520 },

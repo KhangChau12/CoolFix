@@ -505,32 +505,39 @@ export function AgentFeed({ limit = 60 }: { limit?: number }) {
 
 function ScoreBars({ b, color }: { b: NonNullable<AgentDecisionLog["score_breakdown"]>; color: string }) {
   const parts: [string, number][] = [
-    ["distance", b.distance],
-    ["skill match", b.skill_match],
-    ["urgency", b.urgency],
-    ["workload", b.workload],
+    ["travel fit", b.travel],
+    ["skill fit", b.skill_fit],
+    ["availability", b.availability],
+    ["SLA headroom", b.sla_headroom],
+    ["load balance", b.load_balance],
   ];
-  const max = Math.max(...parts.map((p) => p[1]), 0.001);
+  const total = b.total || 0.001;
   return (
     <div>
       <div style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--ink-text-faint)", marginBottom: 10 }}>
-        score = w1·(1/distance) + w2·skill_match + w3·urgency + w4·(1/workload)
+        match = Σ policy[tier][k] · component[k] &nbsp;·&nbsp; each component ∈ [0,1], weights sum to 1
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
         {parts.map(([label, v]) => (
           <div key={label} style={{ display: "grid", gridTemplateColumns: "88px minmax(0,1fr) 60px", alignItems: "center", gap: 10 }}>
             <div style={{ fontSize: 11.5, color: "var(--ink-text-muted)" }}>{label}</div>
             <div style={{ height: 7, background: "var(--ink-border)", borderRadius: 4, overflow: "hidden" }}>
-              <div style={{ height: "100%", width: `${(v / max) * 100}%`, background: color, borderRadius: 4 }} />
+              <div style={{ height: "100%", width: `${(v / total) * 100}%`, background: color, borderRadius: 4 }} />
             </div>
-            <div style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--ink-text)", textAlign: "right" }}>{v}</div>
+            <div style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--ink-text)", textAlign: "right" }}>{v.toFixed(2)}</div>
           </div>
         ))}
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12, paddingTop: 10, borderTop: "1px dashed var(--ink-border)", fontFamily: "var(--mono)" }}>
-        <span style={{ fontSize: 11, color: "var(--ink-text-faint)" }}>weighted score</span>
-        <span style={{ fontSize: 16, fontWeight: 600, color: "var(--ink-text)" }}>{b.total}</span>
+        <span style={{ fontSize: 11, color: "var(--ink-text-faint)" }}>match score</span>
+        <span style={{ fontSize: 16, fontWeight: 600, color: "var(--ink-text)" }}>{Math.round(b.total * 100)}%</span>
       </div>
+      {b.raw && (
+        <div style={{ marginTop: 8, fontSize: 10.5, color: "var(--ink-text-faint)" }}>
+          +{b.raw.detour_min} min detour · {b.raw.util_pct}% of shift used
+          {b.raw.hours_to_deadline != null && ` · ${b.raw.hours_to_deadline}h to SLA deadline`}
+        </div>
+      )}
     </div>
   );
 }

@@ -57,6 +57,22 @@ export function sgHour(iso: string): number {
   );
 }
 
+/** Singapore-local calendar day key ("YYYY-MM-DD") for an instant. Used to
+ *  group a technician's jobs into "today" for the scoring pass. */
+export function sgDayKey(iso: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: SG_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(iso));
+}
+
+/** Do two instants fall on the same Singapore-local calendar day? */
+export function sameSgDay(aISO: string, bISO: string): boolean {
+  return sgDayKey(aISO) === sgDayKey(bISO);
+}
+
 /**
  * The wider window the disruption / edge-case slot search may place a job
  * in. It is deliberately larger than the customer-facing default

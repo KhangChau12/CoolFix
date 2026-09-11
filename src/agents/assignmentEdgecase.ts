@@ -32,7 +32,7 @@ import { logDecision } from "./log";
 import { scoreOneTech } from "./assignment";
 import { validateEdgecaseChoice } from "./schemas";
 import type { IntakeResult } from "./schemas";
-import type { ScoreBreakdown, SkillTag } from "@/lib/types";
+import type { ScoreBreakdown, SkillTag, Tier } from "@/lib/types";
 import type { AgentContext } from "./context";
 
 const SLOT_OFFSETS_HOURS = [-3, -2, -1, 1, 2, 3, 4, 5, 24, 25, 26];
@@ -101,6 +101,9 @@ export interface EdgecaseInput {
   skillRequired: SkillTag[];
   urgencyHint: IntakeResult["urgency_hint"];
   scheduledTime: string;
+  tier: Tier;
+  /** Booking creation time — feeds the SLA-headroom scoring component. */
+  jobCreatedAt?: string;
 }
 
 export interface EdgecaseDecision {
@@ -186,6 +189,8 @@ export function buildEdgecaseSpace(
         urgencyHint: input.urgencyHint,
         scheduledTime: slot,
         ignoreJobId: input.jobId,
+        jobCreatedAt: input.jobCreatedAt,
+        tier: input.tier,
       });
       if (!bd) continue;
       widen.push({
@@ -314,6 +319,8 @@ export async function runAssignmentEdgecaseAgent(
           urgencyHint: input.urgencyHint,
           scheduledTime: choice.chosen_slot_iso,
           ignoreJobId: input.jobId,
+          jobCreatedAt: input.jobCreatedAt,
+          tier: input.tier,
         });
         if (bd) {
           action = "widen_window";

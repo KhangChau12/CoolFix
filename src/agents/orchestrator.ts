@@ -237,6 +237,7 @@ async function runBookingPipelineUnsafe(
     tier: booking.tier,
     urgencyHint: intake.urgency_hint,
     scheduledTime,
+    jobCreatedAt: now,
     techState,
   });
 
@@ -273,6 +274,7 @@ async function runBookingPipelineUnsafe(
           tier: booking.tier,
           urgencyHint: intake.urgency_hint,
           scheduledTime,
+          jobCreatedAt: now,
         },
         trigger,
         formulaTopId: assignment.assigned_technician_id,
@@ -295,6 +297,8 @@ async function runBookingPipelineUnsafe(
         skillRequired: intake.skill_required,
         urgencyHint: intake.urgency_hint,
         scheduledTime,
+        tier: booking.tier,
+        jobCreatedAt: now,
       };
       const space = buildEdgecaseSpace(ctx, edgeInput);
       const edge = await runAssignmentEdgecaseAgent(ctx, { input: edgeInput, space });

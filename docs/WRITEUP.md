@@ -40,7 +40,9 @@ Capacity/Yield Agent ..... rule      daily fleet thresholds + per-skill saturati
    ▼
 Technician-State Agent ... rule      roster + location + load (state store, least-privilege)
    ▼
-Assignment/Scoring Agent . rule      transparent formula; skill match = HARD filter
+Assignment/Scoring Agent . rule      4 hard filters (certification, working hours, no clash,
+   │                                 route feasibility) then a 5-component weighted score,
+   │                                 each component ∈ [0,1], per-tier policy weights → match ∈ [0,1]
    ▼
 Assignment Tie-break ..... LLM       ambiguity-only: close scores / one strained candidate /
    │                                 urgent with no strong fit. Picks within the eligible
@@ -73,8 +75,40 @@ decision-log row and every job write, and flushes them in a deterministic
 order at the end. The reasoning loop's state is explicit and inspectable, not
 smeared across ad-hoc queries.
 
+**How a technician is chosen (`src/agents/scoring.ts`).** For each booking the
+Assignment Agent first removes anyone who fails a hard constraint — wrong
+certification, off-shift, already booked within ±90 min, or physically unable
+to reach the job from their previous stop in time — then scores everyone left
+on five components, each a pure function returning `[0, 1]`:
+
+- **travel** — the *marginal* driving minutes this job adds to the
+  technician's route today (the detour between the job before it and the job
+  after it), not the straight-line distance from a depot. A job on the way
+  costs almost nothing; a job that doubles back costs a wasted hour.
+- **skillFit** — certification is already a hard filter, so this scores the
+  right *seniority for the job's complexity* (a chiller plant wants a senior;
+  routine servicing does not), minus a small penalty for over-qualification.
+- **availability** — hours left in the technician's shift after this job, from
+  real per-skill duration estimates — a 45-minute clean and a 3-hour chiller
+  job are not the same "one job".
+- **slaHeadroom** — how close the job is to its tier deadline; and `0` for any
+  technician whose schedule would make it miss that deadline.
+- **loadBalance** — pulls work toward technicians below the fleet's median
+  utilisation for the day.
+
+`travel` and `availability` are min-max ranked *within the candidate pool for
+that job*, so they always separate candidates — the old additive formula
+(`w1·(1/dist) + w2·skill + w3·urgency + w4·(1/workload)`) had terms on
+different scales, so skill and urgency were near-constant offsets that never
+changed who got picked. The final score is
+`Σ policy[tier][k] · component_k`, where each tier's five policy weights sum
+to 1 — so the score is itself in `[0, 1]` and reads as a match percentage.
+**The per-tier policy is the business lever**: urgent leans on travel, skill
+and deadline; flexible leans on load balance. It is editable in Settings, with
+the formula and a plain-language rationale for each component shown alongside.
+
 **Why some agents are not LLMs — a deliberate decision.** Pricing, capacity,
-technician-state and the core scoring formula are pure rules / bookkeeping.
+technician-state and the scoring engine above are pure rules / bookkeeping.
 Putting an LLM there would add latency, cost, and non-determinism for zero
 benefit, and would make the system *less* trustworthy. LLMs are used only
 where genuine judgement is needed — and even then, the rule layer bounds
@@ -86,7 +120,7 @@ what the LLM can choose from and re-checks what it picked:
 | Pricing | no | `base_price[skill] × tier_multiplier` — must be exact and free |
 | Capacity | no | fleet threshold + per-skill saturation, both deterministic |
 | Technician-State | no | a database query |
-| Assignment/Scoring | no | the formula is transparent and auditable by design |
+| Assignment/Scoring | no | a transparent weighted-sum of five components, each ∈ [0,1], with per-tier policy weights — auditable by design and reproducible |
 | Assignment Tie-break | **yes**, ambiguity-only | runs only when the formula is a coin-flip; picks within the eligible top-3, and the pick is re-scored against live state before commit — it can re-order the eligible set, never reach past it |
 | Assignment Edge-case | **yes**, no-candidate-only | picks one pre-validated lever (widen window / split visit / supervised pair / escalate) |
 | Disruption | **yes** | designs the re-plan inside a pre-verified legal slot space; every move is cross-checked and the plan re-simulated against live state |

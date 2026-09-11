@@ -5,7 +5,7 @@
 // `validate*` guard that agents call on their inputs — this is the
 // "typed schema at every boundary" the rubric asks for.
 
-import type { GeoPoint, SkillTag, Tier } from "@/lib/types";
+import type { GeoPoint, ScoreBreakdown, SkillTag, Tier } from "@/lib/types";
 import { SKILL_TAGS, TIERS } from "@/lib/types";
 import { isWithinSG } from "@/lib/geo";
 
@@ -139,25 +139,13 @@ export interface TechStateResult {
 
 export interface AssignmentResult {
   assigned_technician_id: string | null;
-  score_breakdown: {
-    distance: number;
-    skill_match: number;
-    urgency: number;
-    workload: number;
-    total: number;
-  } | null;
+  score_breakdown: ScoreBreakdown | null;
   candidates: {
     technician_id: string;
     technician_name: string;
     eligible: boolean;
     reject_reason: string | null;
-    breakdown: {
-      distance: number;
-      skill_match: number;
-      urgency: number;
-      workload: number;
-      total: number;
-    } | null;
+    breakdown: ScoreBreakdown | null;
   }[];
   conflict: null | {
     bumped_job_id: string;

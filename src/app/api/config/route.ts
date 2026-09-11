@@ -3,7 +3,8 @@
 
 import { NextResponse } from "next/server";
 import * as repo from "@/lib/repo";
-import type { RuntimeConfig } from "@/lib/types";
+import type { RuntimeConfig, ScoreComponent, Tier } from "@/lib/types";
+import { DISPATCH_POLICY, SCORE_COMPONENTS, TIERS } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -24,13 +25,26 @@ export async function PATCH(req: Request) {
   const patch: Partial<RuntimeConfig> = {};
   if (typeof b.freezeWindowHours === "number")
     patch.freezeWindowHours = clamp(b.freezeWindowHours, 0.5, 24);
-  if (b.scoreWeights) {
-    patch.scoreWeights = {
-      w1: clamp(Number(b.scoreWeights.w1), 0, 10),
-      w2: clamp(Number(b.scoreWeights.w2), 0, 10),
-      w3: clamp(Number(b.scoreWeights.w3), 0, 10),
-      w4: clamp(Number(b.scoreWeights.w4), 0, 10),
-    };
+  if (b.dispatchPolicy) {
+    // Per-tier scoring policy: clamp every weight to [0,1] and normalise
+    // each tier's row to sum to 1, so `total` stays a readable [0,1] score.
+    // A missing/garbled tier row falls back to the shipped default.
+    const src = b.dispatchPolicy as Partial<
+      Record<Tier, Partial<Record<ScoreComponent, number>>>
+    >;
+    const out = {} as RuntimeConfig["dispatchPolicy"];
+    for (const tier of TIERS) {
+      const row = src[tier];
+      const raw = SCORE_COMPONENTS.map((k) =>
+        clamp(Number(row?.[k] ?? DISPATCH_POLICY[tier][k]), 0, 1),
+      );
+      const sum = raw.reduce((s, v) => s + v, 0) || 1;
+      out[tier] = SCORE_COMPONENTS.reduce(
+        (acc, k, i) => ({ ...acc, [k]: round3(raw[i] / sum) }),
+        {} as Record<ScoreComponent, number>,
+      );
+    }
+    patch.dispatchPolicy = out;
   }
   if (typeof b.hitlMaxCustomersAffected === "number")
     patch.hitlMaxCustomersAffected = clamp(b.hitlMaxCustomersAffected, 0, 20);
@@ -51,4 +65,8 @@ export async function PATCH(req: Request) {
 function clamp(n: number, lo: number, hi: number): number {
   if (Number.isNaN(n)) return lo;
   return Math.min(Math.max(n, lo), hi);
+}
+
+function round3(n: number): number {
+  return Math.round(n * 1000) / 1000;
 }

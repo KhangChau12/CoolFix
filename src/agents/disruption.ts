@@ -44,6 +44,7 @@ import {
   isFrozen,
   isWithinWorkingHours,
   nowISO,
+  sameSgDay,
   snapToServiceHours,
 } from "@/lib/time";
 import { logDecision } from "./log";
@@ -825,18 +826,6 @@ export function replanQualifiesForAutoCommit(
   }
 
   return { ok: reasons.length === 0, reasons };
-}
-
-/** Same Singapore-local calendar day? */
-function sameSgDay(aISO: string, bISO: string): boolean {
-  const day = (iso: string) =>
-    new Intl.DateTimeFormat("en-CA", {
-      timeZone: "Asia/Singapore",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).format(new Date(iso));
-  return day(aISO) === day(bISO);
 }
 
 // ── Deterministic candidate search (rule-based, no LLM) ───────────────

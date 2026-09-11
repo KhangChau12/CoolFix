@@ -9,7 +9,7 @@ import {
   snapToServiceHours,
   snapToUrgentDispatchSlot,
 } from "@/lib/time";
-import { DEFAULT_CONFIG, SKILL_CERT, TIER_META } from "@/lib/types";
+import { DEFAULT_CONFIG, DISPATCH_POLICY, SKILL_CERT, TIER_META } from "@/lib/types";
 
 /**
  * The slot a new URGENT booking lands in — MUST match the orchestrator's
@@ -468,19 +468,29 @@ function basePriceFor(skills: Job["skill_required"]): number {
 }
 
 function demoBreakdown(id: string) {
-  // Deterministic pseudo-breakdowns for pre-assigned seed jobs so the
-  // Gantt tooltips and feed have data before any agent runs.
+  // Deterministic pseudo-breakdowns for pre-assigned seed jobs so the Gantt
+  // tooltips and feed have data before any agent runs. Same shape a live
+  // score has (five weighted components in [0,1] that sum to `total`); the
+  // numbers are synthetic but plausible — a decent-but-not-perfect match.
   const seed = [...id].reduce((a, c) => a + c.charCodeAt(0), 0);
-  const distance = Math.round((0.3 + (seed % 7) * 0.12) * 100) / 100;
-  const skill_match = 2;
-  const urgency = Math.round((0.8 + (seed % 5) * 0.2) * 100) / 100;
-  const workload = Math.round((0.25 + (seed % 3) * 0.1) * 100) / 100;
+  const r3 = (n: number) => Math.round(n * 1000) / 1000;
+  const travel = r3(0.14 + (seed % 7) * 0.02);
+  const skill_fit = r3(0.16 + (seed % 3) * 0.02);
+  const availability = r3(0.09 + (seed % 5) * 0.015);
+  const sla_headroom = r3(0.02 + (seed % 4) * 0.01);
+  const load_balance = r3(0.05 + (seed % 6) * 0.015);
   return {
-    distance,
-    skill_match,
-    urgency,
-    workload,
-    total: Math.round((distance + skill_match + urgency + workload) * 100) / 100,
+    travel,
+    skill_fit,
+    availability,
+    sla_headroom,
+    load_balance,
+    total: r3(travel + skill_fit + availability + sla_headroom + load_balance),
+    raw: {
+      detour_min: 4 + (seed % 9),
+      util_pct: 30 + (seed % 5) * 8,
+      hours_to_deadline: 24 + (seed % 6) * 12,
+    },
   };
 }
 
@@ -502,8 +512,6 @@ function demoBreakdown(id: string) {
 // timestamp, then by the base36 counter in the log_id tail — both
 // ascending here, one row ~30s after the previous, the whole trail
 // finishing a few minutes after the job's created_at.
-
-const URGENCY_WEIGHT: Record<string, number> = { low: 0.5, medium: 1.0, high: 2.0 };
 
 function urgencyHintFor(tier: Job["tier"]): "low" | "medium" | "high" {
   if (tier === "urgent") return "high";
@@ -622,17 +630,17 @@ export function seedAgentActivity(
           skill_required: job.skill_required,
           required_certification: certs,
           tier,
-          urgency_weight: URGENCY_WEIGHT[urgency],
+          policy: DISPATCH_POLICY[tier],
         },
         output: {
           assigned_technician_id: job.assigned_technician_id,
           conflict: false,
         },
-        headline: `Assigned ${tName} — weighted score ${sb.total}`,
+        headline: `Assigned ${tName} — match ${Math.round(sb.total * 100)}%`,
         outcome: "auto_commit",
         score: sb,
         guardrails: [
-          "Skill match is a hard constraint — uncertified technicians removed before scoring, not penalised.",
+          "Four hard constraints filter the pool before scoring (certification, working hours, no double-booking, route feasibility); scoring is travel + skill-fit + availability + SLA-headroom + load-balance, each in [0,1], weighted by the tier's dispatch policy.",
         ],
       },
       {

@@ -29,7 +29,8 @@ import {
   type StationRuntime,
   type FlowStep,
 } from "@/lib/flowMap";
-import { ScoreBars, Candidates, ReplanOptions } from "./PipelineReplay";
+import { Candidates, ReplanOptions } from "./PipelineReplay";
+import { ScoreBars, ScoringExplainer } from "./scoring";
 import type { AgentDecisionLog, Job } from "@/lib/types";
 
 // ── layout — a 3-tier "Z" grid, no diagonal or overlapping routes ──
@@ -1126,6 +1127,14 @@ function RoleView({ station }: { station: StationId }) {
           ))}
         </ul>
       </div>
+      {station === "assign" && (
+        <div style={{ marginTop: 14, padding: "12px 0", borderTop: "1px solid var(--border)" }}>
+          <div className="mono faint" style={{ fontSize: 9.5, letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 8 }}>
+            How the score is computed
+          </div>
+          <ScoringExplainer compact />
+        </div>
+      )}
       <div style={{ marginTop: 12, padding: "10px 11px", borderRadius: 7, background: "var(--surface-2)", border: "1px solid var(--border)", fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5 }}>
         {b.guard}
       </div>

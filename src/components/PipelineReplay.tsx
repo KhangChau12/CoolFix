@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiGet } from "@/lib/client";
 import { useRealtime } from "./useRealtime";
+import { ScoreBars, ScoringExplainer } from "./scoring";
 import { fmtSGTime } from "@/lib/time";
 import type { AgentDecisionLog, AgentName } from "@/lib/types";
 
@@ -197,6 +198,26 @@ export function PipelineReplay({ jobId }: { jobId: string }) {
                       }}
                     >
                       {r.score_breakdown && <ScoreBars b={r.score_breakdown} color={m.color} />}
+                      {(r.agent_name === "AssignmentAgent" ||
+                        r.agent_name === "AssignmentTiebreakAgent") &&
+                        r.score_breakdown && (
+                          <details style={{ marginTop: 10 }}>
+                            <summary
+                              className="mono"
+                              style={{
+                                fontSize: 10.5,
+                                color: "var(--text-muted)",
+                                cursor: "pointer",
+                                letterSpacing: "0.02em",
+                              }}
+                            >
+                              How this score is computed — formula &amp; why each component matters
+                            </summary>
+                            <div style={{ marginTop: 10 }}>
+                              <ScoringExplainer />
+                            </div>
+                          </details>
+                        )}
                       {r.candidates && r.candidates.length > 0 && <Candidates rows={r.candidates} />}
                       {r.replan_options && r.replan_options.length > 0 && (
                         <ReplanOptions
@@ -258,49 +279,9 @@ export function PipelineReplay({ jobId }: { jobId: string }) {
 // one definition of what a score breakdown / candidate list / re-plan
 // option set looks like, everywhere it's shown.
 
-export function ScoreBars({
-  b,
-  color,
-}: {
-  b: NonNullable<AgentDecisionLog["score_breakdown"]>;
-  color: string;
-}) {
-  const parts: [string, number][] = [
-    ["distance", b.distance],
-    ["skill match", b.skill_match],
-    ["urgency", b.urgency],
-    ["workload", b.workload],
-  ];
-  const max = Math.max(...parts.map((p) => p[1]), 0.001);
-  return (
-    <div>
-      <div className="mono faint" style={{ fontSize: 10, marginBottom: 8 }}>
-        score = w1·(1/distance) + w2·skill_match + w3·urgency + w4·(1/workload)
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {parts.map(([label, v]) => (
-          <div
-            key={label}
-            style={{ display: "grid", gridTemplateColumns: "82px minmax(0,1fr) 52px", alignItems: "center", gap: 9 }}
-          >
-            <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{label}</div>
-            <div style={{ height: 6, background: "var(--surface-2)", borderRadius: 4, overflow: "hidden" }}>
-              <div style={{ height: "100%", width: `${(v / max) * 100}%`, background: color, borderRadius: 4 }} />
-            </div>
-            <div className="mono" style={{ fontSize: 10, textAlign: "right" }}>{v}</div>
-          </div>
-        ))}
-      </div>
-      <div
-        className="spread"
-        style={{ marginTop: 9, paddingTop: 8, borderTop: "1px dashed var(--border-strong)" }}
-      >
-        <span className="faint" style={{ fontSize: 11 }}>weighted score</span>
-        <span className="mono" style={{ fontSize: 15, fontWeight: 700 }}>{b.total}</span>
-      </div>
-    </div>
-  );
-}
+// ScoreBars / ScoringExplainer / SCORING_COMPONENTS live in ./scoring —
+// re-exported here so existing importers (AgentFlowMap) keep working.
+export { ScoreBars, ScoringExplainer, SCORING_COMPONENTS } from "./scoring";
 
 export function Candidates({ rows }: { rows: NonNullable<AgentDecisionLog["candidates"]> }) {
   return (

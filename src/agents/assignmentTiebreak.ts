@@ -41,8 +41,9 @@ const CLOSE_SCORE_FRACTION = 0.1;
 const STRAINED_WORKLOAD = 4;
 /** A lone eligible candidate this far away is "strained" (km). */
 const STRAINED_DISTANCE_KM = 15;
-/** An urgent job whose best score is below this has no strong fit. */
-const URGENT_WEAK_SCORE = 3.0;
+/** An urgent job whose best match score is below this (scores are 0-1 now)
+ *  has no strong fit — worth a second look before committing. */
+const URGENT_WEAK_SCORE = 0.45;
 /** A technician with a job within this many hours + km counts as "nearby". */
 const NEARBY_HOURS = 3;
 const NEARBY_KM = 4;
@@ -90,6 +91,8 @@ export interface TiebreakInput {
   tier: Tier;
   urgencyHint: IntakeResult["urgency_hint"];
   scheduledTime: string;
+  /** Booking creation time — feeds the SLA-headroom scoring component. */
+  jobCreatedAt?: string;
 }
 
 export interface TiebreakOutcome {
@@ -213,6 +216,8 @@ export async function runAssignmentTiebreakAgent(
         urgencyHint: input.urgencyHint,
         scheduledTime: input.scheduledTime,
         ignoreJobId: input.jobId,
+        jobCreatedAt: input.jobCreatedAt,
+        tier: input.tier,
       });
       return {
         technician_id: t.technician_id,
@@ -273,6 +278,8 @@ export async function runAssignmentTiebreakAgent(
           urgencyHint: input.urgencyHint,
           scheduledTime: input.scheduledTime,
           ignoreJobId: input.jobId,
+          jobCreatedAt: input.jobCreatedAt,
+          tier: input.tier,
         });
         if (bd) {
           chosenId = choice.chosen_technician_id;
@@ -305,9 +312,18 @@ export async function runAssignmentTiebreakAgent(
       urgencyHint: input.urgencyHint,
       scheduledTime: input.scheduledTime,
       ignoreJobId: input.jobId,
+      jobCreatedAt: input.jobCreatedAt,
+      tier: input.tier,
     }) ??
     // Should never happen — formulaTopId was eligible — but stay safe.
-    ({ distance: 0, skill_match: 0, urgency: 0, workload: 0, total: 0 } as ScoreBreakdown);
+    ({
+      travel: 0,
+      skill_fit: 0,
+      availability: 0,
+      sla_headroom: 0,
+      load_balance: 0,
+      total: 0,
+    } as ScoreBreakdown);
 
   if (!rationale) {
     rationale = overrode

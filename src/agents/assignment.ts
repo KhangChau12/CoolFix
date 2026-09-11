@@ -1,14 +1,22 @@
 // ── Assignment / Scoring Agent ──────────────────────────────────────
-// Rule-based transparent scoring (CLAUDE.md §3.4). LLM is reserved for
-// genuine edge cases only (flagged, not called in the MVP happy path).
+// Rule-based transparent scoring. LLM is reserved for genuine edge cases
+// only (the tie-break and edge-case agents, wired in the orchestrator).
 //
-//   score = w1*(1/distance_km) + w2*skill_match_bonus
-//         + w3*urgency_weight  + w4*(1/current_workload)
+// The scoring maths lives in `scoring.ts` so the tie-break / edge-case
+// agents re-score candidates the exact same way. This module is the
+// pipeline entry point: it takes the technician-state roster, drops anyone
+// who fails a HARD CONSTRAINT, scores the rest as a pool, and picks the
+// top — or, for an urgent job with no free eligible technician, looks for a
+// lower-tier job to bump.
 //
-// The skill match is a HARD CONSTRAINT: a technician without a matching
-// skill_tag is dropped from candidacy entirely and never scored
-// (CLAUDE.md §3.3 — legal requirement, not a preference). Rejected
-// candidates are still returned so the feed shows *why*.
+// Hard constraints (a technician failing any of these is removed before
+// scoring and never gets a number — CLAUDE.md §3.3):
+//   1. skill match         — legal requirement, not a preference
+//   2. working hours        — the appointment is inside the technician's shift
+//   3. no double-booking    — no other job within ±90 min
+//   4. route feasibility    — can actually reach the job from the previous
+//                             stop on their route before it starts
+// Rejected candidates are still returned so the feed shows *why*.
 
 import { distanceKm } from "@/lib/geo";
 import {
@@ -19,58 +27,13 @@ import {
   nowISO,
 } from "@/lib/time";
 import { logDecision } from "./log";
+import { canReachInTime, scoreOneTech, scorePool } from "./scoring";
 import type { AssignmentResult, IntakeResult, TechStateResult } from "./schemas";
 import type { CandidateScore, ScoreBreakdown, SkillTag, Tier } from "@/lib/types";
 import type { AgentContext } from "./context";
 
-const URGENCY_WEIGHT: Record<IntakeResult["urgency_hint"], number> = {
-  low: 0.5,
-  medium: 1.0,
-  high: 2.0,
-};
-
-/**
- * Score one technician for a job using the transparent formula. Returns
- * null if the technician fails a hard constraint (skill, working hours,
- * schedule clash) at `scheduledTime`. Extracted so the Assignment Edge-case
- * Agent can re-use the exact same scoring when it evaluates alternative
- * slots — no second, drifting copy of the formula.
- */
-export function scoreOneTech(
-  ctx: AgentContext,
-  args: {
-    technicianId: string;
-    jobLocation: { lat: number; lng: number };
-    skillRequired: SkillTag[];
-    urgencyHint: IntakeResult["urgency_hint"];
-    scheduledTime: string;
-    ignoreJobId: string;
-  },
-): ScoreBreakdown | null {
-  const t = ctx.getTechnician(args.technicianId);
-  if (!t) return null;
-  const { w1, w2, w3, w4 } = ctx.config.scoreWeights;
-
-  if (!args.skillRequired.every((s) => t.skill_tags.includes(s))) return null;
-  if (!isWithinWorkingHours(t.working_hours, args.scheduledTime)) return null;
-  if (findTimeClash(ctx.jobs, t.technician_id, args.scheduledTime, args.ignoreJobId)) {
-    return null;
-  }
-
-  const dist = Math.max(distanceKm(t.location, args.jobLocation), 0.3);
-  const workload = Math.max(t.current_workload, 0.5);
-  const bd: ScoreBreakdown = {
-    distance: round(w1 * (1 / dist)),
-    skill_match: round(
-      w2 * skillMatchBonus(args.skillRequired, t.skill_tags, t.experience_level),
-    ),
-    urgency: round(w3 * URGENCY_WEIGHT[args.urgencyHint]),
-    workload: round(w4 * (1 / workload)),
-    total: 0,
-  };
-  bd.total = round(bd.distance + bd.skill_match + bd.urgency + bd.workload);
-  return bd;
-}
+// Re-export so existing importers (tie-break, edge-case agents) keep working.
+export { scoreOneTech } from "./scoring";
 
 export interface AssignmentInput {
   jobId: string;
@@ -79,6 +42,8 @@ export interface AssignmentInput {
   tier: Tier;
   urgencyHint: IntakeResult["urgency_hint"];
   scheduledTime: string;
+  /** Booking creation time — feeds the SLA-headroom component. */
+  jobCreatedAt?: string;
   techState: TechStateResult;
 }
 
@@ -86,48 +51,41 @@ export function runAssignmentAgent(
   ctx: AgentContext,
   input: AssignmentInput,
 ): AssignmentResult {
-  const cfg = ctx.config;
-  const { w1, w2, w3, w4 } = cfg.scoreWeights;
+  const common = {
+    jobLocation: input.jobLocation,
+    skillRequired: input.skillRequired,
+    urgencyHint: input.urgencyHint,
+    scheduledTime: input.scheduledTime,
+    ignoreJobId: input.jobId,
+    jobCreatedAt: input.jobCreatedAt,
+    tier: input.tier,
+  };
+
+  // Score the eligible pool in one pass (min-max normalises travel +
+  // availability across the survivors). Then walk the full roster to attach
+  // a rejection reason to everyone who didn't make the pool, for the feed.
+  const pool = scorePool(
+    ctx,
+    input.techState.candidates.map((c) => c.technician_id),
+    common,
+  );
+  const breakdownById = new Map(pool.map((p) => [p.technician_id, p.breakdown]));
 
   const candidates: CandidateScore[] = input.techState.candidates.map((c) => {
-    // HARD CONSTRAINT 1: skill match.
-    const hasSkill = input.skillRequired.every((s) =>
-      c.skill_tags.includes(s),
+    const bd = breakdownById.get(c.technician_id);
+    if (bd) {
+      return {
+        technician_id: c.technician_id,
+        technician_name: c.name,
+        eligible: true,
+        reject_reason: null,
+        breakdown: bd,
+      };
+    }
+    return reject(
+      { technician_id: c.technician_id, name: c.name },
+      rejectionReason(ctx, input, c.technician_id),
     );
-    if (!hasSkill) {
-      return reject(c, `Missing certification: job needs ${input.skillRequired.join(", ")}`);
-    }
-    // HARD CONSTRAINT 2: working hours.
-    if (!c.within_working_hours) {
-      return reject(c, "Outside working hours at the appointment time");
-    }
-    // HARD CONSTRAINT 3: no double-booking within ±90 min.
-    const clash = findTimeClash(ctx.jobs, c.technician_id, input.scheduledTime, input.jobId);
-    if (clash) {
-      return reject(c, `Schedule clash with job ${clash} (±90 min)`);
-    }
-
-    const dist = Math.max(distanceKm(c.location, input.jobLocation), 0.3);
-    const workload = Math.max(c.current_workload, 0.5);
-    const breakdown: ScoreBreakdown = {
-      distance: round(w1 * (1 / dist)),
-      skill_match: round(
-        w2 * skillMatchBonus(input.skillRequired, c.skill_tags, c.experience_level),
-      ),
-      urgency: round(w3 * URGENCY_WEIGHT[input.urgencyHint]),
-      workload: round(w4 * (1 / workload)),
-      total: 0,
-    };
-    breakdown.total = round(
-      breakdown.distance + breakdown.skill_match + breakdown.urgency + breakdown.workload,
-    );
-    return {
-      technician_id: c.technician_id,
-      technician_name: c.name,
-      eligible: true,
-      reject_reason: null,
-      breakdown,
-    };
   });
 
   const eligible = candidates
@@ -171,7 +129,7 @@ export function runAssignmentAgent(
   const headline = assignedId
     ? conflict
       ? `Assign ${nameOf(ctx, assignedId)} — needs to move ${conflict.bumped_customer}'s job`
-      : `Assigned ${nameOf(ctx, assignedId)} (score ${assignedBreakdown?.total})`
+      : `Assigned ${nameOf(ctx, assignedId)} (match ${fmtScore(assignedBreakdown)})`
     : "No eligible technician — escalating for special handling";
 
   logDecision(ctx, {
@@ -182,7 +140,7 @@ export function runAssignmentAgent(
       skill_required: input.skillRequired,
       tier: input.tier,
       urgency: input.urgencyHint,
-      weights: cfg.scoreWeights,
+      policy: policySnapshot(ctx, input.tier),
       candidate_pool: input.techState.candidates.length,
     },
     output: {
@@ -197,7 +155,8 @@ export function runAssignmentAgent(
     candidates,
     requiresApproval: !assignedId,
     guardrailNotes: [
-      "Skill match is a hard constraint — technicians without the certification are removed before scoring.",
+      "Four hard constraints filter the pool before scoring: certification, working hours, no double-booking, and route feasibility (can reach the job from the previous stop in time). Technicians that fail are removed, not penalised.",
+      "Scoring: travel + skill-fit + availability + SLA-headroom + load-balance, each normalised to [0,1]; travel and availability are ranked within the candidate pool so they always separate candidates. Weights are the tier's dispatch policy and sum to 1, so the score is itself in [0,1].",
       result.needs_llm_edgecase
         ? "Cannot be resolved by the formula — will hand off to the LLM for edge-case handling."
         : "Resolved entirely by the formula — no LLM needed.",
@@ -205,6 +164,31 @@ export function runAssignmentAgent(
   });
 
   return result;
+}
+
+// ── Rejection reasons (for the feed) ───────────────────────────────
+
+function rejectionReason(
+  ctx: AgentContext,
+  input: AssignmentInput,
+  technicianId: string,
+): string {
+  const t = ctx.getTechnician(technicianId);
+  if (!t) return "Technician not found";
+  if (!input.skillRequired.every((s) => t.skill_tags.includes(s))) {
+    return `Missing certification: job needs ${input.skillRequired.join(", ")}`;
+  }
+  if (!isWithinWorkingHours(t.working_hours, input.scheduledTime)) {
+    return "Outside working hours at the appointment time";
+  }
+  const clash = findTimeClash(ctx.jobs, technicianId, input.scheduledTime, input.jobId);
+  if (clash) return `Schedule clash with job ${clash} (±90 min)`;
+  if (
+    !canReachInTime(ctx, technicianId, input.jobLocation, input.scheduledTime, input.jobId)
+  ) {
+    return "Cannot reach this job from the previous stop on their route in time";
+  }
+  return "Failed a hard constraint";
 }
 
 function reject(
@@ -220,17 +204,7 @@ function reject(
   };
 }
 
-function skillMatchBonus(
-  required: string[],
-  techSkills: readonly string[],
-  level: "junior" | "senior",
-): number {
-  let bonus = 1.0;
-  if (level === "senior") bonus += 0.5;
-  const extra = techSkills.filter((s) => !required.includes(s)).length;
-  if (extra === 0) bonus += 0.25;
-  return bonus;
-}
+// ── Urgent bump target search ──────────────────────────────────────
 
 function tryFindBumpTarget(
   ctx: AgentContext,
@@ -242,25 +216,7 @@ function tryFindBumpTarget(
   bumped_customer: string;
 } | null {
   if (input.tier !== "urgent") return null;
-  const cfg = ctx.config;
-  const { w1, w2, w3, w4 } = cfg.scoreWeights;
   const now = nowISO();
-
-  const scoreTech = (tech: NonNullable<ReturnType<typeof ctx.getTechnician>>): ScoreBreakdown => {
-    const dist = Math.max(distanceKm(tech.location, input.jobLocation), 0.3);
-    const workload = Math.max(tech.current_workload, 0.5);
-    const bd: ScoreBreakdown = {
-      distance: round(w1 * (1 / dist)),
-      skill_match: round(
-        w2 * skillMatchBonus(input.skillRequired, tech.skill_tags, tech.experience_level),
-      ),
-      urgency: round(w3 * URGENCY_WEIGHT[input.urgencyHint]),
-      workload: round(w4 * (1 / workload)),
-      total: 0,
-    };
-    bd.total = round(bd.distance + bd.skill_match + bd.urgency + bd.workload);
-    return bd;
-  };
 
   // Every soft, not-yet-frozen job at this slot whose technician is
   // certified for the incoming job — each is a possible bump target.
@@ -278,14 +234,39 @@ function tryFindBumpTarget(
       if (!tech || !input.skillRequired.every((s) => tech.skill_tags.includes(s))) {
         return null;
       }
-      return { soft, tech, breakdown: scoreTech(tech) };
+      // Score this technician for the INCOMING job as if the soft job's
+      // slot were about to free up — ignore both the incoming job and the
+      // soft job so neither counts as a clash / route obstacle.
+      const bd =
+        scoreOneTech(ctx, {
+          technicianId: tech.technician_id,
+          jobLocation: input.jobLocation,
+          skillRequired: input.skillRequired,
+          urgencyHint: input.urgencyHint,
+          scheduledTime: input.scheduledTime,
+          ignoreJobId: soft.job_id,
+          jobCreatedAt: input.jobCreatedAt,
+          tier: input.tier,
+        }) ??
+        // The soft job's technician may still fail a constraint even with
+        // the soft job removed (e.g. another job on their board). Fall back
+        // to a zero breakdown so the bump can still be proposed — the
+        // Disruption Agent re-validates everything anyway.
+        ({
+          travel: 0,
+          skill_fit: 0,
+          availability: 0,
+          sla_headroom: 0,
+          load_balance: 0,
+          total: 0,
+        } as ScoreBreakdown);
+      return { soft, tech, breakdown: bd };
     })
     .filter((c): c is NonNullable<typeof c> => c !== null)
     // Bump the LOWEST tier first; among equals, free up the technician who
-    // scores BEST for the incoming job (so the urgent job lands with the
-    // right person, not just whoever came first in the list); then the job
-    // not yet rescheduled; then the job physically CLOSEST to the incoming
-    // one (that technician's route barely changes). Every key is
+    // scores BEST for the incoming job; then the job not yet rescheduled;
+    // then the job physically CLOSEST to the incoming one (that
+    // technician's route barely changes); then job_id. Every key is
     // deterministic so the same booking always bumps the same job.
     .sort(
       (a, b) =>
@@ -311,10 +292,17 @@ function tierRank(t: Tier): number {
   return { flexible: 0, standard: 1, priority: 2, urgent: 3 }[t];
 }
 
+// ── small helpers ─────────────────────────────────────────────────
+
 function nameOf(ctx: AgentContext, id: string): string {
   return ctx.getTechnician(id)?.name ?? id;
 }
 
-function round(n: number): number {
-  return Math.round(n * 100) / 100;
+function fmtScore(b: ScoreBreakdown | null): string {
+  if (!b) return "—";
+  return `${Math.round(b.total * 100)}%`;
+}
+
+function policySnapshot(ctx: AgentContext, tier: Tier) {
+  return ctx.config.dispatchPolicy?.[tier] ?? undefined;
 }

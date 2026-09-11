@@ -10,6 +10,7 @@ import type {
   RuntimeConfig,
   Technician,
 } from "./types";
+import { DISPATCH_POLICY } from "./types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -198,7 +199,10 @@ export function notificationToRow(n: NotificationRecord) {
 export function rowToConfig(r: any): RuntimeConfig {
   return {
     freezeWindowHours: Number(r.freeze_window_hours ?? 3),
-    scoreWeights: r.score_weights ?? { w1: 1, w2: 2, w3: 1.5, w4: 1 },
+    // dispatch_policy is the new per-tier scoring policy. Older rows (or a
+    // pre-migration DB) won't have the column — fall back to the shipped
+    // default so the pipeline always has a full policy.
+    dispatchPolicy: isFullPolicy(r.dispatch_policy) ? r.dispatch_policy : DISPATCH_POLICY,
     hitlMaxCustomersAffected: r.hitl_max_customers_affected ?? 1,
     hitlMaxAddedTravelKm: Number(r.hitl_max_added_travel_km ?? 8),
     capacityFlexiblePerDay: r.capacity_flexible_per_day ?? 6,
@@ -216,7 +220,7 @@ export function rowToConfig(r: any): RuntimeConfig {
 export function configToRow(c: Partial<RuntimeConfig>) {
   const row: Record<string, unknown> = { id: 1, updated_at: new Date().toISOString() };
   if (c.freezeWindowHours !== undefined) row.freeze_window_hours = c.freezeWindowHours;
-  if (c.scoreWeights !== undefined) row.score_weights = c.scoreWeights;
+  if (c.dispatchPolicy !== undefined) row.dispatch_policy = c.dispatchPolicy;
   if (c.hitlMaxCustomersAffected !== undefined)
     row.hitl_max_customers_affected = c.hitlMaxCustomersAffected;
   if (c.hitlMaxAddedTravelKm !== undefined)
@@ -234,4 +238,18 @@ function toISO(v: unknown): string {
   if (!v) return new Date().toISOString();
   if (v instanceof Date) return v.toISOString();
   return new Date(String(v)).toISOString();
+}
+
+/** A stored dispatch_policy is usable only if it has all four tiers, each
+ *  with all five component weights as numbers. Anything partial → use the
+ *  shipped default rather than scoring off a half-filled policy. */
+function isFullPolicy(p: unknown): p is RuntimeConfig["dispatchPolicy"] {
+  if (!p || typeof p !== "object") return false;
+  const tiers = ["urgent", "priority", "standard", "flexible"] as const;
+  const keys = ["travel", "skillFit", "availability", "slaHeadroom", "loadBalance"] as const;
+  return tiers.every((tier) => {
+    const row = (p as Record<string, unknown>)[tier];
+    if (!row || typeof row !== "object") return false;
+    return keys.every((k) => typeof (row as Record<string, unknown>)[k] === "number");
+  });
 }

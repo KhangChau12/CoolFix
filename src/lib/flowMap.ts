@@ -331,13 +331,13 @@ export const BRIEF: Record<StationId, { role: string; inside: string[]; guard: s
     guard: "Least privilege, enforced at the query.",
   },
   assign: {
-    role: "Scores every eligible technician with a transparent formula and picks the best. Skill match is a hard filter, applied before scoring.",
+    role: "Scores every eligible technician on five components and picks the best. Four hard filters (certification, working hours, no double-booking, route feasibility) are applied before scoring.",
     inside: [
-      "score = w1·(1/distance) + w2·skill_match + w3·urgency + w4·(1/workload). The weights are editable in Settings.",
-      "A technician without the matching certification is removed from candidacy — not given a low score. This mirrors a real legal constraint.",
+      "match = Σ policy[tier][k]·component[k], over travel-fit, skill-fit, availability, SLA-headroom, load-balance. Each component is normalised to [0,1]; travel and availability are ranked within the candidate pool so they always separate candidates. The per-tier policy weights sum to 1 and are editable in Settings.",
+      "A technician without the matching certification — or who can't reach the job from their previous stop in time — is removed from candidacy, not given a low score. This mirrors real legal and physical constraints.",
       "0 eligible + urgent → bump a soft job. 0 eligible + not urgent → Edge-case agent. Ambiguous top scores → Tie-break.",
     ],
-    guard: "Auditable by design — the feed shows the bar chart and every rejection reason.",
+    guard: "Auditable by design — the feed shows the component bars and every rejection reason.",
   },
   tiebrk: {
     role: "Breaks a tie the formula can't. Runs only when the scoring result is effectively a coin-flip.",
