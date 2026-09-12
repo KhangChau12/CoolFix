@@ -312,10 +312,33 @@ h1, h2, h3, h4 { margin: 0 0 0.4em; line-height: 1.25; }
 .fm-dot-2 { animation-delay: 0.18s; }
 .fm-dot-3 { animation-delay: 0.36s; }
 
+/* Keep the yellow working marker visibly alive even when the tiny dots are
+   hard to distinguish at a small map size. */
+@keyframes fm-active-disc {
+  0%, 100% { opacity: 0.72; }
+  50% { opacity: 1; }
+}
+.fm-active-disc { animation: fm-active-disc 1.4s ease-in-out infinite; }
+.fm-working-dot { animation: fm-active-disc 1.4s ease-in-out infinite; }
+
+/* The active hand-off is a solid line that reveals from start to finish.
+   The route element is keyed per hop, so this restarts for every segment. */
+@keyframes fm-route-progress {
+  from { stroke-dashoffset: 1; }
+  to { stroke-dashoffset: 0; }
+}
+.fm-progress-route {
+  animation-name: fm-route-progress;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
 .fm-train { filter: drop-shadow(0 1px 3px rgba(176, 120, 48, 0.5)); }
 
 @media (prefers-reduced-motion: reduce) {
   .fm-halo { animation: none; opacity: 0.7; }
   .fm-dot { animation: none; opacity: 0.7; }
+  .fm-active-disc, .fm-working-dot { animation: none; opacity: 0.85; }
+  .fm-progress-route { animation: none; stroke-dashoffset: 0; }
   .fm-train { display: none; }
 }
