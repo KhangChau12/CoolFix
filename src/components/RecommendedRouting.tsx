@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { apiGet, apiSend } from "@/lib/client";
 import MapView, { type TrafficCamera } from "@/components/MapView";
 import type { Job, Technician } from "@/lib/types";
@@ -31,49 +31,35 @@ interface Recommendation {
 
 export default function RecommendedRouting({
   tech,
-  jobs,
+  currentJob,
 }: {
   tech: Technician | undefined;
-  jobs: Job[];
+  currentJob: Job | null;
 }) {
-  const destinations = useMemo(
-    () => jobs.filter((job) => job.status !== "completed").sort((a, b) => a.scheduled_time.localeCompare(b.scheduled_time)),
-    [jobs],
-  );
-  const [selectedJobId, setSelectedJobId] = useState("");
   const [recommendation, setRecommendation] = useState<Recommendation | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [routeChangeNotice, setRouteChangeNotice] = useState<string | null>(null);
+  const [pendingRecommendation, setPendingRecommendation] = useState<Recommendation | null>(null);
   const notifyingSignature = useRef<string | null>(null);
+  const activeSignature = useRef<string | null>(null);
+  const recommendationRef = useRef<Recommendation | null>(null);
 
-  useEffect(() => {
-    if (!destinations.some((job) => job.job_id === selectedJobId)) {
-      setSelectedJobId(destinations[0]?.job_id ?? "");
-    }
-  }, [destinations, selectedJobId]);
-
-  useEffect(() => {
-    setRouteChangeNotice(null);
-  }, [selectedJobId]);
-
-  const selectedJob = destinations.find((job) => job.job_id === selectedJobId) ?? destinations[0];
-
-  const refresh = useCallback(async () => {
-    if (!tech || !selectedJob) return;
+  const refresh = useCallback(async (deferChangedRoute = false) => {
+    if (!tech || !currentJob) return;
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams({
         fromLat: String(tech.location.lat),
         fromLng: String(tech.location.lng),
-        toLat: String(selectedJob.location.lat),
-        toLng: String(selectedJob.location.lng),
+        toLat: String(currentJob.location.lat),
+        toLng: String(currentJob.location.lng),
       });
       const result = await apiGet<Recommendation>(`/api/routing/recommendation?${params}`);
       const signature = routeSignature(result.recommended);
-      const storageKey = `coolfix-route-signature:${tech.technician_id}:${selectedJob.job_id}`;
+      const storageKey = `coolfix-route-signature:${tech.technician_id}:${currentJob.job_id}`;
       let previousSignature: string | null = null;
       try {
         previousSignature = window.sessionStorage.getItem(storageKey);
@@ -89,13 +75,13 @@ export default function RecommendedRouting({
         notifyingSignature.current !== signature
       ) {
         notifyingSignature.current = signature;
-        const routeLabel = `${selectedJob.customer_name} · ${selectedJob.location.address}`;
+        const routeLabel = `${currentJob.customer_name} · ${currentJob.location.address}`;
         try {
           await apiSend("/api/notifications", "POST", {
-            notification_id: `ntf_route_${hashString(`${tech.technician_id}:${selectedJob.job_id}:${signature}`)}`,
+            notification_id: `ntf_route_${hashString(`${tech.technician_id}:${currentJob.job_id}:${signature}`)}`,
             channel: "technician_app",
             recipient_id: tech.technician_id,
-            job_id: selectedJob.job_id,
+            job_id: currentJob.job_id,
             kind: "route_change_request",
             subject: "Route update needs your approval",
             body: `The recommended route to ${routeLabel} changed after a traffic refresh. Please review the new route and approve the change before updating navigation.`,
@@ -105,27 +91,56 @@ export default function RecommendedRouting({
           setRouteChangeNotice("Route updated — review the new route before changing navigation.");
         }
       }
-      setRecommendation(result);
-      setUpdatedAt(new Date());
+
+      const routeChanged = Boolean(
+        activeSignature.current && activeSignature.current !== signature,
+      );
+      if (deferChangedRoute && recommendationRef.current && routeChanged) {
+        // A manual check must not move the active route immediately. Hold the
+        // new recommendation until the technician explicitly reviews it.
+        setPendingRecommendation(result);
+      } else {
+        recommendationRef.current = result;
+        activeSignature.current = signature;
+        setRecommendation(result);
+        setPendingRecommendation(null);
+        setUpdatedAt(new Date());
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to calculate a route.");
     } finally {
       setLoading(false);
     }
-  }, [selectedJob, tech]);
+  }, [currentJob, tech]);
 
   useEffect(() => {
     setRecommendation(null);
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 180_000);
-    return () => window.clearInterval(timer);
+    setRouteChangeNotice(null);
+    setPendingRecommendation(null);
+    activeSignature.current = null;
+    recommendationRef.current = null;
+    notifyingSignature.current = null;
+    // Routing is checked when this screen/task changes. It is never polled
+    // automatically for new OSRM or traffic results.
+    void refresh(false);
   }, [refresh]);
+
+  function applyPendingRecommendation() {
+    if (!pendingRecommendation) return;
+    const signature = routeSignature(pendingRecommendation.recommended);
+    recommendationRef.current = pendingRecommendation;
+    activeSignature.current = signature;
+    setRecommendation(pendingRecommendation);
+    setPendingRecommendation(null);
+    setUpdatedAt(new Date());
+    setRouteChangeNotice("Route update applied. Navigation can now be changed.");
+  }
 
   if (!tech) {
     return <div style={{ padding: 24 }} className="muted">Loading technician position…</div>;
   }
 
-  if (destinations.length === 0) {
+  if (!currentJob) {
     return (
       <div style={{ padding: 24 }}>
         <h2 style={{ fontSize: 18 }}>Recommended routing</h2>
@@ -144,25 +159,19 @@ export default function RecommendedRouting({
           <div>
             <h2 style={{ fontSize: 18 }}>Recommended routing</h2>
             <p className="muted" style={{ fontSize: 12, margin: 0 }}>
-              From {tech.name}&rsquo;s current roster position to the selected stop.
+              From {tech.name}&rsquo;s current position to {currentJob.customer_name}&rsquo;s service stop.
             </p>
           </div>
-          <button className="btn" style={{ fontSize: 11.5, padding: "6px 9px" }} onClick={() => void refresh()} disabled={loading}>
-            {loading ? "Updating…" : "Refresh"}
+          <button
+            className={`btn${pendingRecommendation ? " routing-update-button" : ""}`}
+            style={{ fontSize: 11.5, padding: "6px 9px" }}
+            onClick={() => (pendingRecommendation ? applyPendingRecommendation() : void refresh(true))}
+            disabled={loading}
+          >
+            {loading ? "Checking…" : pendingRecommendation ? "Review route update" : "Check for updates"}
           </button>
         </div>
       </div>
-
-      <label style={{ fontSize: 11.5 }}>
-        <span className="muted" style={{ display: "block", fontWeight: 600, marginBottom: 4 }}>Destination</span>
-        <select className="inp" value={selectedJob?.job_id ?? ""} onChange={(event) => setSelectedJobId(event.target.value)}>
-          {destinations.map((job) => (
-            <option key={job.job_id} value={job.job_id}>
-              {job.customer_name} · {job.location.address}
-            </option>
-          ))}
-        </select>
-      </label>
 
       {error && (
         <div style={{ padding: 11, borderRadius: 8, color: "var(--danger-strong)", background: "var(--tier-urgent-bg)", border: "1px solid var(--tier-urgent)" }}>
@@ -170,12 +179,12 @@ export default function RecommendedRouting({
         </div>
       )}
 
-      {route && routeCoordinates && routeCoordinates.length > 1 && selectedJob && (
+      {route && routeCoordinates && routeCoordinates.length > 1 && currentJob && (
         <>
           <MapView
             mode="display"
             height={270}
-            customer={{ ...selectedJob.location }}
+            customer={{ ...currentJob.location }}
             technician={{ ...tech.location, name: tech.name }}
             route={{
               coordinates: routeCoordinates,
@@ -236,6 +245,19 @@ export default function RecommendedRouting({
       )}
 
       {loading && !route && <div className="muted" style={{ padding: 18, textAlign: "center" }}>Calculating OSRM routes and checking live traffic cameras…</div>}
+      <style>{`
+        .routing-update-button {
+          color: #fff;
+          background: #c56a19;
+          border-color: #c56a19;
+          animation: routing-update-pulse 1.6s ease-in-out infinite;
+        }
+        .routing-update-button:hover { background: #a95310; border-color: #a95310; }
+        @keyframes routing-update-pulse {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(197, 106, 25, 0.25); }
+          50% { box-shadow: 0 0 0 5px rgba(197, 106, 25, 0.12); }
+        }
+      `}</style>
     </div>
   );
 }
