@@ -6,16 +6,18 @@ import { useCallback, useEffect, useState } from "react";
 import { apiGet, apiSend } from "@/lib/client";
 import { Toast } from "@/components/ui";
 import { TopBar } from "@/components/TopBar";
+import { NAV_ICON } from "@/lib/icons";
+import { RotateCcw } from "lucide-react";
 import type { RuntimeConfig } from "@/lib/types";
 
 const NAV = [
-  { href: "/admin", label: "Dashboard", icon: "◱" },
-  { href: "/admin/flow", label: "Agent Flow Map", icon: "⛓" },
-  { href: "/admin/schedule", label: "Schedule", icon: "▤" },
-  { href: "/admin/queue", label: "Job Queue", icon: "≡" },
-  { href: "/admin/technicians", label: "Technicians", icon: "⚉" },
-  { href: "/admin/approvals", label: "Approvals (HITL)", icon: "✔", badgeKey: "approvals" },
-  { href: "/admin/settings", label: "Settings", icon: "⚙" },
+  { href: "/admin", label: "Dashboard", icon: NAV_ICON.dashboard },
+  { href: "/admin/flow", label: "Agent Flow Map", icon: NAV_ICON.flow },
+  { href: "/admin/schedule", label: "Schedule", icon: NAV_ICON.schedule },
+  { href: "/admin/queue", label: "Job Queue", icon: NAV_ICON.queue },
+  { href: "/admin/technicians", label: "Technicians", icon: NAV_ICON.technicians },
+  { href: "/admin/approvals", label: "Approvals (HITL)", icon: NAV_ICON.approvals, badgeKey: "approvals" },
+  { href: "/admin/settings", label: "Settings", icon: NAV_ICON.settings },
 ];
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -110,7 +112,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                   fontSize: 13,
                 }}
               >
-                <span style={{ width: 16, textAlign: "center", opacity: 0.8 }}>{n.icon}</span>
+                <span style={{ display: "inline-flex", opacity: active ? 0.95 : 0.7 }}>
+                  <n.icon size={16} strokeWidth={2} />
+                </span>
                 {n.label}
                 {n.badgeKey === "approvals" && pendingApprovals > 0 && (
                   <span className="pill-count" style={{ marginLeft: "auto" }}>
@@ -139,7 +143,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
           <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
             <button className="btn btn-ghost" style={{ justifyContent: "flex-start" }} onClick={resetDemo}>
-              ↺ Reset demo data
+              <RotateCcw size={14} strokeWidth={2.25} />
+              Reset demo data
             </button>
             <Link
               href="/api/health"

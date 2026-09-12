@@ -31,9 +31,14 @@ type LeafletPolyline = import("leaflet").Polyline;
 
 const LEAFLET_VERSION = "1.9.4";
 const LEAFLET_CSS = `https://cdnjs.cloudflare.com/ajax/libs/leaflet/${LEAFLET_VERSION}/leaflet.min.css`;
-const TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
+// CARTO's "voyager" style, not the default OSM standard style — it renders
+// place labels in English consistently (the default OSM tiles show local-
+// script labels for Singapore locations, e.g. Chinese names in Chinatown,
+// with no way to force English via the raster tile URL).
+const TILE_URL = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
 const TILE_ATTRIB =
-  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors ' +
+  '&copy; <a href="https://carto.com/attributions">CARTO</a>';
 const NOMINATIM = "https://nominatim.openstreetmap.org";
 
 export interface PickedPlace {
@@ -113,13 +118,13 @@ async function geocode(query: string): Promise<PickedPlace[]> {
   await throttle();
   const url =
     `${NOMINATIM}/search?format=jsonv2&limit=5&countrycodes=sg` +
-    `&addressdetails=1&q=${encodeURIComponent(query)}`;
+    `&addressdetails=1&accept-language=en&q=${encodeURIComponent(query)}`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 4000);
   try {
     const r = await fetch(url, {
       signal: ctrl.signal,
-      headers: { Accept: "application/json" },
+      headers: { Accept: "application/json", "Accept-Language": "en" },
     });
     if (!r.ok) return [];
     const rows = (await r.json()) as Array<{
@@ -143,13 +148,13 @@ async function geocode(query: string): Promise<PickedPlace[]> {
 
 async function reverseGeocode(lat: number, lng: number): Promise<string> {
   await throttle();
-  const url = `${NOMINATIM}/reverse?format=jsonv2&lat=${lat}&lon=${lng}`;
+  const url = `${NOMINATIM}/reverse?format=jsonv2&lat=${lat}&lon=${lng}&accept-language=en`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 4000);
   try {
     const r = await fetch(url, {
       signal: ctrl.signal,
-      headers: { Accept: "application/json" },
+      headers: { Accept: "application/json", "Accept-Language": "en" },
     });
     if (!r.ok) return "";
     const row = (await r.json()) as { display_name?: string };
@@ -252,8 +257,20 @@ export default function MapView(props: Props) {
         }
 
         mapRef.current = map;
-        setReady(true);
-        setTimeout(() => map.invalidateSize(), 60);
+        // `invalidateSize()` must run BEFORE the marker/fit-bounds effect
+        // sees `ready=true` — Leaflet computes `fitBounds()`'s zoom off the
+        // container's current pixel size, and right after `L.map()` that
+        // size can still be stale (0×0, or mid-layout) if the holder hasn't
+        // finished its own CSS layout pass yet. Setting `ready` first let
+        // the fit-bounds effect run against a wrong size, which is what
+        // produced the "zoomed out to all of Malaysia" symptom — not bad
+        // coordinates. `requestAnimationFrame` (not a raw setTimeout) is
+        // enough to land after layout without an arbitrary delay.
+        requestAnimationFrame(() => {
+          if (cancelled) return;
+          map.invalidateSize();
+          setReady(true);
+        });
 
         tileTimer = setTimeout(() => {
           if (cancelled || !holderRef.current) return;
@@ -385,14 +402,26 @@ export default function MapView(props: Props) {
         lineRef.current.setLatLngs(pts);
         lineRef.current.setStyle(style);
       }
-      const fitPts = [...pts, ...(dExtras?.map((e) => [e.lat, e.lng] as [number, number]) ?? [])];
-      map.fitBounds(L.latLngBounds(fitPts).pad(0.35), { animate: false });
+      const fitPts = [...pts, ...(dExtras?.map((e) => [e.lat, e.lng] as [number, number]) ?? [])].filter(
+        (pt) => isWithinSG({ lat: pt[0], lng: pt[1] }),
+      );
+      if (fitPts.length >= 2) {
+        map.fitBounds(L.latLngBounds(fitPts).pad(0.35), { animate: false, maxZoom: 15 });
+      } else {
+        map.setView([dCustLat, dCustLng], 14, { animate: false });
+      }
     } else if (dExtras && dExtras.length > 0) {
-      const fitPts: [number, number][] = [
-        [dCustLat, dCustLng],
-        ...dExtras.map((e) => [e.lat, e.lng] as [number, number]),
-      ];
-      map.fitBounds(L.latLngBounds(fitPts).pad(0.35), { animate: false });
+      const fitPts = (
+        [
+          [dCustLat, dCustLng],
+          ...dExtras.map((e) => [e.lat, e.lng] as [number, number]),
+        ] as [number, number][]
+      ).filter((pt) => isWithinSG({ lat: pt[0], lng: pt[1] }));
+      if (fitPts.length >= 2) {
+        map.fitBounds(L.latLngBounds(fitPts).pad(0.35), { animate: false, maxZoom: 15 });
+      } else {
+        map.setView([dCustLat, dCustLng], 14, { animate: false });
+      }
     } else {
       map.setView([dCustLat, dCustLng], 14, { animate: false });
     }
@@ -499,6 +528,11 @@ export default function MapView(props: Props) {
       <style>{`
         .mv-holder {
           width: 100%;
+          /* Keep Leaflet's internal panes (markers/controls use high
+             z-indexes) below the sticky CoolFix top bars. */
+          position: relative;
+          z-index: 0;
+          isolation: isolate;
           border-radius: 10px;
           overflow: hidden;
           border: 1px solid var(--border);

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { apiGet } from "@/lib/client";
 import { useRealtime } from "@/components/useRealtime";
 import { AgentFeed } from "@/components/AgentFeed";
+import { Metric, Sparkline } from "@/components/ui";
 import {
   estimatedJobMinutes,
   PIPELINE_STAGES,
@@ -362,40 +363,36 @@ export default function Dashboard() {
         className="grid"
         style={{ gridTemplateColumns: "repeat(auto-fit, minmax(158px, 1fr))", gap: 12 }}
       >
-        <Stat
-          label="Jobs in the day"
-          value={todayJobs.length}
-          sub="−12h to +24h window"
-        />
-        <Stat
+        <Metric label="Jobs in the day" value={todayJobs.length} hint="−12h to +24h window" />
+        <Metric
           label="Awaiting assignment"
           value={pendingAssign}
-          sub={pendingAssign > 0 ? "queued for the pipeline" : "all assigned"}
-          tone={pendingAssign > 0 ? "warn" : "ok"}
+          hint={pendingAssign > 0 ? "queued for the pipeline" : "all assigned"}
+          accent={pendingAssign > 0 ? "var(--tier-priority)" : undefined}
         />
-        <Stat
+        <Metric
           label="Needs approval"
           value={pendingApprovals}
-          sub={pendingApprovals > 0 ? "in the Approvals queue" : "all clear"}
-          tone={pendingApprovals > 0 ? "alert" : "ok"}
+          hint={pendingApprovals > 0 ? "in the Approvals queue" : "all clear"}
+          accent={pendingApprovals > 0 ? "var(--tier-urgent)" : undefined}
         />
-        <Stat
+        <Metric
           label="Auto-committed re-plans"
           value={autoCommitted}
-          sub="agent moved a job, no human"
-          tone={autoCommitted > 0 ? "accent" : "muted"}
+          hint="agent moved a job, no human"
+          accent={autoCommitted > 0 ? "var(--brand)" : undefined}
         />
-        <Stat
+        <Metric
           label="Frozen / disrupted"
           value={`${frozen} / ${disrupted}`}
-          sub="locked · agent re-planning"
-          tone={disrupted > 0 ? "alert" : "muted"}
+          hint="locked · agent re-planning"
+          accent={disrupted > 0 ? "var(--tier-urgent)" : undefined}
         />
-        <Stat
+        <Metric
           label="Un-acked notifications"
           value={awaitingAck}
-          sub={awaitingAck > 0 ? "no 'Seen' from tech / customer" : "all acknowledged"}
-          tone={awaitingAck > 0 ? "warn" : "ok"}
+          hint={awaitingAck > 0 ? "no 'Seen' from tech / customer" : "all acknowledged"}
+          accent={awaitingAck > 0 ? "var(--tier-priority)" : undefined}
         />
       </div>
 
@@ -502,31 +499,18 @@ export default function Dashboard() {
                         {f.todayCount === 0 ? "free today" : `${f.pct}% today`}
                       </span>
                     </div>
-                    <span
-                      style={{
-                        display: "block",
-                        height: 5,
-                        background: "var(--surface-2)",
-                        borderRadius: 999,
-                        overflow: "hidden",
-                      }}
-                    >
-                      <span
-                        style={{
-                          display: "block",
-                          height: "100%",
-                          width: `${Math.max(f.pct, f.todayCount ? 8 : 0)}%`,
-                          background:
-                            f.pct > 80
-                              ? "var(--tier-urgent)"
-                              : f.pct > 50
-                                ? "var(--tier-priority)"
-                                : "var(--tier-standard)",
-                          borderRadius: 999,
-                          transition: "width 0.3s ease",
-                        }}
-                      />
-                    </span>
+                    <Sparkline
+                      value={Math.max(f.pct, f.todayCount ? 8 : 0)}
+                      color={
+                        f.pct > 80
+                          ? "var(--tier-urgent)"
+                          : f.pct > 50
+                            ? "var(--tier-priority)"
+                            : "var(--tier-standard)"
+                      }
+                      width="100%"
+                      height={5}
+                    />
                     <span className="faint mono" style={{ fontSize: 9.5 }}>
                       {f.todayCount} job{f.todayCount === 1 ? "" : "s"} today
                       {f.upcomingCount > f.todayCount && ` · ${f.upcomingCount} on the board this week`}
@@ -725,81 +709,6 @@ export default function Dashboard() {
 }
 
 // ── Local primitives ─────────────────────────────────────────────
-
-type Tone = "ok" | "warn" | "alert" | "accent" | "muted";
-
-const TONE_COLOR: Record<Tone, string> = {
-  ok: "var(--success)",
-  warn: "var(--tier-priority)",
-  alert: "var(--tier-urgent)",
-  accent: "var(--brand)",
-  muted: "var(--border-strong)",
-};
-
-function Stat({
-  label,
-  value,
-  sub,
-  tone = "muted",
-}: {
-  label: string;
-  value: ReactNode;
-  sub?: string;
-  tone?: Tone;
-}) {
-  const active = tone !== "muted" && tone !== "ok";
-  return (
-    <div
-      className="card"
-      style={{
-        padding: "12px 14px",
-        position: "relative",
-        overflow: "hidden",
-      }}
-    >
-      <span
-        style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          bottom: 0,
-          width: 3,
-          background: TONE_COLOR[tone],
-          opacity: active ? 1 : 0.35,
-        }}
-      />
-      <div
-        className="faint"
-        style={{
-          fontSize: 10,
-          fontWeight: 600,
-          textTransform: "uppercase",
-          letterSpacing: "0.05em",
-        }}
-      >
-        {label}
-      </div>
-      <div
-        className="mono"
-        style={{
-          fontSize: 25,
-          fontWeight: 600,
-          marginTop: 5,
-          lineHeight: 1.1,
-          letterSpacing: "-0.02em",
-          color: active ? TONE_COLOR[tone] : "var(--text)",
-        }}
-      >
-        {value}
-      </div>
-      {sub && (
-        <div className="faint" style={{ fontSize: 10.5, marginTop: 3, lineHeight: 1.35 }}>
-          {sub}
-        </div>
-      )}
-    </div>
-  );
-}
 
 function PanelLabel({ title, right }: { title: string; right?: ReactNode }) {
   return (

@@ -38,7 +38,7 @@ import {
 } from "@/lib/time";
 import { logDecision } from "./log";
 import { canReachInTime, scoreOneTech, scorePool } from "./scoring";
-import type { AssignmentResult, IntakeResult } from "./schemas";
+import type { AssignmentResult } from "./schemas";
 import type { CandidateScore, ScoreBreakdown, SkillTag, Tier } from "@/lib/types";
 import type { AgentContext } from "./context";
 
@@ -50,7 +50,6 @@ export interface AssignmentInput {
   jobLocation: { lat: number; lng: number };
   skillRequired: SkillTag[];
   tier: Tier;
-  urgencyHint: IntakeResult["urgency_hint"];
   scheduledTime: string;
   /** Booking creation time — feeds the SLA-headroom component. */
   jobCreatedAt?: string;
@@ -63,7 +62,6 @@ export function runAssignmentAgent(
   const common = {
     jobLocation: input.jobLocation,
     skillRequired: input.skillRequired,
-    urgencyHint: input.urgencyHint,
     scheduledTime: input.scheduledTime,
     ignoreJobId: input.jobId,
     jobCreatedAt: input.jobCreatedAt,
@@ -150,7 +148,6 @@ export function runAssignmentAgent(
     input: {
       skill_required: input.skillRequired,
       tier: input.tier,
-      urgency: input.urgencyHint,
       policy: policySnapshot(ctx, input.tier),
       roster_size: roster.length,
     },
@@ -254,7 +251,6 @@ function tryFindBumpTarget(
           technicianId: tech.technician_id,
           jobLocation: input.jobLocation,
           skillRequired: input.skillRequired,
-          urgencyHint: input.urgencyHint,
           scheduledTime: input.scheduledTime,
           ignoreJobId: soft.job_id,
           jobCreatedAt: input.jobCreatedAt,

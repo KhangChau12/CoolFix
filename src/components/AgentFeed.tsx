@@ -7,19 +7,20 @@ import { useRealtime } from "./useRealtime";
 import { SCORE_COMPONENT_COLOR } from "./scoring";
 import { fmtSGTime } from "@/lib/time";
 import { TIER_META } from "@/lib/types";
+import { AGENT_ICON } from "@/lib/icons";
 import type { AgentDecisionLog, AgentName, Job, ScoreComponent, Tier } from "@/lib/types";
 
-const AGENT_META: Record<AgentName, { icon: string; color: string; short: string }> = {
-  PricingEngine: { icon: "$", color: "var(--agent-pricing)", short: "Pricing" },
-  JobIntakeAgent: { icon: "⌕", color: "var(--agent-intake)", short: "Job-Intake" },
-  CapacityAgent: { icon: "▦", color: "var(--agent-capacity)", short: "Capacity" },
-  TechnicianStateAgent: { icon: "⚉", color: "var(--agent-techstate)", short: "Tech-State" },
-  AssignmentAgent: { icon: "⊕", color: "var(--agent-assignment)", short: "Assignment" },
-  AssignmentTiebreakAgent: { icon: "⚖", color: "var(--agent-assignment)", short: "Tie-break" },
-  AssignmentEdgecaseAgent: { icon: "⊗", color: "var(--agent-disruption)", short: "Edge-case" },
-  DisruptionAgent: { icon: "⚡", color: "var(--agent-disruption)", short: "Disruption" },
-  NotificationAgent: { icon: "✉", color: "var(--agent-notification)", short: "Notification" },
-  Orchestrator: { icon: "◆", color: "var(--agent-orchestrator)", short: "Orchestrator" },
+const AGENT_META: Record<AgentName, { icon: (typeof AGENT_ICON)[AgentName]; color: string; short: string }> = {
+  PricingEngine: { icon: AGENT_ICON.PricingEngine, color: "var(--agent-pricing)", short: "Pricing" },
+  JobIntakeAgent: { icon: AGENT_ICON.JobIntakeAgent, color: "var(--agent-intake)", short: "Job-Intake" },
+  CapacityAgent: { icon: AGENT_ICON.CapacityAgent, color: "var(--agent-capacity)", short: "Capacity" },
+  TechnicianStateAgent: { icon: AGENT_ICON.TechnicianStateAgent, color: "var(--agent-techstate)", short: "Tech-State" },
+  AssignmentAgent: { icon: AGENT_ICON.AssignmentAgent, color: "var(--agent-assignment)", short: "Assignment" },
+  AssignmentTiebreakAgent: { icon: AGENT_ICON.AssignmentTiebreakAgent, color: "var(--agent-assignment)", short: "Tie-break" },
+  AssignmentEdgecaseAgent: { icon: AGENT_ICON.AssignmentEdgecaseAgent, color: "var(--agent-disruption)", short: "Edge-case" },
+  DisruptionAgent: { icon: AGENT_ICON.DisruptionAgent, color: "var(--agent-disruption)", short: "Disruption" },
+  NotificationAgent: { icon: AGENT_ICON.NotificationAgent, color: "var(--agent-notification)", short: "Notification" },
+  Orchestrator: { icon: AGENT_ICON.Orchestrator, color: "var(--agent-orchestrator)", short: "Orchestrator" },
 };
 
 /** Reliable per-run ordering key: log_id ends in `_<base36 monotonic seq>`. */
@@ -374,7 +375,10 @@ export function AgentFeed({ limit = 60 }: { limit?: number }) {
                           <span style={{ color: "var(--ink-text-faint)", flexShrink: 0, width: 14 }}>
                             {i + 1}.
                           </span>
-                          <span style={{ color: m.color, flexShrink: 0 }}>[{m.short.toLowerCase()}]</span>
+                          <span style={{ color: m.color, flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                            <m.icon size={11} strokeWidth={2.25} />
+                            [{m.short.toLowerCase()}]
+                          </span>
                           <span style={{ flex: 1, minWidth: 0 }}>
                             <span style={{ color: "var(--ink-text)" }}>{r.headline}</span>
                             <br />

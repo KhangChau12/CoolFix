@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiGet } from "@/lib/client";
 import { useRealtime } from "@/components/useRealtime";
-import { TierBadge } from "@/components/ui";
+import { TierBadge, AVATAR_COLORS, initials } from "@/components/ui";
+import { STATUS_ICON } from "@/lib/icons";
 import MapView from "@/components/MapView";
 import {
   TIER_META,
@@ -18,7 +19,6 @@ import { fmtSGDateTime, fmtSGTime, sgHour } from "@/lib/time";
 const DAY_START = 7;
 const DAY_END = 20;
 const HOURS = Array.from({ length: DAY_END - DAY_START }, (_, i) => DAY_START + i);
-const AVATAR_COLORS = ["#4f46e5", "#b07830", "#6d4fd6", "#45825a", "#b2483f", "#2f7d8c"];
 const WEEK_SPAN = 7; // days shown in the week strip / week matrix
 
 /** Singapore-local hour-of-day as a decimal (e.g. 14.5 = 14:30), for smooth positioning. */
@@ -44,16 +44,6 @@ function dayFromOffset(offset: number): Date {
   const d = new Date();
   d.setDate(d.getDate() + offset);
   return d;
-}
-
-function initials(name: string) {
-  return name
-    .split(" ")
-    .map((p) => p[0])
-    .filter(Boolean)
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
 }
 
 const JOB_BLOCK_HOURS = 1.5; // visual width of a job card, in hours (~90min service window)
@@ -523,16 +513,25 @@ function PinnedJobModal({
             <strong style={{ fontSize: 15 }}>{job.customer_name}</strong>
             <TierBadge tier={job.tier} />
             {frozen && (
-              <span className="chip" style={{ fontSize: 9.5 }}>
-                🔒 locked
+              <span className="chip" style={{ fontSize: 9.5, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                <STATUS_ICON.lock size={10} strokeWidth={2.25} />
+                locked
               </span>
             )}
             {disrupted && (
               <span
                 className="chip"
-                style={{ fontSize: 9.5, background: "var(--tier-urgent-bg)", color: "var(--tier-urgent)" }}
+                style={{
+                  fontSize: 9.5,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  background: "var(--tier-urgent-bg)",
+                  color: "var(--tier-urgent)",
+                }}
               >
-                ⚡ disrupted
+                <STATUS_ICON.disrupted size={10} strokeWidth={2.25} />
+                disrupted
               </span>
             )}
           </div>
@@ -540,9 +539,9 @@ function PinnedJobModal({
             className="btn btn-ghost"
             onClick={onClose}
             aria-label="Close"
-            style={{ fontSize: 16, lineHeight: 1, padding: "2px 9px" }}
+            style={{ lineHeight: 1, padding: "2px 9px", display: "inline-flex" }}
           >
-            ✕
+            <STATUS_ICON.close size={16} strokeWidth={2.25} />
           </button>
         </div>
 
@@ -994,11 +993,12 @@ function WeekMatrix({
                           }}
                         >
                           <span
-                            className="mono"
-                            style={{ fontSize: 9, opacity: 0.92, display: "block" }}
+                            className="mono row"
+                            style={{ fontSize: 9, opacity: 0.92, gap: 3 }}
                           >
                             {fmtSGTime(j.scheduled_time)}
-                            {frozen ? " 🔒" : disrupted ? " ⚡" : ""}
+                            {frozen && <STATUS_ICON.lock size={9} strokeWidth={2.5} />}
+                            {!frozen && disrupted && <STATUS_ICON.disrupted size={9} strokeWidth={2.5} />}
                           </span>
                           <span
                             style={{
@@ -1299,8 +1299,10 @@ function DayGantt({
                           {fmtSGTime(j.scheduled_time)}
                         </span>
                       </div>
-                      <span style={{ opacity: 0.92 }}>
-                        {frozen ? "🔒 locked" : disrupted ? "⚡ disrupted" : j.status}
+                      <span className="row" style={{ opacity: 0.92, gap: 3 }}>
+                        {frozen && <STATUS_ICON.lock size={10} strokeWidth={2.5} />}
+                        {!frozen && disrupted && <STATUS_ICON.disrupted size={10} strokeWidth={2.5} />}
+                        {frozen ? "locked" : disrupted ? "disrupted" : j.status}
                       </span>
                     </div>
                   );

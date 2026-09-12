@@ -32,6 +32,7 @@ import {
 } from "@/lib/flowMap";
 import { Candidates, ReplanOptions } from "./PipelineReplay";
 import { ScoreBars, ScoringExplainer } from "./scoring";
+import { STATUS_ICON } from "@/lib/icons";
 import type { AgentDecisionLog, Job } from "@/lib/types";
 
 // ── layout — a 3-tier "Z" grid, no diagonal or overlapping routes ──
@@ -255,7 +256,13 @@ export function AgentFlowMap({ jobId, job }: Props) {
     setShownStepCount(0);
     setTrain(null);
     setLoaded(false);
-    if (timerRef.current) clearTimeout(timerRef.current);
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      // A cleared timeout is no longer an active animation. Reset the
+      // sentinel as well, otherwise the new job can remain stuck thinking
+      // that the previous hand-off is still running.
+      timerRef.current = null;
+    }
   }, [jobId]);
 
   // The walk is owned by one long-lived effect keyed on `jobId` only — it
@@ -662,8 +669,8 @@ function StationModal({
             </div>
             <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>{b.intuition}</div>
           </div>
-          <button className="btn btn-ghost" style={{ padding: "5px 9px", fontSize: 15 }} onClick={onClose} aria-label="Close">
-            ✕
+          <button className="btn btn-ghost" style={{ padding: "5px 9px" }} onClick={onClose} aria-label="Close">
+            <STATUS_ICON.close size={15} strokeWidth={2.25} />
           </button>
         </div>
 
@@ -908,6 +915,25 @@ function FlowSvgInner({
       </text>
 
       {train && (
+        // Draw the active rail progressively from the previous station to
+        // the next one. The blue portion is the hand-off's progress bar.
+        <path
+          key={`active-route-${train.key}`}
+          d={train.path}
+          fill="none"
+          stroke={train.cls === "halt" ? "var(--tier-urgent)" : train.cls === "main" ? "var(--brand)" : "var(--llm-ink)"}
+          strokeWidth={train.cls === "halt" ? 5 : 6}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          pathLength={1}
+          strokeDasharray="1"
+          strokeDashoffset="1"
+          className="fm-progress-route"
+          style={{ animationDuration: `${train.dur}ms` }}
+        />
+      )}
+
+      {train && (
         // key on a per-hop counter so each hand-off remounts the group and
         // its SMIL <animateMotion> actually restarts (mutating the attribute
         // alone does not reliably re-trigger a running SMIL animation).
@@ -934,9 +960,11 @@ function FlowSvgInner({
             strokeOpacity="0.5"
           >
             <animateMotion
+              key={`motion-${train.key}`}
               dur={`${train.dur / 1000}s`}
               path={train.path}
               fill="freeze"
+              calcMode="linear"
               rotate={train.path.includes("Q") ? "0" : "auto"}
               begin="0s"
             />
@@ -1070,30 +1098,33 @@ function Station({
       {/* status disc, top-right corner */}
       {state !== "pending" && (
         <>
-          <circle
-            cx={CW / 2 - 2}
-            cy={topY - 1}
-            r="8"
-            fill={state === "active" ? "var(--tier-priority)" : state === "halt" ? "var(--tier-urgent)" : "var(--brand)"}
-          />
-          {state === "active" ? (
-            // three dots fading in sequence — a "working" indicator with no
-            // transform (see .fm-dot in globals.css for why)
-            <g>
-              <circle className="fm-dot" cx={CW / 2 - 6} cy={topY - 1} r="1.5" fill="#fff" />
-              <circle className="fm-dot fm-dot-2" cx={CW / 2 - 2} cy={topY - 1} r="1.5" fill="#fff" />
-              <circle className="fm-dot fm-dot-3" cx={CW / 2 + 2} cy={topY - 1} r="1.5" fill="#fff" />
-            </g>
-          ) : (
-            <path
-              d={`M ${CW / 2 - 5.3} ${topY - 0.7} l 2.4 2.4 l 4.6 -5`}
-              fill="none"
-              stroke="#fff"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+          <g key={`${id}-status-${state}-${runtime.visits.length}`}>
+            <circle
+              className={state === "active" ? "fm-active-disc" : undefined}
+              cx={CW / 2 - 2}
+              cy={topY - 1}
+              r="8"
+              fill={state === "active" ? "var(--tier-priority)" : state === "halt" ? "var(--tier-urgent)" : "var(--brand)"}
             />
-          )}
+            {state === "active" ? (
+              // three dots fading in sequence — a "working" indicator with no
+              // transform (see .fm-dot in globals.css for why)
+              <g>
+                <circle className="fm-dot" cx={CW / 2 - 6} cy={topY - 1} r="1.5" fill="#fff" />
+                <circle className="fm-dot fm-dot-2" cx={CW / 2 - 2} cy={topY - 1} r="1.5" fill="#fff" />
+                <circle className="fm-dot fm-dot-3" cx={CW / 2 + 2} cy={topY - 1} r="1.5" fill="#fff" />
+              </g>
+            ) : (
+              <path
+                d={`M ${CW / 2 - 5.3} ${topY - 0.7} l 2.4 2.4 l 4.6 -5`}
+                fill="none"
+                stroke="#fff"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            )}
+          </g>
         </>
       )}
       {runtime.visits.length > 1 && (
@@ -1303,7 +1334,7 @@ function DetailPanel({
               marginBottom: 10,
             }}
           >
-            <span style={{ width: 5, height: 5, borderRadius: 999, background: "var(--tier-priority)" }} />
+            <span className="fm-working-dot" style={{ width: 5, height: 5, borderRadius: 999, background: "var(--tier-priority)" }} />
             happening now
           </div>
         )}
@@ -1460,8 +1491,6 @@ function summarize(row: AgentDecisionLog): [string, string][] {
   switch (row.agent_name) {
     case "JobIntakeAgent":
       push("skills", (o as { skill_required?: string[] }).skill_required?.join(", "), true);
-      push("urgency", (o as { urgency_hint?: string }).urgency_hint);
-      push("window", ((o as { time_window_hours?: [number, number] }).time_window_hours ?? []).join("–") + " h");
       push("injection", (o as { injection_attempt?: boolean }).injection_attempt ? "true — flagged" : "false — clean");
       break;
     case "PricingEngine":

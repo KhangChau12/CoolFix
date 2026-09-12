@@ -488,17 +488,17 @@ export function estimatedJobMinutes(skills: SkillTag[]): number {
 
 /**
  * Is a job "complex" — one where sending a senior technician genuinely
- * matters (chiller plant, a multi-skill visit, or a high-urgency call where
+ * matters (chiller plant, a multi-skill visit, or an Urgent-tier call where
  * a wrong diagnosis is expensive)? Drives the `skillFit` seniority term.
+ * Keyed off skills + the customer-selected tier only — never an AI-inferred
+ * urgency guess, which would let the model quietly override what the
+ * customer paid for.
  */
-export function jobIsComplex(
-  skills: SkillTag[],
-  urgencyHint: "low" | "medium" | "high",
-): boolean {
+export function jobIsComplex(skills: SkillTag[], tier: Tier): boolean {
   return (
     skills.includes("commercial_chiller") ||
     skills.length >= 2 ||
-    urgencyHint === "high"
+    tier === "urgent"
   );
 }
 
