@@ -367,7 +367,7 @@ async function runBookingPipelineUnsafe(
           reasoningKind: "rule",
           input: { eligible: 0, edgecase_action: edge.action },
           output: { result: "awaiting_approval", approval_id: approval.approval_id },
-          headline: "⏸ Paused — edge-case proposal needs coordinator approval",
+          headline: "Paused — edge-case proposal needs coordinator approval",
           outcome: "requires_approval",
           requiresApproval: true,
           guardrailNotes: [
@@ -640,7 +640,7 @@ async function runBookingPipelineUnsafe(
     reasoningKind: "rule",
     input: { conflict: true, approval: true },
     output: { result: "awaiting_approval", approval_id: approval.approval_id },
-    headline: "⏸ Paused — coordinator must approve the re-plan",
+    headline: "Paused — coordinator must approve the re-plan",
     outcome: "requires_approval",
     requiresApproval: true,
     guardrailNotes: [

@@ -160,9 +160,17 @@ export default function ApprovalsPage() {
                   height={200}
                   onUnavailable={() => setMapFailed((s) => new Set(s).add(a.approval_id))}
                 />
-                <p className="faint" style={{ fontSize: 10.5, margin: "5px 0 0" }}>
-                  🔵 incoming urgent job
-                  {extraPins.length > 0 && " · 🟢 jobs this plan would move"}
+                <p className="faint row" style={{ fontSize: 10.5, margin: "5px 0 0", gap: 12, flexWrap: "wrap" }}>
+                  <span className="row" style={{ gap: 5 }}>
+                    <span style={{ width: 7, height: 7, borderRadius: 999, background: "var(--tier-standard)", flex: "none" }} />
+                    incoming urgent job
+                  </span>
+                  {extraPins.length > 0 && (
+                    <span className="row" style={{ gap: 5 }}>
+                      <span style={{ width: 7, height: 7, borderRadius: 999, background: "var(--tier-flexible)", flex: "none" }} />
+                      jobs this plan would move
+                    </span>
+                  )}
                 </p>
               </div>
             )}

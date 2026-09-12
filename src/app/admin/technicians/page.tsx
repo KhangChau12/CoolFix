@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiGet, apiSend } from "@/lib/client";
 import { useRealtime } from "@/components/useRealtime";
-import { Toast } from "@/components/ui";
+import { Toast, Avatar, Sparkline } from "@/components/ui";
 import { SG_LANDMARKS } from "@/lib/geo";
 import { sgDayKey, nowISO, fmtSGTime } from "@/lib/time";
 import {
@@ -91,75 +91,103 @@ export default function TechniciansPage() {
         />
       )}
 
-      <div
-        className="grid"
-        style={{ gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))" }}
-      >
-        {techs.map((t) => {
-          const load = loadFor(t);
-          return (
-            <div key={t.technician_id} className="card" style={{ padding: 16 }}>
-              <div className="row" style={{ gap: 12 }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={t.photo_url}
-                  alt={t.name}
-                  width={48}
-                  height={48}
-                  style={{ borderRadius: 999, objectFit: "cover", flex: "none" }}
-                />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div className="row" style={{ gap: 6 }}>
-                    <strong style={{ fontSize: 14 }}>{t.name}</strong>
-                    <span className="chip" style={{ fontSize: 9 }}>{t.experience_level}</span>
-                  </div>
-                  <div className="faint mono" style={{ fontSize: 10 }}>
-                    {t.technician_id} · {t.working_hours.start}–{t.working_hours.end}
-                  </div>
-                </div>
-              </div>
-
-              <div className="row" style={{ gap: 4, flexWrap: "wrap", marginTop: 10 }}>
-                {t.skill_tags.map((s) => (
-                  <span key={s} className="chip skill" title={SKILL_CERT[s]}>
-                    {SKILL_LABEL[s]}
-                  </span>
-                ))}
-              </div>
-
-              <div style={{ marginTop: 12 }}>
-                <div className="spread" style={{ fontSize: 11 }}>
-                  <span
-                    className="muted"
-                    title="Real hours committed today ÷ this technician's shift length — not a headcount of every job on their board."
-                  >
-                    Today&apos;s utilisation
-                  </span>
-                  <span className="mono">
-                    {load.todayCount === 0 ? "free today" : `${load.pct}%`}
-                  </span>
-                </div>
-                <span style={{ display: "block", height: 8, background: "var(--surface-2)", borderRadius: 999, marginTop: 4 }}>
-                  <span
-                    style={{
-                      display: "block",
-                      height: "100%",
-                      width: `${Math.max(load.pct, load.todayCount ? 6 : 0)}%`,
-                      background: load.pct > 80 ? "var(--tier-urgent)" : load.pct > 50 ? "var(--tier-priority)" : "var(--tier-flexible)",
-                      borderRadius: 999,
-                    }}
-                  />
-                </span>
-                <div className="faint mono" style={{ fontSize: 10, marginTop: 5 }}>
-                  {load.todayCount} job{load.todayCount === 1 ? "" : "s"} today
-                  {load.upcomingCount > load.todayCount && ` · ${load.upcomingCount} on the board this week`}
-                  {load.next && ` · next ${fmtSGTime(load.next.scheduled_time)} · ${load.next.location.address}`}
-                </div>
-              </div>
-            </div>
-          );
-        })}
+      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+        <div className="tech-table-scroll">
+          <table className="tech-table">
+            <thead>
+              <tr>
+                <th>Technician</th>
+                <th>Skills</th>
+                <th>Today&apos;s utilisation</th>
+                <th>Board</th>
+              </tr>
+            </thead>
+            <tbody>
+              {techs.map((t, i) => {
+                const load = loadFor(t);
+                const barColor =
+                  load.pct > 80 ? "var(--tier-urgent)" : load.pct > 50 ? "var(--tier-priority)" : "var(--tier-flexible)";
+                return (
+                  <tr key={t.technician_id}>
+                    <td>
+                      <div className="row" style={{ gap: 10 }}>
+                        <Avatar name={t.name} index={i} size={36} />
+                        <div style={{ minWidth: 0 }}>
+                          <div className="row" style={{ gap: 6 }}>
+                            <strong style={{ fontSize: 13 }}>{t.name}</strong>
+                            <span className="chip" style={{ fontSize: 9 }}>{t.experience_level}</span>
+                          </div>
+                          <div className="faint mono" style={{ fontSize: 10 }}>
+                            {t.technician_id} · {t.working_hours.start}–{t.working_hours.end}
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <div className="row" style={{ gap: 4, flexWrap: "wrap" }}>
+                        {t.skill_tags.map((s) => (
+                          <span key={s} className="chip skill" title={SKILL_CERT[s]}>
+                            {SKILL_LABEL[s]}
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+                    <td style={{ minWidth: 130 }}>
+                      <div
+                        className="spread"
+                        style={{ fontSize: 11, marginBottom: 4 }}
+                        title="Real hours committed today ÷ this technician's shift length — not a headcount of every job on their board."
+                      >
+                        <span className="mono">
+                          {load.todayCount === 0 ? "free today" : `${load.pct}%`}
+                        </span>
+                      </div>
+                      <Sparkline
+                        value={Math.max(load.pct, load.todayCount ? 6 : 0)}
+                        color={barColor}
+                        width="100%"
+                        height={7}
+                      />
+                    </td>
+                    <td>
+                      <div className="faint mono" style={{ fontSize: 10.5, lineHeight: 1.5 }}>
+                        {load.todayCount} job{load.todayCount === 1 ? "" : "s"} today
+                        {load.upcomingCount > load.todayCount && (
+                          <>
+                            <br />
+                            {load.upcomingCount} on the board this week
+                          </>
+                        )}
+                        {load.next && (
+                          <>
+                            <br />
+                            next {fmtSGTime(load.next.scheduled_time)} · {load.next.location.address}
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
+
+      <style>{`
+        .tech-table-scroll { overflow-x: auto; }
+        .tech-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .tech-table th {
+          text-align: left; font-size: 10.5px; font-weight: 700; text-transform: uppercase;
+          letter-spacing: 0.05em; color: var(--text-faint); padding: 10px 14px;
+          border-bottom: 1px solid var(--border); white-space: nowrap;
+        }
+        .tech-table td {
+          padding: 12px 14px; border-bottom: 1px solid var(--border); vertical-align: middle;
+        }
+        .tech-table tbody tr:last-child td { border-bottom: none; }
+        .tech-table tbody tr:hover { background: var(--surface-2); }
+      `}</style>
 
       {toast && <Toast message={toast.msg} kind={toast.kind} onClose={() => setToast(null)} />}
     </div>

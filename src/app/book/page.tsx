@@ -20,6 +20,7 @@ import {
   type Technician,
   type Tier,
 } from "@/lib/types";
+import { TIER_ICON, STATUS_ICON } from "@/lib/icons";
 import type { PipelineResult } from "@/agents/orchestrator";
 
 type Step = "welcome" | "form" | "tier" | "confirm" | "processing" | "track";
@@ -112,8 +113,12 @@ export default function BookPage() {
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg-customer)" }}>
       <TopBar active="customer" context="BOOKING · SG" />
-      <div style={{ maxWidth: 620, margin: "0 auto", padding: "22px 20px 72px" }}>
-        <Stepper step={step} />
+      <div className="book-shell" style={{ maxWidth: 1180, margin: "0 auto", padding: "28px 20px 72px" }}>
+        <div className="book-rail">
+          <Stepper step={step} />
+        </div>
+
+        <div className="book-main" style={{ maxWidth: 620 }}>
 
         {step === "welcome" && (
           <div className="card" style={{ padding: 28 }}>
@@ -239,6 +244,7 @@ export default function BookPage() {
             <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 12 }}>
               {TIERS.map((t) => {
                 const m = TIER_META[t];
+                const TierIcon = TIER_ICON[t];
                 const active = tier === t;
                 return (
                   <button
@@ -260,7 +266,18 @@ export default function BookPage() {
                     <div style={{ width: 5, borderRadius: 3, background: `var(${m.colorVar})`, flexShrink: 0 }} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div className="row" style={{ gap: 9, flexWrap: "wrap" }}>
-                        <span style={{ fontSize: 16, fontWeight: 600 }}>{m.emoji} {m.label}</span>
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 7,
+                            fontSize: 16,
+                            fontWeight: 600,
+                          }}
+                        >
+                          <TierIcon size={16} strokeWidth={2.1} color={`var(${m.colorVar})`} />
+                          {m.label}
+                        </span>
                         <span
                           className="mono"
                           style={{
@@ -308,7 +325,11 @@ export default function BookPage() {
                   <dd style={{ margin: 0 }}>{form.problem_description}</dd>
                 </>
               )}
-              <dt className="muted">Tier</dt><dd style={{ margin: 0 }}>{TIER_META[tier].emoji} {TIER_META[tier].label} · ~{estPrice(form.problem_category, tier)} SGD</dd>
+              <dt className="muted">Tier</dt>
+              <dd style={{ margin: 0, display: "flex", alignItems: "center", gap: 6 }}>
+                {(() => { const TierIcon = TIER_ICON[tier]; return <TierIcon size={13} strokeWidth={2.1} color={`var(${TIER_META[tier].colorVar})`} />; })()}
+                {TIER_META[tier].label} · ~{estPrice(form.problem_category, tier)} SGD
+              </dd>
             </dl>
             {form.location && !mapUnavailable && (
               <div style={{ marginTop: 14 }}>
@@ -353,6 +374,11 @@ export default function BookPage() {
         {step === "track" && result && (
           <TrackView result={result} />
         )}
+        </div>
+
+        <div className="book-context">
+          <BookingHelpPanel step={step} tier={tier} />
+        </div>
       </div>
 
       <style>{`
@@ -361,7 +387,104 @@ export default function BookPage() {
           border-radius: 8px; font-size: 13px; background: var(--surface);
         }
         .inp:focus { outline: 2px solid var(--brand-tint); border-color: var(--brand); }
+
+        .book-shell {
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 24px;
+          align-items: start;
+        }
+        .book-main { width: 100%; margin: 0 auto; }
+        .book-rail { order: -1; }
+        .book-context { display: none; }
+        @media (min-width: 1024px) {
+          .book-shell { grid-template-columns: 200px minmax(0, 620px); }
+          .book-rail { order: 0; position: sticky; top: 84px; }
+          .book-main { margin: 0; }
+        }
+        @media (min-width: 1280px) {
+          .book-shell { grid-template-columns: 200px minmax(0, 620px) 280px; }
+          .book-context { display: block; position: sticky; top: 84px; }
+        }
+
+        .stepper { display: flex; flex-direction: row; gap: 5px; flex-wrap: wrap; }
+        .stepper-item { display: flex; align-items: center; gap: 8px; }
+        .stepper-dot {
+          width: 20px; height: 20px; border-radius: 999px; border: 1.5px solid transparent;
+          display: grid; place-items: center; font-size: 10px; font-weight: 700; flex: none;
+        }
+        .stepper-label { font-size: 12.5px; display: none; }
+        .stepper-connector { display: none; }
+        @media (min-width: 1024px) {
+          .stepper { flex-direction: column; gap: 0; align-items: stretch; }
+          .stepper-item { gap: 10px; padding: 7px 0; position: relative; }
+          .stepper-label { display: inline; font-size: 13px; }
+          .stepper-connector {
+            display: block; position: absolute; left: 9px; top: 27px; width: 1.5px; height: 18px;
+            background: var(--border-strong);
+          }
+        }
       `}</style>
+    </div>
+  );
+}
+
+/** Desktop-only third column (>=1280px) — contextual help instead of dead
+ *  space. Content changes with the active step; never touches form state. */
+function BookingHelpPanel({ step, tier }: { step: Step; tier: Tier }) {
+  if (step === "welcome" || step === "processing" || step === "track") return null;
+
+  if (step === "tier") {
+    return (
+      <div className="card" style={{ padding: 18 }}>
+        <h3 style={{ fontSize: 13, margin: "0 0 10px" }}>Response tiers compared</h3>
+        <div className="stack" style={{ gap: 10 }}>
+          {TIERS.map((t) => {
+            const m = TIER_META[t];
+            const TierIcon = TIER_ICON[t];
+            const active = t === tier;
+            return (
+              <div
+                key={t}
+                className="row"
+                style={{
+                  gap: 8,
+                  padding: "8px 10px",
+                  borderRadius: 8,
+                  background: active ? `var(${m.colorVar}-bg)` : "transparent",
+                }}
+              >
+                <TierIcon size={14} strokeWidth={2.1} color={`var(${m.colorVar})`} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>{m.label}</div>
+                  <div className="faint" style={{ fontSize: 11 }}>{TIER_SLA_TEXT[t]}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <p className="faint" style={{ fontSize: 11, lineHeight: 1.5, marginTop: 12 }}>
+          Urgent jobs can bump a not-yet-locked appointment on a lower tier to make room —
+          you'll never lose a booking that's already inside its schedule-lock window.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card" style={{ padding: 18 }}>
+      <h3 style={{ fontSize: 13, margin: "0 0 8px" }}>Why we ask for a pin</h3>
+      <p className="muted" style={{ fontSize: 12, lineHeight: 1.6, margin: 0 }}>
+        Dropping a precise map pin lets the dispatch agent measure real travel time to the
+        nearest available technician, instead of guessing from a neighbourhood name — that's
+        what keeps the price and ETA you see accurate.
+      </p>
+      <h3 style={{ fontSize: 13, margin: "16px 0 8px" }}>What happens next</h3>
+      <p className="muted" style={{ fontSize: 12, lineHeight: 1.6, margin: 0 }}>
+        Once you confirm, a short chain of dispatch agents reads your request, prices it,
+        checks technician availability, and matches a certified technician — live, in about
+        15 seconds.
+      </p>
     </div>
   );
 }
@@ -382,23 +505,34 @@ function Stepper({ step }: { step: Step }) {
   // as still sitting on the Confirm pill.
   const idx = order.indexOf(step === "processing" ? "confirm" : step);
   return (
-    <div className="row" style={{ gap: 5, marginBottom: 24, flexWrap: "wrap" }}>
-      {labels.map((l, i) => (
-        <span
-          key={l}
-          style={{
-            fontSize: 11.5,
-            fontWeight: i === idx ? 600 : 400,
-            color: i === idx ? "var(--text)" : "var(--text-faint)",
-            background: i === idx ? "#eeecf6" : "transparent",
-            border: `1px solid ${i === idx ? "var(--border-strong)" : "transparent"}`,
-            borderRadius: 20,
-            padding: "6px 12px",
-          }}
-        >
-          {i + 1}. {l}
-        </span>
-      ))}
+    <div className="stepper" style={{ marginBottom: 24 }}>
+      {labels.map((l, i) => {
+        const state = i < idx ? "done" : i === idx ? "active" : "pending";
+        return (
+          <div key={l} className="stepper-item">
+            <span
+              className="stepper-dot"
+              style={{
+                background: state === "done" ? "var(--tier-flexible)" : state === "active" ? "var(--brand)" : "transparent",
+                borderColor: state === "pending" ? "var(--border-strong)" : "transparent",
+                color: "#fff",
+              }}
+            >
+              {state === "done" ? <STATUS_ICON.check size={10} strokeWidth={3} /> : i + 1}
+            </span>
+            <span
+              className="stepper-label"
+              style={{
+                fontWeight: state === "active" ? 600 : 400,
+                color: state === "pending" ? "var(--text-faint)" : "var(--text)",
+              }}
+            >
+              {l}
+            </span>
+            {i < labels.length - 1 && <span className="stepper-connector" />}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -479,7 +613,10 @@ function TrackView({ result }: { result: PipelineResult }) {
     <div className="card" style={{ padding: 24 }}>
       <div className="spread">
         <h2 style={{ fontSize: 18, margin: 0 }}>Booking {j.job_id}</h2>
-        <span className="chip">{TIER_META[j.tier].emoji} {TIER_META[j.tier].label}</span>
+        <span className="chip" style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+          {(() => { const TierIcon = TIER_ICON[j.tier]; return <TierIcon size={11} strokeWidth={2.1} />; })()}
+          {TIER_META[j.tier].label}
+        </span>
       </div>
       <p className="muted" style={{ fontSize: 13 }}>{result.message}</p>
 
@@ -562,13 +699,12 @@ function TrackView({ result }: { result: PipelineResult }) {
                 border: `2px solid ${m.done ? "var(--tier-flexible)" : "var(--border-strong)"}`,
                 background: m.done ? "var(--tier-flexible)" : "transparent",
                 color: "#fff",
-                fontSize: 11,
                 display: "grid",
                 placeItems: "center",
                 flex: "none",
               }}
             >
-              {m.done ? "✓" : ""}
+              {m.done && <STATUS_ICON.check size={11} strokeWidth={3} />}
             </span>
             <span style={{ fontSize: 13, color: m.done ? "var(--text)" : "var(--text-faint)" }}>
               {m.label}
@@ -988,7 +1124,11 @@ function StepMark({ state }: { state: StepState }) {
     fontSize: 10,
   } as const;
   if (state === "done") {
-    return <span style={{ ...base, background: "var(--tier-flexible)", color: "#fff" }}>✓</span>;
+    return (
+      <span style={{ ...base, background: "var(--tier-flexible)", color: "#fff" }}>
+        <STATUS_ICON.check size={10} strokeWidth={3} />
+      </span>
+    );
   }
   if (state === "active") {
     return (
@@ -1014,7 +1154,7 @@ function StepMark({ state }: { state: StepState }) {
   if (state === "waiting") {
     return (
       <span style={{ ...base, border: "2px solid var(--tier-priority)", color: "var(--tier-priority)" }}>
-        ⏸
+        <STATUS_ICON.pause size={9} strokeWidth={2.5} />
       </span>
     );
   }

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import Link from "next/link";
 import { apiGet } from "@/lib/client";
 import { useRealtime } from "@/components/useRealtime";
-import { TierBadge } from "@/components/ui";
+import { TierBadge, Avatar } from "@/components/ui";
 import { fmtSGDateTime, hoursBetween, nowISO } from "@/lib/time";
 import {
   PIPELINE_STAGES,
@@ -114,9 +114,12 @@ export default function QueuePage() {
     load();
   }, [load]);
 
-  const techName = useCallback(
-    (id: string | null) =>
-      id ? (techs.find((t) => t.technician_id === id)?.name ?? id) : null,
+  const techInfo = useCallback(
+    (id: string | null) => {
+      if (!id) return null;
+      const idx = techs.findIndex((t) => t.technician_id === id);
+      return { name: idx >= 0 ? techs[idx].name : id, index: Math.max(0, idx) };
+    },
     [techs],
   );
 
@@ -133,10 +136,10 @@ export default function QueuePage() {
           j.customer_name.toLowerCase().includes(needle) ||
           j.job_id.toLowerCase().includes(needle) ||
           j.location.address.toLowerCase().includes(needle) ||
-          (techName(j.assigned_technician_id)?.toLowerCase().includes(needle) ?? false)
+          (techInfo(j.assigned_technician_id)?.name.toLowerCase().includes(needle) ?? false)
         );
       });
-  }, [jobs, tierFilter, hideCompleted, q, techName]);
+  }, [jobs, tierFilter, hideCompleted, q, techInfo]);
 
   // Stage tallies across the *unfiltered* open set — the pipeline summary strip.
   const stageTally = useMemo(() => {
@@ -372,7 +375,7 @@ export default function QueuePage() {
                   key={j.job_id}
                   job={j}
                   now={now}
-                  tech={techName(j.assigned_technician_id)}
+                  tech={techInfo(j.assigned_technician_id)}
                   first={i === 0}
                 />
               ))}
@@ -394,7 +397,7 @@ function JobRow({
 }: {
   job: Job;
   now: string;
-  tech: string | null;
+  tech: { name: string; index: number } | null;
   first: boolean;
 }) {
   const idx = stageIndex(j.pipeline_stage);
@@ -475,16 +478,31 @@ function JobRow({
           {relTime(j.scheduled_time, now)}
         </div>
         <div
+          className="row"
           style={{
-            fontSize: 10.5,
-            marginTop: 3,
-            color: tech ? "var(--text-muted)" : "var(--text-faint)",
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
+            justifyContent: "flex-end",
+            gap: 6,
+            marginTop: 4,
           }}
         >
-          {tech ? `→ ${tech}` : "unassigned"}
+          {tech ? (
+            <>
+              <span
+                style={{
+                  fontSize: 10.5,
+                  color: "var(--text-muted)",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {tech.name}
+              </span>
+              <Avatar name={tech.name} index={tech.index} size={18} />
+            </>
+          ) : (
+            <span style={{ fontSize: 10.5, color: "var(--text-faint)" }}>unassigned</span>
+          )}
         </div>
       </div>
 

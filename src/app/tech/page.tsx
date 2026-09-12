@@ -4,11 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiGet, apiSend } from "@/lib/client";
 import { useRealtime } from "@/components/useRealtime";
 import { TopBar } from "@/components/TopBar";
-import { TierBadge } from "@/components/ui";
+import { TierBadge, Avatar } from "@/components/ui";
 import MapView from "@/components/MapView";
 import { distanceKm } from "@/lib/geo";
 import { TIER_META, type Job, type NotificationRecord, type Technician } from "@/lib/types";
 import { fmtSGDateTime, fmtSGTime, hoursBetween, isFrozen, nowISO } from "@/lib/time";
+import { STATUS_ICON } from "@/lib/icons";
 
 export default function TechApp() {
   const [techs, setTechs] = useState<Technician[]>([]);
@@ -17,6 +18,8 @@ export default function TechApp() {
   const [notes, setNotes] = useState<NotificationRecord[]>([]);
   const [openJob, setOpenJob] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [messagesOpen, setMessagesOpen] = useState(false);
+  const [completedOpen, setCompletedOpen] = useState(false);
   // Job ids whose embedded map failed to load (blocked tiles / offline) —
   // those fall back to the plain "Open in Maps" link only.
   const [mapFailed, setMapFailed] = useState<Set<string>>(new Set());
@@ -64,6 +67,7 @@ export default function TechApp() {
     load();
   }, [load, techId]);
 
+  const techIndex = techs.findIndex((t) => t.technician_id === techId);
   const tech = techs.find((t) => t.technician_id === techId);
   const now = nowISO();
 
@@ -74,46 +78,67 @@ export default function TechApp() {
         .sort((a, b) => a.scheduled_time.localeCompare(b.scheduled_time)),
     [jobs],
   );
-  const next3h = upcoming.filter((j) => {
-    const h = hoursBetween(now, j.scheduled_time);
-    return h >= -1 && h <= 3;
-  });
 
   const completedToday = useMemo(() => {
-    const todaySg = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Singapore" }).format(
-      new Date(),
-    );
+    const todaySg = sgDayKey(new Date());
     return jobs
-      .filter(
-        (j) =>
-          j.status === "completed" &&
-          new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Singapore" }).format(
-            new Date(j.scheduled_time),
-          ) === todaySg,
-      )
+      .filter((j) => j.status === "completed" && sgDayKey(new Date(j.scheduled_time)) === todaySg)
       .sort((a, b) => b.scheduled_time.localeCompare(a.scheduled_time));
   }, [jobs]);
+
+  // Today's jobs (assigned + already completed) for the timeline strip, in order.
+  const todayTimeline = useMemo(() => {
+    const todaySg = sgDayKey(new Date());
+    return jobs
+      .filter((j) => sgDayKey(new Date(j.scheduled_time)) === todaySg)
+      .sort((a, b) => a.scheduled_time.localeCompare(b.scheduled_time));
+  }, [jobs]);
+
+  // A job is "overdue" if its scheduled_time has passed but it was never
+  // marked en_route/arrived/completed — the technician still needs to close
+  // it out. Kept separate from "upcoming" so it can't silently steal the
+  // "Right now" hero slot from today's actual next stop.
+  const overdue = useMemo(() => {
+    const nowMs = new Date(now).getTime();
+    return upcoming
+      .filter((j) => j.status !== "in_progress" && new Date(j.scheduled_time).getTime() < nowMs)
+      .sort((a, b) => a.scheduled_time.localeCompare(b.scheduled_time));
+  }, [upcoming, now]);
+
+  const overdueIds = useMemo(() => new Set(overdue.map((j) => j.job_id)), [overdue]);
+
+  // The single job the "Right now" hero should show: in-progress first, else
+  // the next job genuinely still ahead of now (today or later).
+  const heroJob = useMemo(() => {
+    const inProgress = upcoming.find((j) => j.status === "in_progress");
+    if (inProgress) return inProgress;
+    const nowMs = new Date(now).getTime();
+    return (
+      upcoming.find((j) => j.status !== "completed" && new Date(j.scheduled_time).getTime() >= nowMs) ?? null
+    );
+  }, [upcoming, now]);
+
+  // Grouped-by-day view for everything after the hero job and overdue jobs
+  // (rest of today + future days) — this is what "Upcoming" becomes.
+  const groupedRest = useMemo(() => {
+    const rest = upcoming.filter((j) => j.job_id !== heroJob?.job_id && !overdueIds.has(j.job_id));
+    const groups = new Map<string, Job[]>();
+    for (const j of rest) {
+      const key = sgDayKey(new Date(j.scheduled_time));
+      const list = groups.get(key) ?? [];
+      list.push(j);
+      groups.set(key, list);
+    }
+    return Array.from(groups.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([key, list]) => ({ key, label: dayGroupLabel(key), jobs: list }));
+  }, [upcoming, heroJob, overdueIds]);
 
   const unackNotes = notes.filter((n) => !n.acknowledged);
   const recentAcked = notes
     .filter((n) => n.acknowledged)
     .sort((a, b) => (b.acknowledged_at ?? "").localeCompare(a.acknowledged_at ?? ""))
     .slice(0, 3);
-
-  // Today's jobs (assigned + already completed) for the timeline strip, in order.
-  const todayTimeline = useMemo(() => {
-    const todaySg = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Singapore" }).format(
-      new Date(),
-    );
-    return jobs
-      .filter(
-        (j) =>
-          new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Singapore" }).format(
-            new Date(j.scheduled_time),
-          ) === todaySg,
-      )
-      .sort((a, b) => a.scheduled_time.localeCompare(b.scheduled_time));
-  }, [jobs]);
 
   async function ack(id: string) {
     await apiSend(`/api/notifications/${id}/ack`, "POST");
@@ -128,21 +153,18 @@ export default function TechApp() {
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
       <TopBar active="technician" context="TECHNICIAN · SG" />
-      <div style={{ maxWidth: 460, margin: "0 auto" }}>
+      {/* This is a genuinely mobile-shaped app (route strip, hero job card) —
+          frame it as a phone screen on wide viewports instead of stretching
+          the content into a desktop layout. */}
+      <div className="tech-frame-wrap">
+      <div className="tech-frame" style={{ maxWidth: 460, margin: "0 auto" }}>
         {/* technician profile sub-bar (not a second page header — just the
             "who am I / what's my day" strip beneath the shared TopBar) */}
         <div style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)", padding: "12px 16px" }}>
           <div className="spread">
             {tech ? (
               <div className="row" style={{ gap: 10, minWidth: 0 }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={tech.photo_url}
-                  alt={tech.name}
-                  width={38}
-                  height={38}
-                  style={{ borderRadius: 999, flexShrink: 0, objectFit: "cover" }}
-                />
+                <Avatar name={tech.name} index={techIndex} size={38} />
                 <div style={{ minWidth: 0 }}>
                   <strong style={{ fontSize: 14 }}>{tech.name}</strong>
                   <div className="muted" style={{ fontSize: 11.5 }}>
@@ -180,286 +202,230 @@ export default function TechApp() {
               ))}
             </select>
           </div>
-
-          {/* today at a glance */}
-          <div className="row" style={{ gap: 14, marginTop: 10, fontSize: 11.5 }}>
-            <span className="muted">
-              <strong style={{ color: "var(--text)", fontSize: 13 }}>{upcoming.length}</strong> upcoming
-            </span>
-            <span className="muted">
-              <strong style={{ color: "var(--text)", fontSize: 13 }}>{completedToday.length}</strong> done today
-            </span>
-            {unackNotes.length > 0 && (
-              <span style={{ color: "var(--tier-priority)", fontWeight: 600 }}>
-                {unackNotes.length} to acknowledge
-              </span>
-            )}
-          </div>
         </div>
 
-        {/* today timeline strip */}
-        <TimelineStrip jobs={todayTimeline} loading={loading} nowISOStr={now} onPick={setOpenJob} />
+        {/* collapsible messages — never pushes the rest of the day out of view */}
+        <MessagesPanel
+          loading={loading}
+          unack={unackNotes}
+          recentAcked={recentAcked}
+          open={messagesOpen}
+          onToggle={() => setMessagesOpen((v) => !v)}
+          onAck={ack}
+        />
 
-        <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 16 }}>
-          {/* notifications — awaiting acknowledgement */}
-          <div className="stack" style={{ gap: 8 }}>
-            <SectionLabel>Messages</SectionLabel>
-            {loading ? (
-              <Skeleton w="100%" h={70} r={10} />
-            ) : unackNotes.length === 0 ? (
-              <div className="card" style={{ padding: "12px 14px", fontSize: 12, color: "var(--text-muted)" }}>
-                No new messages.
-              </div>
-            ) : (
-              unackNotes.map((n) => (
-                <div
-                  key={n.notification_id}
-                  className="card"
-                  style={{ padding: 12, borderLeft: "3px solid var(--brand)" }}
-                >
-                  <strong style={{ fontSize: 12 }}>{n.subject}</strong>
-                  <p style={{ fontSize: 12, margin: "4px 0 8px", color: "var(--text-muted)" }}>{n.body}</p>
-                  <button
-                    className="btn btn-primary"
-                    style={{ fontSize: 12, padding: "6px 12px" }}
-                    onClick={() => ack(n.notification_id)}
-                  >
-                    ✓ Seen
-                  </button>
-                </div>
-              ))
-            )}
+        {/* today's route — a real timeline with time markers + travel gaps */}
+        <RouteStrip jobs={todayTimeline} loading={loading} nowISOStr={now} onPick={setOpenJob} />
 
-            {/* acknowledged — keep a short trail so it's clear the tap registered
-                (the coordinator sees the same acknowledgement on their side) */}
-            {recentAcked.length > 0 && (
-              <div className="stack" style={{ gap: 6, marginTop: 2 }}>
-                <div className="faint" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                  Acknowledged
-                </div>
-                {recentAcked.map((n) => (
-                  <div
-                    key={n.notification_id}
-                    className="row"
-                    style={{
-                      gap: 8,
-                      fontSize: 11.5,
-                      color: "var(--text-muted)",
-                      padding: "7px 10px",
-                      border: "1px solid var(--border)",
-                      borderRadius: 8,
-                      background: "var(--success-bg)",
-                    }}
-                  >
-                    <span style={{ color: "var(--success)", fontWeight: 700 }}>✓</span>
-                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {n.subject}
-                    </span>
-                    {n.acknowledged_at && (
-                      <span className="mono faint" style={{ fontSize: 10 }}>
-                        {fmtSGDateTime(n.acknowledged_at)}
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* next 3 hours */}
-          <div>
-            <SectionLabel>Next 3 hours</SectionLabel>
-            {loading ? (
-              <Skeleton w="100%" h={150} r={14} />
-            ) : next3h.length === 0 ? (
-              <div className="card" style={{ padding: 16, fontSize: 12, color: "var(--text-muted)" }}>
-                Nothing in the next 3 hours.
-              </div>
-            ) : (
-              next3h.map((j) => (
-                <BigJobCard key={j.job_id} job={j} tech={tech} allJobs={upcoming} onStatus={setStatus} />
-              ))
-            )}
-          </div>
-
-          {/* full list */}
-          <div>
-            <SectionLabel>All upcoming</SectionLabel>
-            {loading ? (
-              <div className="stack" style={{ gap: 8 }}>
-                <Skeleton w="100%" h={56} r={10} />
-                <Skeleton w="100%" h={56} r={10} />
-                <Skeleton w="100%" h={56} r={10} />
-              </div>
-            ) : upcoming.length === 0 ? (
-              <div
-                className="card"
-                style={{ padding: 24, textAlign: "center", fontSize: 13, color: "var(--text-muted)" }}
-              >
-                <div style={{ fontSize: 22, marginBottom: 4 }}>✓</div>
-                You&rsquo;re all caught up. No jobs on your board.
-              </div>
-            ) : (
-              <div className="stack" style={{ gap: 8 }}>
-                {upcoming.map((j) => {
-                  const frozen = isFrozen(j.freeze_point, now);
-                  const travel = travelHint(j, tech, upcoming);
-                  return (
-                    <div key={j.job_id} className="card" style={{ padding: 0, overflow: "hidden" }}>
-                      <button
-                        onClick={() => setOpenJob(openJob === j.job_id ? null : j.job_id)}
-                        style={{
-                          width: "100%",
-                          padding: 12,
-                          background: "transparent",
-                          border: "none",
-                          textAlign: "left",
-                          display: "flex",
-                          gap: 10,
-                          alignItems: "center",
-                        }}
-                      >
-                        <span
-                          style={{
-                            width: 4,
-                            alignSelf: "stretch",
-                            background: `var(${TIER_META[j.tier].colorVar})`,
-                            borderRadius: 999,
-                          }}
-                        />
-                        <span style={{ flex: 1, minWidth: 0 }}>
-                          <span className="row" style={{ gap: 6 }}>
-                            <strong style={{ fontSize: 13 }}>{j.customer_name}</strong>
-                            {frozen && <span title="Schedule locked">🔒</span>}
-                            {j.reschedule_history.length > 0 && (
-                              <span title="Rescheduled by the dispatch agent" style={{ fontSize: 11 }}>
-                                🔁
-                              </span>
-                            )}
-                          </span>
-                          <span className="muted" style={{ fontSize: 11, display: "block" }}>
-                            {fmtSGWeekdayTime(j.scheduled_time)} · {j.location.address}
-                          </span>
-                          {travel && (
-                            <span className="faint" style={{ fontSize: 10.5, display: "block", marginTop: 2 }}>
-                              {travel}
-                            </span>
-                          )}
-                        </span>
-                        <span className="faint">{openJob === j.job_id ? "▾" : "▸"}</span>
-                      </button>
-
-                      {openJob === j.job_id && (
-                        <div style={{ padding: "0 12px 12px", fontSize: 12 }}>
-                          <TierBadge tier={j.tier} />
-                          <p style={{ margin: "8px 0", color: "var(--text-muted)" }}>{j.problem_description}</p>
-                          <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
-                            {j.skill_required.map((s) => (
-                              <span key={s} className="chip skill" style={{ fontSize: 10 }}>
-                                {s}
-                              </span>
-                            ))}
-                          </div>
-                          {!mapFailed.has(j.job_id) && (
-                            <div style={{ marginTop: 10 }}>
-                              <MapView
-                                mode="display"
-                                customer={{ lat: j.location.lat, lng: j.location.lng, address: j.location.address }}
-                                technician={
-                                  tech
-                                    ? { lat: tech.location.lat, lng: tech.location.lng, name: tech.name }
-                                    : null
-                                }
-                                active={j.status === "in_progress"}
-                                height={180}
-                                onUnavailable={() =>
-                                  setMapFailed((s) => new Set(s).add(j.job_id))
-                                }
-                              />
-                            </div>
-                          )}
-                          <a
-                            href={`https://maps.google.com/?q=${encodeURIComponent(j.location.address)}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="btn"
-                            style={{ marginTop: 10, fontSize: 12, width: "100%", justifyContent: "center" }}
-                          >
-                            📍 Directions in Google Maps
-                          </a>
-                          <div className="row" style={{ gap: 6, marginTop: 8 }}>
-                            <button className="btn" style={{ flex: 1, fontSize: 11 }} onClick={() => setStatus(j.job_id, "en_route")}>
-                              En route
-                            </button>
-                            <button className="btn" style={{ flex: 1, fontSize: 11 }} onClick={() => setStatus(j.job_id, "arrived")}>
-                              Arrived
-                            </button>
-                            <button
-                              className="btn btn-primary"
-                              style={{ flex: 1, fontSize: 11 }}
-                              onClick={() => setStatus(j.job_id, "completed")}
-                            >
-                              Done
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* completed today */}
-          {completedToday.length > 0 && (
+        <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 18 }}>
+          {/* overdue — scheduled time has passed but never marked done; these
+              need to be closed out before anything else, so they sit above
+              the hero job even though they're not "next" chronologically */}
+          {!loading && overdue.length > 0 && (
             <div>
-              <SectionLabel>Completed today</SectionLabel>
+              <SectionLabel>
+                <span style={{ color: "var(--tier-priority)" }}>Needs closing out</span>
+              </SectionLabel>
               <div className="stack" style={{ gap: 6 }}>
-                {completedToday.map((j) => (
+                {overdue.map((j) => (
                   <div
                     key={j.job_id}
                     className="row"
                     style={{
-                      gap: 8,
-                      fontSize: 12,
-                      padding: "9px 11px",
-                      border: "1px solid var(--border)",
-                      borderRadius: 8,
-                      background: "var(--surface)",
+                      gap: 10,
+                      padding: "10px 12px",
+                      border: "1px solid var(--tier-priority)",
+                      background: "var(--tier-priority-bg)",
+                      borderRadius: 10,
                     }}
                   >
-                    <span style={{ color: "var(--success)", fontWeight: 700 }}>✓</span>
-                    <span
-                      style={{
-                        flex: 1,
-                        minWidth: 0,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <strong style={{ fontSize: 12.5 }}>{j.customer_name}</strong>
+                      <span className="muted" style={{ fontSize: 11, display: "block" }}>
+                        Was scheduled {fmtSGWeekdayTime(j.scheduled_time)}
+                      </span>
+                    </span>
+                    <button
+                      className="btn btn-primary"
+                      style={{ fontSize: 11, padding: "6px 10px", flexShrink: 0 }}
+                      onClick={() => setStatus(j.job_id, "completed")}
                     >
-                      {j.customer_name}
-                    </span>
-                    <span
-                      style={{
-                        width: 6,
-                        height: 6,
-                        borderRadius: 999,
-                        background: `var(${TIER_META[j.tier].colorVar})`,
-                        flexShrink: 0,
-                      }}
-                    />
-                    <span className="mono faint" style={{ fontSize: 10.5 }}>
-                      {fmtSGTime(j.scheduled_time)}
-                    </span>
+                      Mark done
+                    </button>
                   </div>
                 ))}
               </div>
             </div>
           )}
+
+          {/* right now — the one job that matters most, always fully visible
+              (no accordion) with its own mini-map + primary actions */}
+          <div>
+            <SectionLabel>Right now</SectionLabel>
+            {loading ? (
+              <Skeleton w="100%" h={240} r={16} />
+            ) : !heroJob ? (
+              <div className="card" style={{ padding: 24, textAlign: "center" }}>
+                <div style={{ display: "flex", justifyContent: "center", marginBottom: 6, color: "var(--success)" }}>
+                  <STATUS_ICON.check size={22} strokeWidth={2.25} />
+                </div>
+                <div style={{ fontSize: 13, color: "var(--text-muted)" }}>
+                  You&rsquo;re all caught up. No jobs on your board.
+                </div>
+              </div>
+            ) : (
+              <HeroJobCard
+                job={heroJob}
+                tech={tech}
+                allJobs={upcoming}
+                mapFailed={mapFailed.has(heroJob.job_id)}
+                onMapFail={() => setMapFailed((s) => new Set(s).add(heroJob.job_id))}
+                onStatus={setStatus}
+              />
+            )}
+          </div>
+
+          {/* rest of the board, grouped by day */}
+          <div>
+            <SectionLabel>Upcoming</SectionLabel>
+            {loading ? (
+              <div className="stack" style={{ gap: 8 }}>
+                <Skeleton w="100%" h={56} r={10} />
+                <Skeleton w="100%" h={56} r={10} />
+                <Skeleton w="100%" h={56} r={10} />
+              </div>
+            ) : groupedRest.length === 0 ? (
+              <div className="faint" style={{ fontSize: 12.5, padding: "4px 2px" }}>
+                Nothing else on the board.
+              </div>
+            ) : (
+              <div className="stack" style={{ gap: 14 }}>
+                {groupedRest.map((g) => (
+                  <div key={g.key}>
+                    <div
+                      className="faint"
+                      style={{ fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 }}
+                    >
+                      {g.label} <span style={{ fontWeight: 400 }}>· {g.jobs.length} job{g.jobs.length === 1 ? "" : "s"}</span>
+                    </div>
+                    <div className="stack" style={{ gap: 6 }}>
+                      {g.jobs.map((j) => (
+                        <JobRow
+                          key={j.job_id}
+                          job={j}
+                          tech={tech}
+                          allJobs={upcoming}
+                          open={openJob === j.job_id}
+                          onToggle={() => setOpenJob(openJob === j.job_id ? null : j.job_id)}
+                          mapFailed={mapFailed.has(j.job_id)}
+                          onMapFail={() => setMapFailed((s) => new Set(s).add(j.job_id))}
+                          onStatus={setStatus}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* completed today — collapsed summary */}
+          {completedToday.length > 0 && (
+            <div>
+              <button
+                onClick={() => setCompletedOpen((v) => !v)}
+                style={{
+                  width: "100%",
+                  background: "transparent",
+                  border: "none",
+                  padding: 0,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: completedOpen ? 6 : 0,
+                }}
+              >
+                <span
+                  className="faint"
+                  style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em", display: "flex", alignItems: "center", gap: 6 }}
+                >
+                  <span style={{ color: "var(--success)", display: "inline-flex" }}>
+                    <STATUS_ICON.check size={12} strokeWidth={3} />
+                  </span>
+                  Completed today · {completedToday.length}
+                </span>
+                <span className="faint" style={{ display: "inline-flex" }}>
+                  {completedOpen ? (
+                    <STATUS_ICON.chevronUp size={14} strokeWidth={2.25} />
+                  ) : (
+                    <STATUS_ICON.chevronDown size={14} strokeWidth={2.25} />
+                  )}
+                </span>
+              </button>
+              {completedOpen && (
+                <div className="stack" style={{ gap: 6 }}>
+                  {completedToday.map((j) => (
+                    <div
+                      key={j.job_id}
+                      className="row"
+                      style={{
+                        gap: 8,
+                        fontSize: 12,
+                        padding: "9px 11px",
+                        border: "1px solid var(--border)",
+                        borderRadius: 8,
+                        background: "var(--surface)",
+                      }}
+                    >
+                      <span style={{ color: "var(--success)", display: "inline-flex", flexShrink: 0 }}>
+                        <STATUS_ICON.check size={13} strokeWidth={3} />
+                      </span>
+                      <span
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {j.customer_name}
+                      </span>
+                      <span
+                        style={{
+                          width: 6,
+                          height: 6,
+                          borderRadius: 999,
+                          background: `var(${TIER_META[j.tier].colorVar})`,
+                          flexShrink: 0,
+                        }}
+                      />
+                      <span className="mono faint" style={{ fontSize: 10.5 }}>
+                        {fmtSGTime(j.scheduled_time)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
+      </div>
+
+      <style>{`
+        .tech-frame-wrap { padding: 0; }
+        @media (min-width: 720px) {
+          .tech-frame-wrap { padding: 32px 0 56px; display: flex; justify-content: center; }
+          .tech-frame {
+            border-radius: 28px;
+            box-shadow: 0 0 0 1px var(--border), 0 20px 50px -20px rgba(26, 25, 23, 0.28);
+            overflow: hidden;
+            background: var(--bg);
+          }
+        }
+      `}</style>
     </div>
   );
 }
@@ -515,6 +481,25 @@ function fmtSGWeekdayTime(iso: string): string {
   }).format(new Date(iso));
 }
 
+function sgDayKey(d: Date): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Singapore" }).format(d);
+}
+
+function dayGroupLabel(key: string): string {
+  const todayKey = sgDayKey(new Date());
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowKey = sgDayKey(tomorrow);
+  if (key === todayKey) return "Today";
+  if (key === tomorrowKey) return "Tomorrow";
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Singapore",
+    weekday: "long",
+    day: "numeric",
+    month: "short",
+  }).format(new Date(`${key}T12:00:00`));
+}
+
 /** "~1.5 km · after your 13:30 job" — one line of routing context for a card. */
 function travelHint(job: Job, tech: Technician | undefined, dayJobs: Job[]): string | null {
   const parts: string[] = [];
@@ -549,9 +534,150 @@ function sameSgDay(a: string, b: string): boolean {
   return f.format(new Date(a)) === f.format(new Date(b));
 }
 
-/* ── today timeline strip ───────────────────────────────────────────── */
+/* ── collapsible messages panel ─────────────────────────────────────── */
 
-function TimelineStrip({
+function MessagesPanel({
+  loading,
+  unack,
+  recentAcked,
+  open,
+  onToggle,
+  onAck,
+}: {
+  loading: boolean;
+  unack: NotificationRecord[];
+  recentAcked: NotificationRecord[];
+  open: boolean;
+  onToggle: () => void;
+  onAck: (id: string) => void;
+}) {
+  if (loading) {
+    return (
+      <div style={{ padding: "10px 16px", background: "var(--surface)", borderBottom: "1px solid var(--border)" }}>
+        <Skeleton w="100%" h={36} r={8} />
+      </div>
+    );
+  }
+
+  const hasUnack = unack.length > 0;
+
+  return (
+    <div style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)" }}>
+      <button
+        onClick={onToggle}
+        style={{
+          width: "100%",
+          padding: "10px 16px",
+          background: "transparent",
+          border: "none",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 10,
+        }}
+        aria-expanded={open}
+      >
+        <span className="row" style={{ gap: 8, minWidth: 0 }}>
+          <span style={{ display: "inline-flex", color: hasUnack ? "var(--tier-priority)" : "var(--text-faint)" }}>
+            <STATUS_ICON.bell size={15} strokeWidth={2.25} />
+          </span>
+          <span style={{ fontSize: 12.5, fontWeight: 600 }}>Messages</span>
+          {hasUnack && (
+            <span
+              style={{
+                background: "var(--tier-priority)",
+                color: "#fff",
+                fontSize: 10.5,
+                fontWeight: 700,
+                borderRadius: 999,
+                padding: "1px 7px",
+                lineHeight: "16px",
+              }}
+            >
+              {unack.length}
+            </span>
+          )}
+        </span>
+        <span className="faint" style={{ display: "inline-flex" }}>
+          {open ? (
+            <STATUS_ICON.chevronUp size={14} strokeWidth={2.25} />
+          ) : (
+            <STATUS_ICON.chevronDown size={14} strokeWidth={2.25} />
+          )}
+        </span>
+      </button>
+
+      {open && (
+        <div style={{ padding: "0 16px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+          {unack.length === 0 ? (
+            <div className="card" style={{ padding: "12px 14px", fontSize: 12, color: "var(--text-muted)" }}>
+              No new messages.
+            </div>
+          ) : (
+            unack.map((n) => (
+              <div
+                key={n.notification_id}
+                className="card"
+                style={{ padding: 12, borderLeft: "3px solid var(--brand)" }}
+              >
+                <strong style={{ fontSize: 12 }}>{n.subject}</strong>
+                <p style={{ fontSize: 12, margin: "4px 0 8px", color: "var(--text-muted)" }}>{n.body}</p>
+                <button
+                  className="btn btn-primary"
+                  style={{ fontSize: 12, padding: "6px 12px" }}
+                  onClick={() => onAck(n.notification_id)}
+                >
+                  <STATUS_ICON.check size={12} strokeWidth={2.5} />
+                  Seen
+                </button>
+              </div>
+            ))
+          )}
+
+          {recentAcked.length > 0 && (
+            <div className="stack" style={{ gap: 6, marginTop: 2 }}>
+              <div className="faint" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                Acknowledged
+              </div>
+              {recentAcked.map((n) => (
+                <div
+                  key={n.notification_id}
+                  className="row"
+                  style={{
+                    gap: 8,
+                    fontSize: 11.5,
+                    color: "var(--text-muted)",
+                    padding: "7px 10px",
+                    border: "1px solid var(--border)",
+                    borderRadius: 8,
+                    background: "var(--success-bg)",
+                  }}
+                >
+                  <span style={{ color: "var(--success)", display: "inline-flex", flexShrink: 0 }}>
+                    <STATUS_ICON.check size={13} strokeWidth={3} />
+                  </span>
+                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {n.subject}
+                  </span>
+                  {n.acknowledged_at && (
+                    <span className="mono faint" style={{ fontSize: 10 }}>
+                      {fmtSGDateTime(n.acknowledged_at)}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── today's route strip ────────────────────────────────────────────── */
+
+function RouteStrip({
   jobs,
   loading,
   nowISOStr,
@@ -565,13 +691,12 @@ function TimelineStrip({
   if (loading) {
     return (
       <div style={{ padding: "12px 16px", background: "var(--surface)", borderBottom: "1px solid var(--border)" }}>
-        <Skeleton w="100%" h={44} r={8} />
+        <Skeleton w="100%" h={64} r={8} />
       </div>
     );
   }
   if (jobs.length === 0) return null;
 
-  // Which job is "current" — the one in progress, else the next one still ahead.
   const nowMs = new Date(nowISOStr).getTime();
   const inProgress = jobs.find((j) => j.status === "in_progress");
   const nextUp = jobs.find(
@@ -582,33 +707,44 @@ function TimelineStrip({
 
   return (
     <div style={{ padding: "12px 16px 14px", background: "var(--surface)", borderBottom: "1px solid var(--border)" }}>
-      <div className="spread" style={{ marginBottom: 8 }}>
-        <SectionLabel>My day</SectionLabel>
+      <div className="spread" style={{ marginBottom: 10 }}>
+        <SectionLabel>My route today</SectionLabel>
         <span className="faint" style={{ fontSize: 10 }}>
           {doneCount}/{jobs.length} done
         </span>
       </div>
-      {/* horizontal sequence of stops — never clips, scrolls if the day is long */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "stretch",
-          gap: 6,
-          overflowX: "auto",
-          paddingBottom: 2,
-        }}
-      >
+      {/* real timeline rail: time marker above, stop below, connector shows
+          the travel gap between consecutive stops */}
+      <div style={{ display: "flex", alignItems: "stretch", overflowX: "auto", paddingBottom: 4 }}>
         {jobs.map((j, i) => {
           const done = j.status === "completed";
           const active = j.job_id === currentId;
           const tierColor = `var(${TIER_META[j.tier].colorVar})`;
+          const prev = jobs[i - 1];
+          const gapKm = prev ? distanceKm(prev.location, j.location) : null;
           return (
             <div key={j.job_id} style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
               {i > 0 && (
-                <span
-                  aria-hidden
-                  style={{ width: 10, height: 2, background: "var(--border-strong)", flexShrink: 0 }}
-                />
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: 34,
+                    flexShrink: 0,
+                  }}
+                >
+                  <span
+                    aria-hidden
+                    style={{ width: "100%", height: 2, background: "var(--border-strong)" }}
+                  />
+                  {gapKm !== null && (
+                    <span className="faint mono" style={{ fontSize: 8.5, marginTop: 2, whiteSpace: "nowrap" }}>
+                      {gapKm.toFixed(1)}km
+                    </span>
+                  )}
+                </div>
               )}
               <button
                 onClick={() => onPick(j.job_id)}
@@ -617,10 +753,10 @@ function TimelineStrip({
                   display: "flex",
                   flexDirection: "column",
                   alignItems: "flex-start",
-                  gap: 2,
-                  minWidth: 78,
-                  maxWidth: 120,
-                  padding: "6px 9px",
+                  gap: 3,
+                  minWidth: 88,
+                  maxWidth: 130,
+                  padding: "7px 10px",
                   border: active ? "2px solid var(--text)" : "1px solid var(--border)",
                   borderLeft: `4px solid ${tierColor}`,
                   borderRadius: 8,
@@ -630,26 +766,32 @@ function TimelineStrip({
                   boxShadow: active ? "var(--shadow-sm)" : "none",
                 }}
               >
-                <span
-                  className="mono"
-                  style={{ fontSize: 10, lineHeight: 1, color: "var(--text-muted)" }}
-                >
+                <span className="mono" style={{ fontSize: 10, lineHeight: 1, color: "var(--text-muted)" }}>
                   {fmtSGTime(j.scheduled_time)}
                 </span>
                 <span
                   style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 3,
                     fontSize: 11,
                     lineHeight: 1.15,
                     fontWeight: 600,
                     color: "var(--text)",
                     overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
                     maxWidth: "100%",
                   }}
                 >
-                  {done ? "✓ " : active ? "▸ " : ""}
-                  {j.customer_name}
+                  {done && <STATUS_ICON.check size={10} strokeWidth={3} color="var(--success)" />}
+                  {active && !done && (
+                    <span
+                      aria-hidden
+                      style={{ width: 5, height: 5, borderRadius: 999, background: tierColor, flexShrink: 0 }}
+                    />
+                  )}
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {j.customer_name}
+                  </span>
                 </span>
               </button>
             </div>
@@ -660,73 +802,273 @@ function TimelineStrip({
   );
 }
 
-function BigJobCard({
+/* ── right now: hero job card with persistent map + actions ──────────── */
+
+function HeroJobCard({
   job,
   tech,
   allJobs,
+  mapFailed,
+  onMapFail,
   onStatus,
 }: {
   job: Job;
   tech: Technician | undefined;
   allJobs: Job[];
+  mapFailed: boolean;
+  onMapFail: () => void;
   onStatus: (id: string, a: "en_route" | "arrived" | "completed") => void;
 }) {
   const mins = Math.max(0, Math.round(hoursBetween(nowISO(), job.scheduled_time) * 60));
-  const bg = `var(${TIER_META[job.tier].colorVar})`;
+  const tierColor = `var(${TIER_META[job.tier].colorVar})`;
   const travel = travelHint(job, tech, allJobs);
+  const inProgress = job.status === "in_progress";
+  const frozen = isFrozen(job.freeze_point, nowISO());
+
   return (
-    <div
-      style={{
-        background: bg,
-        color: "#fff",
-        borderRadius: 14,
-        padding: "16px 17px",
-        marginBottom: 8,
-        boxShadow: "0 2px 10px rgba(0,0,0,.18)",
-      }}
-    >
-      <div className="spread" style={{ marginBottom: 12 }}>
-        <span style={{ fontFamily: "var(--mono)", fontSize: 11, letterSpacing: "0.06em", opacity: 0.85 }}>
-          {TIER_META[job.tier].label.toUpperCase()}
-        </span>
-        {job.reschedule_history.length > 0 && (
-          <span style={{ fontSize: 10.5, opacity: 0.9 }}>🔁 rescheduled</span>
-        )}
-      </div>
-      <div className="spread" style={{ alignItems: "flex-end", flexWrap: "wrap", gap: 14 }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 21, fontWeight: 600, letterSpacing: "-0.02em" }}>{job.customer_name}</div>
-          <div style={{ fontSize: 13.5, opacity: 0.92, marginTop: 3 }}>{job.location.address}</div>
-          {travel && <div style={{ fontSize: 11.5, opacity: 0.8, marginTop: 3 }}>{travel}</div>}
+    <div className="card" style={{ padding: 0, overflow: "hidden", borderTop: `3px solid ${tierColor}` }}>
+      <div style={{ padding: "16px 17px 4px" }}>
+        <div className="spread" style={{ marginBottom: 10 }}>
+          <TierBadge tier={job.tier} />
+          <span className="row" style={{ gap: 8 }}>
+            {frozen && (
+              <span title="Schedule locked" style={{ display: "inline-flex", color: "var(--status-frozen)" }}>
+                <STATUS_ICON.lock size={13} strokeWidth={2.25} />
+              </span>
+            )}
+            {job.reschedule_history.length > 0 && (
+              <span title="Rescheduled by the dispatch agent" style={{ display: "inline-flex", color: "var(--tier-priority)" }}>
+                <STATUS_ICON.reschedule size={13} strokeWidth={2.25} />
+              </span>
+            )}
+          </span>
         </div>
-        <div style={{ textAlign: "right" }}>
-          <div style={{ fontFamily: "var(--mono)", fontSize: 30, fontWeight: 600, letterSpacing: "-0.03em" }}>
-            {mins < 60 ? mins : (mins / 60).toFixed(1)}
+
+        <div className="spread" style={{ alignItems: "flex-end", flexWrap: "wrap", gap: 14, marginBottom: 10 }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: "-0.02em" }}>{job.customer_name}</div>
+            <div className="muted" style={{ fontSize: 12.5, marginTop: 3 }}>{job.location.address}</div>
+            {travel && (
+              <div className="faint" style={{ fontSize: 11, marginTop: 3 }}>
+                {travel}
+              </div>
+            )}
           </div>
-          <div style={{ fontSize: 11, opacity: 0.8 }}>{mins < 60 ? "min until start" : "h until start"}</div>
+          {!inProgress && (
+            <div style={{ textAlign: "right", flexShrink: 0 }}>
+              <div className="mono" style={{ fontSize: 26, fontWeight: 700, letterSpacing: "-0.03em", color: tierColor }}>
+                {mins < 60 ? mins : (mins / 60).toFixed(1)}
+              </div>
+              <div className="faint" style={{ fontSize: 10.5 }}>{mins < 60 ? "min to start" : "h to start"}</div>
+            </div>
+          )}
+          {inProgress && (
+            <span
+              style={{
+                fontSize: 10.5,
+                fontWeight: 700,
+                letterSpacing: "0.04em",
+                textTransform: "uppercase",
+                color: tierColor,
+                border: `1px solid ${tierColor}`,
+                borderRadius: 999,
+                padding: "3px 9px",
+                flexShrink: 0,
+              }}
+            >
+              In progress
+            </span>
+          )}
+        </div>
+
+        <p style={{ fontSize: 12.5, margin: "0 0 10px", color: "var(--text-muted)", lineHeight: 1.5 }}>
+          {job.problem_description}
+        </p>
+        <div className="row" style={{ gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+          {job.skill_required.map((s) => (
+            <span key={s} className="chip skill" style={{ fontSize: 10 }}>
+              {s}
+            </span>
+          ))}
         </div>
       </div>
-      <p style={{ fontSize: 12.5, margin: "10px 0", opacity: 0.92, lineHeight: 1.5 }}>{job.problem_description}</p>
-      <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-        <button
-          style={{ flex: 1, minWidth: 100, fontFamily: "inherit", fontSize: 13, fontWeight: 600, background: "#fff", color: "#26241f", border: "none", borderRadius: 8, padding: 11, cursor: "pointer" }}
-          onClick={() => onStatus(job.job_id, "en_route")}
+
+      {/* persistent route map — always visible for the job that matters
+          most right now, not tucked behind an accordion */}
+      {!mapFailed && (
+        <div style={{ padding: "0 17px 14px" }}>
+          <MapView
+            mode="display"
+            customer={{ lat: job.location.lat, lng: job.location.lng, address: job.location.address }}
+            technician={tech ? { lat: tech.location.lat, lng: tech.location.lng, name: tech.name } : null}
+            active={inProgress}
+            height={190}
+            onUnavailable={onMapFail}
+          />
+        </div>
+      )}
+
+      <div style={{ padding: "0 17px 17px", display: "flex", flexDirection: "column", gap: 8 }}>
+        <a
+          href={`https://maps.google.com/?q=${encodeURIComponent(job.location.address)}`}
+          target="_blank"
+          rel="noreferrer"
+          className="btn"
+          style={{ fontSize: 12, justifyContent: "center" }}
         >
-          En route
-        </button>
-        <button
-          style={{ flex: 1, minWidth: 100, fontFamily: "inherit", fontSize: 13, fontWeight: 500, background: "rgba(0,0,0,.22)", color: "#fff", border: "none", borderRadius: 8, padding: 11, cursor: "pointer" }}
-          onClick={() => onStatus(job.job_id, "arrived")}
-        >
-          Arrived
-        </button>
-        <button
-          style={{ flex: 1, minWidth: 100, fontFamily: "inherit", fontSize: 13, fontWeight: 500, background: "rgba(0,0,0,.22)", color: "#fff", border: "none", borderRadius: 8, padding: 11, cursor: "pointer" }}
-          onClick={() => onStatus(job.job_id, "completed")}
-        >
-          Complete
-        </button>
+          <STATUS_ICON.pin size={13} strokeWidth={2.25} />
+          Directions in Google Maps
+        </a>
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn" style={{ flex: 1, fontSize: 12.5, padding: 11 }} onClick={() => onStatus(job.job_id, "en_route")}>
+            En route
+          </button>
+          <button className="btn" style={{ flex: 1, fontSize: 12.5, padding: 11 }} onClick={() => onStatus(job.job_id, "arrived")}>
+            Arrived
+          </button>
+          <button
+            className="btn btn-primary"
+            style={{ flex: 1, fontSize: 12.5, padding: 11 }}
+            onClick={() => onStatus(job.job_id, "completed")}
+          >
+            Complete
+          </button>
+        </div>
       </div>
+    </div>
+  );
+}
+
+/* ── compact job row for the grouped "Upcoming" list ──────────────────── */
+
+function JobRow({
+  job,
+  tech,
+  allJobs,
+  open,
+  onToggle,
+  mapFailed,
+  onMapFail,
+  onStatus,
+}: {
+  job: Job;
+  tech: Technician | undefined;
+  allJobs: Job[];
+  open: boolean;
+  onToggle: () => void;
+  mapFailed: boolean;
+  onMapFail: () => void;
+  onStatus: (id: string, a: "en_route" | "arrived" | "completed") => void;
+}) {
+  const now = nowISO();
+  const frozen = isFrozen(job.freeze_point, now);
+  const travel = travelHint(job, tech, allJobs);
+
+  return (
+    <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+      <button
+        onClick={onToggle}
+        style={{
+          width: "100%",
+          padding: 12,
+          background: "transparent",
+          border: "none",
+          textAlign: "left",
+          display: "flex",
+          gap: 10,
+          alignItems: "center",
+        }}
+      >
+        <span
+          style={{
+            width: 4,
+            alignSelf: "stretch",
+            background: `var(${TIER_META[job.tier].colorVar})`,
+            borderRadius: 999,
+          }}
+        />
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <span className="row" style={{ gap: 6 }}>
+            <strong style={{ fontSize: 13 }}>{job.customer_name}</strong>
+            {frozen && (
+              <span title="Schedule locked" style={{ display: "inline-flex", color: "var(--status-frozen)" }}>
+                <STATUS_ICON.lock size={11} strokeWidth={2.25} />
+              </span>
+            )}
+            {job.reschedule_history.length > 0 && (
+              <span title="Rescheduled by the dispatch agent" style={{ display: "inline-flex", color: "var(--tier-priority)" }}>
+                <STATUS_ICON.reschedule size={11} strokeWidth={2.25} />
+              </span>
+            )}
+          </span>
+          <span className="muted" style={{ fontSize: 11, display: "block" }}>
+            {fmtSGWeekdayTime(job.scheduled_time)} · {job.location.address}
+          </span>
+          {travel && (
+            <span className="faint" style={{ fontSize: 10.5, display: "block", marginTop: 2 }}>
+              {travel}
+            </span>
+          )}
+        </span>
+        <span className="faint" style={{ display: "inline-flex" }}>
+          {open ? (
+            <STATUS_ICON.chevronDown size={14} strokeWidth={2.25} />
+          ) : (
+            <STATUS_ICON.chevronRight size={14} strokeWidth={2.25} />
+          )}
+        </span>
+      </button>
+
+      {open && (
+        <div style={{ padding: "0 12px 12px", fontSize: 12 }}>
+          <TierBadge tier={job.tier} />
+          <p style={{ margin: "8px 0", color: "var(--text-muted)" }}>{job.problem_description}</p>
+          <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+            {job.skill_required.map((s) => (
+              <span key={s} className="chip skill" style={{ fontSize: 10 }}>
+                {s}
+              </span>
+            ))}
+          </div>
+          {!mapFailed && (
+            <div style={{ marginTop: 10 }}>
+              <MapView
+                mode="display"
+                customer={{ lat: job.location.lat, lng: job.location.lng, address: job.location.address }}
+                technician={tech ? { lat: tech.location.lat, lng: tech.location.lng, name: tech.name } : null}
+                active={job.status === "in_progress"}
+                height={160}
+                onUnavailable={onMapFail}
+              />
+            </div>
+          )}
+          <a
+            href={`https://maps.google.com/?q=${encodeURIComponent(job.location.address)}`}
+            target="_blank"
+            rel="noreferrer"
+            className="btn"
+            style={{ marginTop: 10, fontSize: 12, width: "100%", justifyContent: "center" }}
+          >
+            <STATUS_ICON.pin size={13} strokeWidth={2.25} />
+            Directions in Google Maps
+          </a>
+          <div className="row" style={{ gap: 6, marginTop: 8 }}>
+            <button className="btn" style={{ flex: 1, fontSize: 11 }} onClick={() => onStatus(job.job_id, "en_route")}>
+              En route
+            </button>
+            <button className="btn" style={{ flex: 1, fontSize: 11 }} onClick={() => onStatus(job.job_id, "arrived")}>
+              Arrived
+            </button>
+            <button
+              className="btn btn-primary"
+              style={{ flex: 1, fontSize: 11 }}
+              onClick={() => onStatus(job.job_id, "completed")}
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

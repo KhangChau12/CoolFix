@@ -13,6 +13,7 @@ import { useRealtime } from "@/components/useRealtime";
 import { PipelineReplay } from "@/components/PipelineReplay";
 import MapView from "@/components/MapView";
 import { TierBadge, StatusDot } from "@/components/ui";
+import { STATUS_ICON } from "@/lib/icons";
 import { fmtSGDateTime } from "@/lib/time";
 import type { Job, NotificationRecord, Technician } from "@/lib/types";
 
@@ -163,16 +164,23 @@ export default function AdminJobPage({ params }: { params: { id: string } }) {
                 </span>
                 <span className="mono faint" style={{ fontSize: 10 }}>{n.kind}</span>
                 <span
+                  className="row"
                   style={{
                     marginLeft: "auto",
+                    gap: 4,
                     fontSize: 10.5,
                     fontWeight: 600,
                     color: n.acknowledged ? "var(--success)" : "var(--text-faint)",
                   }}
                 >
-                  {n.acknowledged
-                    ? `✓ Seen ${n.acknowledged_at ? "· " + fmtSGDateTime(n.acknowledged_at) : ""}`
-                    : "• awaiting acknowledgement"}
+                  {n.acknowledged ? (
+                    <>
+                      <STATUS_ICON.check size={11} strokeWidth={2.75} />
+                      Seen {n.acknowledged_at ? "· " + fmtSGDateTime(n.acknowledged_at) : ""}
+                    </>
+                  ) : (
+                    "• awaiting acknowledgement"
+                  )}
                 </span>
               </div>
               <div style={{ fontSize: 12, fontWeight: 600, marginTop: 5 }}>{n.subject}</div>
