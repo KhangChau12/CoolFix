@@ -202,12 +202,28 @@ export function notificationToRow(n: NotificationRecord) {
 }
 
 export function rowToConfig(r: any): RuntimeConfig {
+  const storedClock = r.dispatch_policy?._coolfix_clock;
+  const clockMode = r.clock_mode === "custom" || r.clock_mode === "real"
+    ? r.clock_mode
+    : storedClock?.clockMode === "custom"
+      ? "custom"
+      : "real";
+  const customTimeISO = r.custom_time_iso
+    ? toISO(r.custom_time_iso)
+    : typeof storedClock?.customTimeISO === "string"
+      ? toISO(storedClock.customTimeISO)
+      : null;
+
   return {
     freezeWindowHours: Number(r.freeze_window_hours ?? 3),
+    clockMode,
+    customTimeISO: clockMode === "custom" ? customTimeISO : null,
     // dispatch_policy is the new per-tier scoring policy. Older rows (or a
     // pre-migration DB) won't have the column — fall back to the shipped
     // default so the pipeline always has a full policy.
-    dispatchPolicy: isFullPolicy(r.dispatch_policy) ? r.dispatch_policy : DISPATCH_POLICY,
+    dispatchPolicy: isFullPolicy(r.dispatch_policy)
+      ? withoutClockMetadata(r.dispatch_policy)
+      : DISPATCH_POLICY,
     hitlMaxCustomersAffected: r.hitl_max_customers_affected ?? 1,
     hitlMaxAddedTravelKm: Number(r.hitl_max_added_travel_km ?? 8),
     capacityFlexiblePerDay: r.capacity_flexible_per_day ?? 6,
@@ -222,10 +238,26 @@ export function rowToConfig(r: any): RuntimeConfig {
   };
 }
 
-export function configToRow(c: Partial<RuntimeConfig>) {
+export function configToRow(
+  c: Partial<RuntimeConfig>,
+  options: { embedClockFallback?: boolean } = {},
+) {
   const row: Record<string, unknown> = { id: 1, updated_at: new Date().toISOString() };
   if (c.freezeWindowHours !== undefined) row.freeze_window_hours = c.freezeWindowHours;
-  if (c.dispatchPolicy !== undefined) row.dispatch_policy = c.dispatchPolicy;
+  if (c.clockMode !== undefined) row.clock_mode = c.clockMode;
+  if (c.customTimeISO !== undefined) row.custom_time_iso = c.customTimeISO;
+  if (c.dispatchPolicy !== undefined) {
+    row.dispatch_policy = options.embedClockFallback &&
+      (c.clockMode !== undefined || c.customTimeISO !== undefined)
+      ? {
+          ...c.dispatchPolicy,
+          _coolfix_clock: {
+            clockMode: c.clockMode ?? "real",
+            customTimeISO: c.customTimeISO ?? null,
+          },
+        }
+      : c.dispatchPolicy;
+  }
   if (c.hitlMaxCustomersAffected !== undefined)
     row.hitl_max_customers_affected = c.hitlMaxCustomersAffected;
   if (c.hitlMaxAddedTravelKm !== undefined)
@@ -264,6 +296,14 @@ function isFullPolicy(p: unknown): p is RuntimeConfig["dispatchPolicy"] {
     if (!row || typeof row !== "object") return false;
     return keys.every((k) => typeof (row as Record<string, unknown>)[k] === "number");
   });
+}
+
+function withoutClockMetadata(
+  p: RuntimeConfig["dispatchPolicy"],
+): RuntimeConfig["dispatchPolicy"] {
+  const copy = { ...(p as Record<string, unknown>) };
+  delete copy._coolfix_clock;
+  return copy as RuntimeConfig["dispatchPolicy"];
 }
 
 // ── Job feedback ────────────────────────────────────────────────────

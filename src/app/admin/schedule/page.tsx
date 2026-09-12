@@ -14,7 +14,7 @@ import {
   type RuntimeConfig,
   type Technician,
 } from "@/lib/types";
-import { fmtSGDateTime, fmtSGTime, sgHour } from "@/lib/time";
+import { fmtSGDateTime, fmtSGTime, nowISO, sgHour } from "@/lib/time";
 
 const DAY_START = 7;
 const DAY_END = 20;
@@ -41,7 +41,7 @@ function sgDayKey(d: Date): string {
 
 /** `today + offset` as a Date (local midnight is fine — only the SGT day-key is read off it). */
 function dayFromOffset(offset: number): Date {
-  const d = new Date();
+  const d = new Date(nowISO());
   d.setDate(d.getDate() + offset);
   return d;
 }
@@ -105,7 +105,7 @@ export default function SchedulePage() {
           const key = sgDayKey(new Date(target.scheduled_time));
           const off = Math.round(
             (new Date(`${key}T00:00:00+08:00`).getTime() -
-              new Date(sgDayKey(new Date()) + "T00:00:00+08:00").getTime()) /
+              new Date(sgDayKey(new Date(nowISO())) + "T00:00:00+08:00").getTime()) /
               86400000,
           );
           setDayOffset(off);
@@ -130,7 +130,7 @@ export default function SchedulePage() {
       });
   }, []);
 
-  const nowDecimal = sgHourDecimal(new Date().toISOString());
+  const nowDecimal = sgHourDecimal(nowISO());
   const isToday = dayOffset === 0;
   // Hover shows a small corner tooltip; a click ("pin") opens the full modal.
   const hoverPreview = !pinnedJob && hoverJob ? hoverJob : null;

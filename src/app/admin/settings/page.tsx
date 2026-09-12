@@ -74,6 +74,7 @@ export default function SettingsPage() {
       const { config } = await apiSend<{ config: RuntimeConfig }>("/api/config", "PATCH", draft);
       setCfg(config);
       setDraft(config);
+      persistClockToBrowser(config);
       setToast({ msg: "Saved. Every booking from now on uses these rules.", kind: "success" });
     } catch (e) {
       setToast({ msg: (e as Error).message, kind: "error" });
@@ -164,6 +165,65 @@ export default function SettingsPage() {
             />
           ))}
         </div>
+      </div>
+
+      {/* ── Demo clock ── */}
+      <div className="card" style={{ padding: 18 }}>
+        <strong style={{ fontSize: 14 }}>Scheduling clock — test another date</strong>
+        <p className="muted" style={{ fontSize: 12.5, margin: "4px 0 14px", lineHeight: 1.55 }}>
+          Set a fixed Singapore date and time to test tomorrow&apos;s scheduling window.
+          The simulated time stays active across requests and pages until you explicitly
+          switch back to the real clock.
+        </p>
+        <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+          <button
+            className="chip"
+            style={{
+              cursor: "pointer",
+              background: draft.clockMode === "custom" ? "var(--brand)" : "var(--surface-2)",
+              color: draft.clockMode === "custom" ? "#fff" : "var(--text-muted)",
+              borderColor: draft.clockMode === "custom" ? "var(--brand)" : "var(--border)",
+            }}
+            onClick={() => set("clockMode", "custom")}
+          >
+            Time travel!!
+          </button>
+          <button
+            className="chip"
+            style={{
+              cursor: "pointer",
+              background: draft.clockMode === "real" ? "var(--brand)" : "var(--surface-2)",
+              color: draft.clockMode === "real" ? "#fff" : "var(--text-muted)",
+              borderColor: draft.clockMode === "real" ? "var(--brand)" : "var(--border)",
+            }}
+            onClick={() => {
+              set("clockMode", "real");
+              set("customTimeISO", null);
+            }}
+          >
+            Use real date & time
+          </button>
+        </div>
+        <label style={{ display: "block", fontSize: 12.5 }}>
+          <span className="mono" style={{ display: "block", fontSize: 11, marginBottom: 4 }}>
+            Simulated current time · Singapore time
+          </span>
+          <input
+            type="datetime-local"
+            className="inp"
+            value={draft.clockMode === "custom" && draft.customTimeISO ? toDateTimeLocal(draft.customTimeISO) : ""}
+            onChange={(event) => {
+              const iso = fromDateTimeLocal(event.target.value);
+              if (!iso) return;
+              setDraft((d) => (d ? { ...d, clockMode: "custom", customTimeISO: iso } : d));
+            }}
+          />
+        </label>
+        <p className="faint" style={{ fontSize: 10.5, margin: "7px 0 0", lineHeight: 1.45 }}>
+          {draft.clockMode === "custom" && draft.customTimeISO
+            ? `Active simulated time: ${formatClock(draft.customTimeISO)}`
+            : "Real time is active. Choose a date above, then save changes to start the simulation."}
+        </p>
       </div>
 
       {/* ── Autonomy / HITL ── */}
@@ -415,6 +475,13 @@ function WhatChangedPanel({
 function diffConfig(cfg: RuntimeConfig, draft: RuntimeConfig): { label: string; from: string; to: string }[] {
   const out: { label: string; from: string; to: string }[] = [];
 
+  if (cfg.clockMode !== draft.clockMode || cfg.customTimeISO !== draft.customTimeISO) {
+    out.push({
+      label: "Scheduling clock",
+      from: describeClock(cfg),
+      to: describeClock(draft),
+    });
+  }
   if (cfg.freezeWindowHours !== draft.freezeWindowHours) {
     out.push({ label: "Freeze window", from: `${cfg.freezeWindowHours}h`, to: `${draft.freezeWindowHours}h` });
   }
@@ -467,6 +534,56 @@ function diffConfig(cfg: RuntimeConfig, draft: RuntimeConfig): { label: string; 
   }
 
   return out;
+}
+
+const CLOCK_STORAGE_KEY = "coolfix-runtime-clock";
+
+function persistClockToBrowser(config: RuntimeConfig): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      CLOCK_STORAGE_KEY,
+      JSON.stringify({ clockMode: config.clockMode, customTimeISO: config.customTimeISO }),
+    );
+  } catch {
+    // The server-side runtime config remains authoritative if storage is blocked.
+  }
+}
+
+function toDateTimeLocal(iso: string): string {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Singapore",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date(iso));
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
+}
+
+function fromDateTimeLocal(value: string): string | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  const [, year, month, day, hour, minute] = match;
+  const timestamp = Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour) - 8, Number(minute));
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
+}
+
+function formatClock(config: string): string {
+  return new Intl.DateTimeFormat("en-SG", {
+    timeZone: "Asia/Singapore",
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(config));
+}
+
+function describeClock(config: RuntimeConfig): string {
+  return config.clockMode === "custom" && config.customTimeISO
+    ? `Simulated · ${formatClock(config.customTimeISO)}`
+    : "Real date & time";
 }
 
 // ── One tier's dispatch policy: preset chips + a stacked-bar view of the

@@ -25,6 +25,12 @@ export async function PATCH(req: Request) {
   const patch: Partial<RuntimeConfig> = {};
   if (typeof b.freezeWindowHours === "number")
     patch.freezeWindowHours = clamp(b.freezeWindowHours, 0.5, 24);
+  if (b.clockMode === "real" || b.clockMode === "custom") patch.clockMode = b.clockMode;
+  if (b.customTimeISO === null) {
+    patch.customTimeISO = null;
+  } else if (typeof b.customTimeISO === "string" && Number.isFinite(new Date(b.customTimeISO).getTime())) {
+    patch.customTimeISO = new Date(b.customTimeISO).toISOString();
+  }
   if (b.dispatchPolicy) {
     // Per-tier scoring policy: clamp every weight to [0,1] and normalise
     // each tier's row to sum to 1, so `total` stays a readable [0,1] score.
@@ -58,8 +64,15 @@ export async function PATCH(req: Request) {
   if (b.llmMode === "stub" || b.llmMode === "gateway" || b.llmMode === "openai")
     patch.llmMode = b.llmMode;
 
-  const config = await repo.updateConfig(patch);
-  return NextResponse.json({ config });
+  try {
+    const config = await repo.updateConfig(patch);
+    return NextResponse.json({ config });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Unable to save runtime configuration." },
+      { status: 500 },
+    );
+  }
 }
 
 function clamp(n: number, lo: number, hi: number): number {

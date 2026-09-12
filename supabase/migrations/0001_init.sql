@@ -148,6 +148,8 @@ create index if not exists ntf_job_idx on notifications(job_id);
 create table if not exists runtime_config (
   id                          int primary key default 1 check (id = 1),
   freeze_window_hours         numeric not null default 3,
+  clock_mode                  text not null default 'real' check (clock_mode in ('real', 'custom')),
+  custom_time_iso             timestamptz,
   score_weights               jsonb not null default '{"w1":1.0,"w2":2.0,"w3":1.5,"w4":1.0}',
   hitl_max_customers_affected int not null default 1,
   hitl_max_added_travel_km    numeric not null default 8,

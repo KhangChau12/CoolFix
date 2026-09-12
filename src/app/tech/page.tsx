@@ -77,7 +77,7 @@ export default function TechApp() {
   );
 
   const completedToday = useMemo(() => {
-    const todaySg = sgDayKey(new Date());
+    const todaySg = sgDayKey(new Date(nowISO()));
     return jobs
       .filter((j) => j.status === "completed" && sgDayKey(new Date(j.scheduled_time)) === todaySg)
       .sort((a, b) => b.scheduled_time.localeCompare(a.scheduled_time));
@@ -85,7 +85,7 @@ export default function TechApp() {
 
   // Today's jobs (assigned + already completed) for the timeline strip, in order.
   const todayTimeline = useMemo(() => {
-    const todaySg = sgDayKey(new Date());
+    const todaySg = sgDayKey(new Date(nowISO()));
     return jobs
       .filter((j) => sgDayKey(new Date(j.scheduled_time)) === todaySg)
       .sort((a, b) => a.scheduled_time.localeCompare(b.scheduled_time));
@@ -521,8 +521,8 @@ function sgDayKey(d: Date): string {
 }
 
 function dayGroupLabel(key: string): string {
-  const todayKey = sgDayKey(new Date());
-  const tomorrow = new Date();
+  const todayKey = sgDayKey(new Date(nowISO()));
+  const tomorrow = new Date(nowISO());
   tomorrow.setDate(tomorrow.getDate() + 1);
   const tomorrowKey = sgDayKey(tomorrow);
   if (key === todayKey) return "Today";

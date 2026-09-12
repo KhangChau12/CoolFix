@@ -91,8 +91,8 @@ export default function Dashboard() {
 
   // Live SGT clock — hydration-safe (starts null on the server).
   useEffect(() => {
-    setClock(new Date());
-    const t = setInterval(() => setClock(new Date()), 1000);
+    setClock(new Date(nowISO()));
+    const t = setInterval(() => setClock(new Date(nowISO())), 1000);
     return () => clearInterval(t);
   }, []);
 

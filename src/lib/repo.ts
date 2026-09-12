@@ -6,6 +6,7 @@
 // All writes use the service_role client (server-side only).
 
 import { serviceClient } from "./supabase";
+import { configureClock } from "./time";
 import {
   approvalToRow,
   configToRow,
@@ -193,13 +194,37 @@ export async function ackNotification(id: string): Promise<void> {
 export async function getConfig(): Promise<RuntimeConfig> {
   const res = await sb().from("runtime_config").select("*").eq("id", 1).maybeSingle();
   const row = orThrow(res, "getConfig");
-  return rowToConfig(row ?? {});
+  const config = rowToConfig(row ?? {});
+  configureClock(config);
+  return config;
 }
 
 export async function updateConfig(patch: Partial<RuntimeConfig>): Promise<RuntimeConfig> {
-  const res = await sb().from("runtime_config").upsert(configToRow(patch));
+  const row = configToRow(patch);
+  let res = await sb().from("runtime_config").upsert(row);
+
+  // Older hosted databases may not have applied migration 0007 yet. Keep
+  // clock editing usable by retrying through the existing dispatch_policy
+  // JSONB column; once 0007 is applied, the normal columns are used instead.
+  if (res.error && hasMissingClockColumn(res.error)) {
+    const current = patch.dispatchPolicy ? null : await getConfig();
+    const fallbackPatch = current
+      ? { ...patch, dispatchPolicy: current.dispatchPolicy }
+      : patch;
+    const fallbackRow = configToRow(fallbackPatch, { embedClockFallback: true });
+    delete fallbackRow.clock_mode;
+    delete fallbackRow.custom_time_iso;
+    res = await sb().from("runtime_config").upsert(fallbackRow);
+  }
+
   orThrow(res, "updateConfig");
   return getConfig();
+}
+
+function hasMissingClockColumn(error: unknown): boolean {
+  const text = JSON.stringify(error) ?? String(error);
+  return text.includes("PGRST204") &&
+    (text.includes("clock_mode") || text.includes("custom_time_iso"));
 }
 
 // ── Job feedback ───────────────────────────────────────────────

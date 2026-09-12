@@ -5,7 +5,41 @@ import type { Job } from "./types";
 
 export const SG_TZ = "Asia/Singapore";
 
+const CLOCK_STORAGE_KEY = "coolfix-runtime-clock";
+type ClockMode = "real" | "custom";
+
+let serverClockMode: ClockMode = "real";
+let serverCustomTimeISO: string | null = null;
+
+/** Apply the persisted demo clock in either the server process or browser. */
+export function configureClock(config: { clockMode: ClockMode; customTimeISO: string | null }): void {
+  serverClockMode = config.clockMode;
+  serverCustomTimeISO = config.clockMode === "custom" ? config.customTimeISO : null;
+}
+
+function browserClock(): { clockMode: ClockMode; customTimeISO: string | null } | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(CLOCK_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<{ clockMode: ClockMode; customTimeISO: string | null }>;
+    if (parsed.clockMode !== "custom" && parsed.clockMode !== "real") return null;
+    return {
+      clockMode: parsed.clockMode,
+      customTimeISO: typeof parsed.customTimeISO === "string" ? parsed.customTimeISO : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function nowISO(): string {
+  const browser = browserClock();
+  const mode = browser?.clockMode ?? serverClockMode;
+  const customTime = browser?.customTimeISO ?? serverCustomTimeISO;
+  if (mode === "custom" && customTime && Number.isFinite(new Date(customTime).getTime())) {
+    return customTime;
+  }
   return new Date().toISOString();
 }
 

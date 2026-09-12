@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import ClockSync from "@/components/ClockSync";
 
 export const metadata: Metadata = {
   title: "CoolFix — Multi-Agent Technician Scheduling",
@@ -18,7 +19,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           rel="stylesheet"
         />
       </head>
-      <body>{children}</body>
+      <body>
+        <ClockSync>{children}</ClockSync>
+      </body>
     </html>
   );
 }

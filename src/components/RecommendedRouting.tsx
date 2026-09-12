@@ -45,21 +45,37 @@ export default function RecommendedRouting({
   const notifyingSignature = useRef<string | null>(null);
   const activeSignature = useRef<string | null>(null);
   const recommendationRef = useRef<Recommendation | null>(null);
+  const currentJobRef = useRef<Job | null>(currentJob);
+  const techRef = useRef<Technician | undefined>(tech);
+  currentJobRef.current = currentJob;
+  techRef.current = tech;
+
+  // The technician page refreshes its job snapshot for realtime safety. Use
+  // stable route inputs rather than object identity, otherwise an unchanged
+  // job object would clear and redraw the map on every safety poll.
+  const routeJobKey = currentJob
+    ? `${currentJob.job_id}|${currentJob.location.lat}|${currentJob.location.lng}`
+    : "";
+  const routeTechKey = tech
+    ? `${tech.technician_id}|${tech.location.lat}|${tech.location.lng}`
+    : "";
 
   const refresh = useCallback(async (deferChangedRoute = false) => {
-    if (!tech || !currentJob) return;
+    const technician = techRef.current;
+    const job = currentJobRef.current;
+    if (!technician || !job) return;
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams({
-        fromLat: String(tech.location.lat),
-        fromLng: String(tech.location.lng),
-        toLat: String(currentJob.location.lat),
-        toLng: String(currentJob.location.lng),
+        fromLat: String(technician.location.lat),
+        fromLng: String(technician.location.lng),
+        toLat: String(job.location.lat),
+        toLng: String(job.location.lng),
       });
       const result = await apiGet<Recommendation>(`/api/routing/recommendation?${params}`);
       const signature = routeSignature(result.recommended);
-      const storageKey = `coolfix-route-signature:${tech.technician_id}:${currentJob.job_id}`;
+      const storageKey = `coolfix-route-signature:${technician.technician_id}:${job.job_id}`;
       let previousSignature: string | null = null;
       try {
         previousSignature = window.sessionStorage.getItem(storageKey);
@@ -75,13 +91,13 @@ export default function RecommendedRouting({
         notifyingSignature.current !== signature
       ) {
         notifyingSignature.current = signature;
-        const routeLabel = `${currentJob.customer_name} · ${currentJob.location.address}`;
+        const routeLabel = `${job.customer_name} · ${job.location.address}`;
         try {
           await apiSend("/api/notifications", "POST", {
-            notification_id: `ntf_route_${hashString(`${tech.technician_id}:${currentJob.job_id}:${signature}`)}`,
+            notification_id: `ntf_route_${hashString(`${technician.technician_id}:${job.job_id}:${signature}`)}`,
             channel: "technician_app",
-            recipient_id: tech.technician_id,
-            job_id: currentJob.job_id,
+            recipient_id: technician.technician_id,
+            job_id: job.job_id,
             kind: "route_change_request",
             subject: "Route update needs your approval",
             body: `The recommended route to ${routeLabel} changed after a traffic refresh. Please review the new route and approve the change before updating navigation.`,
@@ -111,7 +127,7 @@ export default function RecommendedRouting({
     } finally {
       setLoading(false);
     }
-  }, [currentJob, tech]);
+  }, [routeJobKey, routeTechKey]);
 
   useEffect(() => {
     setRecommendation(null);

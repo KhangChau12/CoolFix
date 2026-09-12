@@ -474,6 +474,10 @@ export interface JobFeedback {
 
 export interface RuntimeConfig {
   freezeWindowHours: number;
+  /** The scheduling clock used by the agents and demo interfaces. */
+  clockMode: "real" | "custom";
+  /** Fixed simulated instant, used only when clockMode is "custom". */
+  customTimeISO: string | null;
   /**
    * How the Assignment Agent weighs the five scoring components, per tier.
    * Each tier's five weights should sum to 1 (the config API normalises them
@@ -615,6 +619,8 @@ export const AUTO_REPLAN_LIMITS = {
 
 export const DEFAULT_CONFIG: RuntimeConfig = {
   freezeWindowHours: 2,
+  clockMode: "real",
+  customTimeISO: null,
   dispatchPolicy: DISPATCH_POLICY,
   // 1 = a re-plan that moves ONE customer's appointment may auto-commit —
   // but only if it also clears every rail in AUTO_REPLAN_LIMITS (Flexible

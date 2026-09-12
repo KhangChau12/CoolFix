@@ -842,7 +842,7 @@ const SPECS: SeedJobSpec[] = [
  * future. If it's already past 17:00 SGT, anchor to tomorrow.
  */
 function anchorDay(): Date {
-  const now = new Date();
+  const now = new Date(nowISO());
   const h = sgHour(now.toISOString());
   // Work out "today 09:00 SGT" as a UTC instant. SGT = UTC+8, no DST.
   const sgNow = new Date(now.getTime() + 8 * 3600_000);
