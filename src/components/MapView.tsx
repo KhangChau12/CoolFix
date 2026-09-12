@@ -499,6 +499,11 @@ export default function MapView(props: Props) {
       <style>{`
         .mv-holder {
           width: 100%;
+          /* Keep Leaflet's internal panes (markers/controls use high
+             z-indexes) below the sticky CoolFix top bars. */
+          position: relative;
+          z-index: 0;
+          isolation: isolate;
           border-radius: 10px;
           overflow: hidden;
           border: 1px solid var(--border);
