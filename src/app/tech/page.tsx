@@ -5,7 +5,7 @@ import { apiGet, apiSend } from "@/lib/client";
 import { useRealtime } from "@/components/useRealtime";
 import { TopBar } from "@/components/TopBar";
 import { TierBadge, Avatar } from "@/components/ui";
-import MapView from "@/components/MapView";
+import RecommendedRouting from "@/components/RecommendedRouting";
 import { distanceKm } from "@/lib/geo";
 import { TIER_META, type Job, type NotificationRecord, type Technician } from "@/lib/types";
 import { fmtSGDateTime, fmtSGTime, hoursBetween, isFrozen, nowISO } from "@/lib/time";
@@ -20,10 +20,7 @@ export default function TechApp() {
   const [loading, setLoading] = useState(true);
   const [messagesOpen, setMessagesOpen] = useState(false);
   const [completedOpen, setCompletedOpen] = useState(false);
-  // Job ids whose embedded map failed to load (blocked tiles / offline) —
-  // those fall back to the plain "Open in Maps" link only.
-  const [mapFailed, setMapFailed] = useState<Set<string>>(new Set());
-
+  const [techTab, setTechTab] = useState<"board" | "routing">("board");
   useEffect(() => {
     apiGet<{ technicians: Technician[] }>("/api/technicians").then(({ technicians }) => {
       setTechs(technicians);
@@ -204,20 +201,43 @@ export default function TechApp() {
           </div>
         </div>
 
-        {/* collapsible messages — never pushes the rest of the day out of view */}
-        <MessagesPanel
-          loading={loading}
-          unack={unackNotes}
-          recentAcked={recentAcked}
-          open={messagesOpen}
-          onToggle={() => setMessagesOpen((v) => !v)}
-          onAck={ack}
-        />
+        <div role="tablist" aria-label="Technician views" style={{ display: "flex", gap: 4, padding: "8px 12px", background: "var(--surface-2)", borderBottom: "1px solid var(--border)" }}>
+          <button
+            role="tab"
+            aria-selected={techTab === "board"}
+            className={`tech-tab${techTab === "board" ? " is-active" : ""}`}
+            onClick={() => setTechTab("board")}
+          >
+            My board
+          </button>
+          <button
+            role="tab"
+            aria-selected={techTab === "routing"}
+            className={`tech-tab${techTab === "routing" ? " is-active" : ""}`}
+            onClick={() => setTechTab("routing")}
+          >
+            Recommended routing
+          </button>
+        </div>
 
-        {/* today's route — a real timeline with time markers + travel gaps */}
-        <RouteStrip jobs={todayTimeline} loading={loading} nowISOStr={now} onPick={setOpenJob} />
+        {techTab === "routing" ? (
+          <RecommendedRouting tech={tech} jobs={upcoming} />
+        ) : (
+          <>
+            {/* collapsible messages — never pushes the rest of the day out of view */}
+            <MessagesPanel
+              loading={loading}
+              unack={unackNotes}
+              recentAcked={recentAcked}
+              open={messagesOpen}
+              onToggle={() => setMessagesOpen((v) => !v)}
+              onAck={ack}
+            />
 
-        <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 18 }}>
+            {/* today's route — a real timeline with time markers + travel gaps */}
+            <RouteStrip jobs={todayTimeline} loading={loading} nowISOStr={now} onPick={setOpenJob} />
+
+            <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 18 }}>
           {/* overdue — scheduled time has passed but never marked done; these
               need to be closed out before anything else, so they sit above
               the hero job even though they're not "next" chronologically */}
@@ -278,8 +298,6 @@ export default function TechApp() {
                 job={heroJob}
                 tech={tech}
                 allJobs={upcoming}
-                mapFailed={mapFailed.has(heroJob.job_id)}
-                onMapFail={() => setMapFailed((s) => new Set(s).add(heroJob.job_id))}
                 onStatus={setStatus}
               />
             )}
@@ -317,8 +335,6 @@ export default function TechApp() {
                           allJobs={upcoming}
                           open={openJob === j.job_id}
                           onToggle={() => setOpenJob(openJob === j.job_id ? null : j.job_id)}
-                          mapFailed={mapFailed.has(j.job_id)}
-                          onMapFail={() => setMapFailed((s) => new Set(s).add(j.job_id))}
                           onStatus={setStatus}
                         />
                       ))}
@@ -410,12 +426,31 @@ export default function TechApp() {
               )}
             </div>
           )}
-        </div>
+            </div>
+          </>
+        )}
       </div>
       </div>
 
       <style>{`
         .tech-frame-wrap { padding: 0; }
+        .tech-tab {
+          flex: 1;
+          border: 1px solid transparent;
+          border-radius: 7px;
+          background: transparent;
+          color: var(--text-muted);
+          padding: 8px 9px;
+          font-size: 11.5px;
+          font-weight: 600;
+        }
+        .tech-tab:hover { background: var(--surface); color: var(--text); }
+        .tech-tab.is-active {
+          color: var(--brand-ink);
+          background: var(--surface);
+          border-color: var(--border);
+          box-shadow: var(--shadow-sm);
+        }
         @media (min-width: 720px) {
           .tech-frame-wrap { padding: 32px 0 56px; display: flex; justify-content: center; }
           .tech-frame {
@@ -802,21 +837,17 @@ function RouteStrip({
   );
 }
 
-/* ── right now: hero job card with persistent map + actions ──────────── */
+/* ── right now: hero job card with status actions ────────────────────── */
 
 function HeroJobCard({
   job,
   tech,
   allJobs,
-  mapFailed,
-  onMapFail,
   onStatus,
 }: {
   job: Job;
   tech: Technician | undefined;
   allJobs: Job[];
-  mapFailed: boolean;
-  onMapFail: () => void;
   onStatus: (id: string, a: "en_route" | "arrived" | "completed") => void;
 }) {
   const mins = Math.max(0, Math.round(hoursBetween(nowISO(), job.scheduled_time) * 60));
@@ -893,32 +924,7 @@ function HeroJobCard({
         </div>
       </div>
 
-      {/* persistent route map — always visible for the job that matters
-          most right now, not tucked behind an accordion */}
-      {!mapFailed && (
-        <div style={{ padding: "0 17px 14px" }}>
-          <MapView
-            mode="display"
-            customer={{ lat: job.location.lat, lng: job.location.lng, address: job.location.address }}
-            technician={tech ? { lat: tech.location.lat, lng: tech.location.lng, name: tech.name } : null}
-            active={inProgress}
-            height={190}
-            onUnavailable={onMapFail}
-          />
-        </div>
-      )}
-
       <div style={{ padding: "0 17px 17px", display: "flex", flexDirection: "column", gap: 8 }}>
-        <a
-          href={`https://maps.google.com/?q=${encodeURIComponent(job.location.address)}`}
-          target="_blank"
-          rel="noreferrer"
-          className="btn"
-          style={{ fontSize: 12, justifyContent: "center" }}
-        >
-          <STATUS_ICON.pin size={13} strokeWidth={2.25} />
-          Directions in Google Maps
-        </a>
         <div className="row" style={{ gap: 8 }}>
           <button className="btn" style={{ flex: 1, fontSize: 12.5, padding: 11 }} onClick={() => onStatus(job.job_id, "en_route")}>
             En route
@@ -947,8 +953,6 @@ function JobRow({
   allJobs,
   open,
   onToggle,
-  mapFailed,
-  onMapFail,
   onStatus,
 }: {
   job: Job;
@@ -956,8 +960,6 @@ function JobRow({
   allJobs: Job[];
   open: boolean;
   onToggle: () => void;
-  mapFailed: boolean;
-  onMapFail: () => void;
   onStatus: (id: string, a: "en_route" | "arrived" | "completed") => void;
 }) {
   const now = nowISO();
@@ -1030,28 +1032,6 @@ function JobRow({
               </span>
             ))}
           </div>
-          {!mapFailed && (
-            <div style={{ marginTop: 10 }}>
-              <MapView
-                mode="display"
-                customer={{ lat: job.location.lat, lng: job.location.lng, address: job.location.address }}
-                technician={tech ? { lat: tech.location.lat, lng: tech.location.lng, name: tech.name } : null}
-                active={job.status === "in_progress"}
-                height={160}
-                onUnavailable={onMapFail}
-              />
-            </div>
-          )}
-          <a
-            href={`https://maps.google.com/?q=${encodeURIComponent(job.location.address)}`}
-            target="_blank"
-            rel="noreferrer"
-            className="btn"
-            style={{ marginTop: 10, fontSize: 12, width: "100%", justifyContent: "center" }}
-          >
-            <STATUS_ICON.pin size={13} strokeWidth={2.25} />
-            Directions in Google Maps
-          </a>
           <div className="row" style={{ gap: 6, marginTop: 8 }}>
             <button className="btn" style={{ flex: 1, fontSize: 11 }} onClick={() => onStatus(job.job_id, "en_route")}>
               En route

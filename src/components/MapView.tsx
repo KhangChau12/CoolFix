@@ -69,6 +69,26 @@ export interface MapPin {
   role?: "customer" | "tech" | "alt";
 }
 
+export interface RouteLine {
+  /** Coordinates are [latitude, longitude], matching Leaflet. */
+  coordinates: Array<[number, number]>;
+  color?: string;
+  congestionSegments?: Array<{
+    coordinates: Array<[number, number]>;
+    severity: "low" | "medium" | "high";
+  }>;
+}
+
+export interface TrafficCamera {
+  camera_id: string;
+  image: string;
+  timestamp: string;
+  lat: number;
+  lng: number;
+  severity?: "low" | "medium" | "high";
+  incident?: boolean;
+}
+
 interface DisplayProps extends CommonProps {
   mode: "display";
   customer: { lat: number; lng: number; address: string };
@@ -78,6 +98,10 @@ interface DisplayProps extends CommonProps {
   /** Extra read-only markers (no connecting line) — e.g. other jobs a
    * re-plan would move. Included in the auto-fit. */
   extras?: MapPin[];
+  /** Optional routed geometry, supplied as [lat, lng] pairs. */
+  route?: RouteLine | null;
+  /** Live LTA camera observations shown as clickable map markers. */
+  trafficCameras?: TrafficCamera[];
 }
 
 type Props = PickProps | DisplayProps;
@@ -180,6 +204,12 @@ function makePinIcon(L: L, color: string): import("leaflet").DivIcon {
   });
 }
 
+function severityColor(severity: TrafficCamera["severity"]): string {
+  if (severity === "high") return "#d64545";
+  if (severity === "medium") return "#e67e22";
+  return "#f0b429";
+}
+
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!),
@@ -197,7 +227,9 @@ export default function MapView(props: Props) {
   const custMarkerRef = useRef<LeafletMarker | null>(null);
   const techMarkerRef = useRef<LeafletMarker | null>(null);
   const lineRef = useRef<LeafletPolyline | null>(null);
+  const congestionSegmentsRef = useRef<LeafletPolyline[]>([]);
   const extraMarkersRef = useRef<LeafletMarker[]>([]);
+  const trafficMarkersRef = useRef<LeafletMarker[]>([]);
 
   // Keep the latest onPick in a ref so the map-init effect can stay
   // mount-only without going stale.
@@ -291,7 +323,9 @@ export default function MapView(props: Props) {
       custMarkerRef.current = null;
       techMarkerRef.current = null;
       lineRef.current = null;
+      congestionSegmentsRef.current = [];
       extraMarkersRef.current = [];
+      trafficMarkersRef.current = [];
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -335,6 +369,19 @@ export default function MapView(props: Props) {
   const dExtrasKey = dExtras
     ? dExtras.map((e) => `${e.lat.toFixed(4)},${e.lng.toFixed(4)},${e.role ?? ""}`).join("|")
     : "";
+  const dRoute = props.mode === "display" ? props.route ?? null : null;
+  const dRouteKey = dRoute
+    ? [
+        dRoute.coordinates.map(([lat, lng]) => `${lat.toFixed(5)},${lng.toFixed(5)}`).join("|"),
+        ...(dRoute.congestionSegments ?? []).map(
+          (segment) => `${segment.severity}:${segment.coordinates.map(([lat, lng]) => `${lat.toFixed(5)},${lng.toFixed(5)}`).join(";")}`,
+        ),
+      ].join("||")
+    : "";
+  const dTrafficCameras = props.mode === "display" ? props.trafficCameras ?? [] : [];
+  const dTrafficKey = dTrafficCameras
+    .map((camera) => `${camera.camera_id},${camera.lat.toFixed(5)},${camera.lng.toFixed(5)},${camera.timestamp},${camera.severity ?? ""},${camera.incident ? "incident" : ""}`)
+    .join("|");
 
   useEffect(() => {
     if (mode !== "display" || !ready || failed || dCustLat == null || dCustLng == null) return;
@@ -342,6 +389,12 @@ export default function MapView(props: Props) {
     const L = lRef.current;
     const map = mapRef.current;
     const p = props as DisplayProps;
+    const routePts = (dRoute?.coordinates ?? []).filter((point) =>
+      isWithinSG({ lat: point[0], lng: point[1] }),
+    );
+
+    for (const segment of congestionSegmentsRef.current) segment.remove();
+    congestionSegmentsRef.current = [];
 
     if (!custMarkerRef.current) {
       custMarkerRef.current = L.marker([dCustLat, dCustLng], {
@@ -369,6 +422,23 @@ export default function MapView(props: Props) {
       }
     }
 
+    for (const marker of trafficMarkersRef.current) marker.remove();
+    trafficMarkersRef.current = [];
+    for (const camera of dTrafficCameras) {
+      const trafficColor = severityColor(camera.severity);
+      const marker = L.marker([camera.lat, camera.lng], {
+        icon: makePinIcon(L, trafficColor),
+      })
+        .addTo(map)
+        .bindPopup(
+          `<b>${camera.incident ? "Traffic incident" : "Traffic observation"}</b><br>` +
+            `Camera ${escapeHtml(camera.camera_id)} · ${camera.severity ?? "low"} severity<br>${escapeHtml(camera.timestamp)}<br>` +
+            `<img src="${escapeHtml(camera.image)}" alt="Live traffic camera ${escapeHtml(camera.camera_id)}" ` +
+            `style="display:block;width:260px;max-width:70vw;margin-top:6px;border-radius:6px" />`,
+        );
+      trafficMarkersRef.current.push(marker);
+    }
+
     if (dTechLat != null && dTechLng != null && p.technician) {
       const techColor = dActive ? "var(--tier-urgent)" : "var(--tier-priority)";
       if (!techMarkerRef.current) {
@@ -386,21 +456,39 @@ export default function MapView(props: Props) {
         }`,
       );
 
-      const pts: [number, number][] = [
+      const directPts: [number, number][] = [
         [dCustLat, dCustLng],
         [dTechLat, dTechLng],
       ];
+      const pts = routePts.length >= 2 ? routePts : directPts;
       const style = {
-        color: dActive ? "var(--tier-urgent)" : "var(--text-faint)",
-        weight: 2,
-        opacity: 0.85,
-        dashArray: dActive ? undefined : "5 6",
+        color: dRoute?.color ?? (dActive ? "var(--tier-urgent)" : "var(--text-faint)"),
+        weight: dRoute ? 4 : 2,
+        opacity: dRoute ? 0.9 : 0.85,
+        dashArray: dRoute ? undefined : dActive ? undefined : "5 6",
       };
       if (!lineRef.current) {
         lineRef.current = L.polyline(pts, style).addTo(map);
       } else {
         lineRef.current.setLatLngs(pts);
         lineRef.current.setStyle(style);
+      }
+      if (dRoute) {
+        for (const segment of dRoute.congestionSegments ?? []) {
+          const segmentPts = segment.coordinates.filter((point) =>
+            isWithinSG({ lat: point[0], lng: point[1] }),
+          );
+          if (segmentPts.length < 2) continue;
+          congestionSegmentsRef.current.push(
+            L.polyline(segmentPts, {
+              color: severityColor(segment.severity),
+              weight: 6,
+              opacity: 0.95,
+              lineCap: "round",
+              lineJoin: "round",
+            }).addTo(map),
+          );
+        }
       }
       const fitPts = [...pts, ...(dExtras?.map((e) => [e.lat, e.lng] as [number, number]) ?? [])].filter(
         (pt) => isWithinSG({ lat: pt[0], lng: pt[1] }),
@@ -426,7 +514,7 @@ export default function MapView(props: Props) {
       map.setView([dCustLat, dCustLng], 14, { animate: false });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, mode, dCustLat, dCustLng, dTechLat, dTechLng, dActive, dExtrasKey]);
+  }, [ready, mode, dCustLat, dCustLng, dTechLat, dTechLng, dActive, dExtrasKey, dRouteKey, dTrafficKey]);
 
   // ── search box (pick only) ──
   const [q, setQ] = useState("");

@@ -371,7 +371,8 @@ export interface NotificationRecord {
     | "reschedule"
     | "reminder_t3h"
     | "booking_confirmed"
-    | "completed";
+    | "completed"
+    | "route_change_request";
   subject: string;
   body: string;
   acknowledged: boolean;
