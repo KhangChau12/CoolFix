@@ -1460,8 +1460,6 @@ function summarize(row: AgentDecisionLog): [string, string][] {
   switch (row.agent_name) {
     case "JobIntakeAgent":
       push("skills", (o as { skill_required?: string[] }).skill_required?.join(", "), true);
-      push("urgency", (o as { urgency_hint?: string }).urgency_hint);
-      push("window", ((o as { time_window_hours?: [number, number] }).time_window_hours ?? []).join("–") + " h");
       push("injection", (o as { injection_attempt?: boolean }).injection_attempt ? "true — flagged" : "false — clean");
       break;
     case "PricingEngine":

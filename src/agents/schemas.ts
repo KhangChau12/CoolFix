@@ -78,16 +78,20 @@ export function validateBookingRequest(x: unknown): BookingRequest {
 
 export interface IntakeResult {
   skill_required: SkillTag[];
-  urgency_hint: "low" | "medium" | "high";
   /** Extracted / normalised address (falls back to input). */
   location_note: string;
-  /** Suggested time window in hours-from-now [earliest, latest]. */
-  time_window_hours: [number, number];
   /** True if the free-text tried to manipulate the agent. */
   injection_attempt: boolean;
   rationale: string;
 }
 
+// Note: this used to also carry `urgency_hint` / `time_window_hours` — the
+// AI's own guess at how urgent the job "really" was, used to pick when to
+// schedule it. That let the model quietly override a tier the customer
+// explicitly selected and paid for (e.g. a blank-description Urgent booking
+// getting silently downgraded to a 24h-out window). Scheduling floors are
+// now tier-only (see orchestrator.ts); Job-Intake's only job is figuring out
+// which skill(s) the visit needs.
 export function validateIntakeResult(x: unknown): IntakeResult {
   const r = x as Record<string, unknown>;
   assert(Array.isArray(r.skill_required), "intake", "skill_required must be array");
@@ -95,14 +99,9 @@ export function validateIntakeResult(x: unknown): IntakeResult {
     SKILL_TAGS.includes(s as SkillTag),
   );
   assert(skills.length > 0, "intake", "at least one valid skill_required");
-  assert(["low", "medium", "high"].includes(r.urgency_hint as string), "intake", "bad urgency_hint");
-  const tw = r.time_window_hours as [number, number];
-  assert(Array.isArray(tw) && tw.length === 2 && tw.every((n) => typeof n === "number"), "intake", "bad time_window_hours");
   return {
     skill_required: Array.from(new Set(skills)),
-    urgency_hint: r.urgency_hint as IntakeResult["urgency_hint"],
     location_note: String(r.location_note ?? "").slice(0, 300),
-    time_window_hours: [tw[0], tw[1]],
     injection_attempt: Boolean(r.injection_attempt),
     rationale: String(r.rationale ?? "").slice(0, 600),
   };

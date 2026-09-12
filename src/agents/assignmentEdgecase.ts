@@ -31,7 +31,6 @@ import {
 import { logDecision } from "./log";
 import { scoreOneTech } from "./assignment";
 import { validateEdgecaseChoice } from "./schemas";
-import type { IntakeResult } from "./schemas";
 import type { ScoreBreakdown, SkillTag, Tier } from "@/lib/types";
 import type { AgentContext } from "./context";
 
@@ -99,7 +98,6 @@ export interface EdgecaseInput {
   jobId: string;
   jobLocation: { lat: number; lng: number };
   skillRequired: SkillTag[];
-  urgencyHint: IntakeResult["urgency_hint"];
   scheduledTime: string;
   tier: Tier;
   /** Booking creation time — feeds the SLA-headroom scoring component. */
@@ -186,7 +184,6 @@ export function buildEdgecaseSpace(
         technicianId: t.technician_id,
         jobLocation: input.jobLocation,
         skillRequired: input.skillRequired,
-        urgencyHint: input.urgencyHint,
         scheduledTime: slot,
         ignoreJobId: input.jobId,
         jobCreatedAt: input.jobCreatedAt,
@@ -316,7 +313,6 @@ export async function runAssignmentEdgecaseAgent(
           technicianId: choice.chosen_tech_id,
           jobLocation: input.jobLocation,
           skillRequired: input.skillRequired,
-          urgencyHint: input.urgencyHint,
           scheduledTime: choice.chosen_slot_iso,
           ignoreJobId: input.jobId,
           jobCreatedAt: input.jobCreatedAt,

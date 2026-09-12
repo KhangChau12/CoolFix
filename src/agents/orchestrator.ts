@@ -166,8 +166,13 @@ async function runBookingPipelineUnsafe(
   });
 
   // ── 3. Capacity (rule) ──────────────────────────────────────────
-  const [earliest, latest] = intake.time_window_hours;
-  let slotHours = clampSlot(booking.tier, earliest, latest);
+  // Earliest-possible slot is tier-only — the customer selected and paid
+  // for this tier, so it alone sets scheduling urgency. (This used to also
+  // take an `earliest`/`latest` window the Job-Intake LLM inferred from the
+  // free-text description, which let a blank or mild-sounding description
+  // silently override an Urgent booking's own SLA — e.g. proposing a slot
+  // 24h out for a job the customer paid 1.75x to have handled same-day.)
+  let slotHours = tierEarliestHours(booking.tier);
   const capacity = runCapacityAgent(ctx, {
     jobId,
     tier: booking.tier,
@@ -231,7 +236,6 @@ async function runBookingPipelineUnsafe(
     jobLocation: booking.location,
     skillRequired: intake.skill_required,
     tier: booking.tier,
-    urgencyHint: intake.urgency_hint,
     scheduledTime,
     jobCreatedAt: now,
   });
@@ -269,7 +273,6 @@ async function runBookingPipelineUnsafe(
           address: booking.address,
           skillRequired: intake.skill_required,
           tier: booking.tier,
-          urgencyHint: intake.urgency_hint,
           scheduledTime,
           jobCreatedAt: now,
         },
@@ -292,7 +295,6 @@ async function runBookingPipelineUnsafe(
         jobId,
         jobLocation: booking.location,
         skillRequired: intake.skill_required,
-        urgencyHint: intake.urgency_hint,
         scheduledTime,
         tier: booking.tier,
         jobCreatedAt: now,
@@ -773,13 +775,19 @@ export { notifyReschedule };
 // Earliest we schedule an urgent job. Kept > freezeWindowHours so a
 // bumpable soft job at the same slot is still "soft" (before its freeze
 // point) when the incoming urgent job arrives. Mirrored in data/seed.ts.
+// (Still 4h for now — lowering this floor further is tracked separately
+// and intentionally not part of this change.)
 export const URGENT_EARLIEST_HOURS = 4;
+const NON_URGENT_EARLIEST_HOURS = 5;
 
-function clampSlot(tier: string, earliest: number, latest: number): number {
-  // Pick a slot near the earliest end of the window, floored so it sits
-  // outside the freeze window (keeps soft jobs re-plannable).
-  const floor = tier === "urgent" ? URGENT_EARLIEST_HOURS : 5;
-  return Math.min(Math.max(earliest, floor), Math.max(latest, floor));
+/**
+ * The earliest-possible slot, in hours from now, for a given tier. This is
+ * the ONLY input to scheduling urgency — the customer's tier selection,
+ * nothing an AI agent infers from the free-text description. Job-Intake no
+ * longer proposes a window here (see schemas.ts / jobIntake.ts).
+ */
+function tierEarliestHours(tier: string): number {
+  return tier === "urgent" ? URGENT_EARLIEST_HOURS : NON_URGENT_EARLIEST_HOURS;
 }
 
 function countLlm(ctx: AgentContext): number {

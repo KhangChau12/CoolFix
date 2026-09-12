@@ -33,7 +33,7 @@ import { logDecision } from "./log";
 import { scoreOneTech } from "./assignment";
 import { techUtilisationToday } from "./scoring";
 import { validateTiebreakChoice } from "./schemas";
-import type { AssignmentResult, IntakeResult } from "./schemas";
+import type { AssignmentResult } from "./schemas";
 import type { ScoreBreakdown, SkillTag, Tier } from "@/lib/types";
 import type { AgentContext } from "./context";
 
@@ -92,7 +92,6 @@ export interface TiebreakInput {
   address: string;
   skillRequired: SkillTag[];
   tier: Tier;
-  urgencyHint: IntakeResult["urgency_hint"];
   scheduledTime: string;
   /** Booking creation time — feeds the SLA-headroom scoring component. */
   jobCreatedAt?: string;
@@ -224,7 +223,6 @@ export async function runAssignmentTiebreakAgent(
         technicianId: t.technician_id,
         jobLocation: input.jobLocation,
         skillRequired: input.skillRequired,
-        urgencyHint: input.urgencyHint,
         scheduledTime: input.scheduledTime,
         ignoreJobId: input.jobId,
         jobCreatedAt: input.jobCreatedAt,
@@ -288,7 +286,6 @@ export async function runAssignmentTiebreakAgent(
           technicianId: choice.chosen_technician_id,
           jobLocation: input.jobLocation,
           skillRequired: input.skillRequired,
-          urgencyHint: input.urgencyHint,
           scheduledTime: input.scheduledTime,
           ignoreJobId: input.jobId,
           jobCreatedAt: input.jobCreatedAt,
@@ -322,7 +319,6 @@ export async function runAssignmentTiebreakAgent(
       technicianId: chosenId,
       jobLocation: input.jobLocation,
       skillRequired: input.skillRequired,
-      urgencyHint: input.urgencyHint,
       scheduledTime: input.scheduledTime,
       ignoreJobId: input.jobId,
       jobCreatedAt: input.jobCreatedAt,
