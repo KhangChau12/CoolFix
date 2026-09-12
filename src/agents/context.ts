@@ -25,6 +25,7 @@
 // together at the end — nothing about their consistency changes.
 
 import * as repo from "@/lib/repo";
+import { emptyRatingSummary, summarizeFeedbackByTechnician, type TechnicianRatingSummary } from "@/lib/rating";
 import type {
   AgentDecisionLog,
   ApprovalRequest,
@@ -38,6 +39,10 @@ export class AgentContext {
   technicians: Technician[] = [];
   jobs: Job[] = [];
   config!: RuntimeConfig;
+  /** One rating summary per technician who has ANY feedback — see
+   *  `ratingSummaryFor`, which is the one call sites should actually use
+   *  (it fills in the cold-start zero-ratings summary for everyone else). */
+  private ratingSummaries = new Map<string, TechnicianRatingSummary>();
 
   /** Rows produced this run, flushed in order at the end. */
   private decisionBuffer: AgentDecisionLog[] = [];
@@ -58,14 +63,16 @@ export class AgentContext {
 
   static async create(): Promise<AgentContext> {
     const ctx = new AgentContext();
-    const [techs, jobs, config] = await Promise.all([
+    const [techs, jobs, config, feedback] = await Promise.all([
       repo.listTechnicians(),
       repo.listJobs(),
       repo.getConfig(),
+      repo.listFeedback(),
     ]);
     ctx.technicians = techs;
     ctx.jobs = jobs;
     ctx.config = config;
+    ctx.ratingSummaries = summarizeFeedbackByTechnician(feedback);
     return ctx;
   }
 
@@ -75,6 +82,13 @@ export class AgentContext {
 
   getTechnician(id: string): Technician | undefined {
     return this.technicians.find((t) => t.technician_id === id);
+  }
+
+  /** A technician's rating summary — the cold-start zero-ratings summary
+   *  (smoothed = the prior, average = null) for anyone with no feedback
+   *  yet, so scoring.ts never has to special-case "missing". */
+  ratingSummaryFor(technicianId: string): TechnicianRatingSummary {
+    return this.ratingSummaries.get(technicianId) ?? emptyRatingSummary(technicianId);
   }
 
   /** Buffer a job upsert; also updates the in-memory view for later agents.

@@ -514,6 +514,7 @@ const FEED_BAR_PARTS: [ScoreComponent, string][] = [
   ["availability", "availability"],
   ["slaHeadroom", "SLA headroom"],
   ["loadBalance", "load balance"],
+  ["customerSatisfaction", "satisfaction"],
 ];
 const FEED_BAR_KEY: Record<ScoreComponent, keyof NonNullable<AgentDecisionLog["score_breakdown"]>> = {
   travel: "travel",
@@ -521,6 +522,7 @@ const FEED_BAR_KEY: Record<ScoreComponent, keyof NonNullable<AgentDecisionLog["s
   availability: "availability",
   slaHeadroom: "sla_headroom",
   loadBalance: "load_balance",
+  customerSatisfaction: "customer_satisfaction",
 };
 
 // Dark-panel variant of components/scoring.tsx's ScoreBars — AgentFeed
@@ -537,7 +539,7 @@ function ScoreBars({ b }: { b: NonNullable<AgentDecisionLog["score_breakdown"]> 
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
         {FEED_BAR_PARTS.map(([key, label]) => {
-          const v = b[FEED_BAR_KEY[key]] as number;
+          const v = (b[FEED_BAR_KEY[key]] as number | undefined) ?? 0;
           const color = SCORE_COMPONENT_COLOR[key];
           return (
             <div key={key} style={{ display: "grid", gridTemplateColumns: "88px minmax(0,1fr) 60px", alignItems: "center", gap: 10 }}>

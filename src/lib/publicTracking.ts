@@ -11,6 +11,7 @@
 
 import { SKILL_LABEL, TIER_META, type Job, type Technician } from "./types";
 import { hoursBetween, nowISO } from "./time";
+import type { TechnicianRatingSummary } from "./rating";
 
 export interface PublicTimelineStep {
   key: string;
@@ -44,6 +45,13 @@ export interface PublicJobView {
   explanation: string | null;
   disruption: { headline: string; detail: string } | null;
   trackingCode: string;
+  /** True only once the job is completed AND has an assigned technician —
+   *  the two things `/api/public/jobs/:token/feedback` requires server-side
+   *  before accepting a submission. The client uses this to decide whether
+   *  to even ask the feedback endpoint for status, not as the actual
+   *  authorization (that check is re-done, from scratch, on every feedback
+   *  request). */
+  feedbackEligible: boolean;
 }
 
 const SPECIALTY_LABEL: Record<Technician["experience_level"], string> = {
@@ -192,14 +200,33 @@ function buildTimeline(job: Job, statusCode: string): PublicTimelineStep[] {
  *  picked — built from structured facts already on the job/technician
  *  (skills, certs, tier SLA), never from the raw scoring breakdown or
  *  candidate list. */
-function buildExplanation(job: Job, tech: Technician | null): string | null {
+// Minimum evidence before the explanation claims "strong customer
+// satisfaction" — matches the same "don't trust a tiny sample" principle
+// as the Bayesian smoothing in rating.ts, just expressed as a plain
+// threshold since this is prose, not a score.
+const EXPLANATION_MIN_RATINGS = 5;
+const EXPLANATION_STRONG_AVERAGE = 4.5;
+
+function buildExplanation(
+  job: Job,
+  tech: Technician | null,
+  ratingSummary?: TechnicianRatingSummary | null,
+): string | null {
   if (!tech) return null;
   const skillNames = job.skill_required.map((s) => SKILL_LABEL[s]).join(", ");
   const tierLabel = TIER_META[job.tier].label.toLowerCase();
-  return (
+  let text =
     `${tech.name} was selected because they're qualified for ${skillNames || "your service"} ` +
-    `and can reach you within your ${tierLabel} appointment window.`
-  );
+    `and can reach you within your ${tierLabel} appointment window.`;
+  if (
+    ratingSummary &&
+    ratingSummary.count >= EXPLANATION_MIN_RATINGS &&
+    ratingSummary.average != null &&
+    ratingSummary.average >= EXPLANATION_STRONG_AVERAGE
+  ) {
+    text += " They also have strong recent customer satisfaction.";
+  }
+  return text;
 }
 
 function buildDisruption(job: Job): PublicJobView["disruption"] {
@@ -217,7 +244,11 @@ function buildDisruption(job: Job): PublicJobView["disruption"] {
   };
 }
 
-export function toPublicJobView(job: Job, tech: Technician | null): PublicJobView {
+export function toPublicJobView(
+  job: Job,
+  tech: Technician | null,
+  ratingSummary?: TechnicianRatingSummary | null,
+): PublicJobView {
   const { code, label, message } = deriveStatus(job);
   const { date, time } = sgDateParts(job.scheduled_time);
   const showTechnician = tech && ["assigned", "frozen", "in_progress", "completed"].includes(job.status);
@@ -248,7 +279,8 @@ export function toPublicJobView(job: Job, tech: Technician | null): PublicJobVie
     eta: etaMinutes,
     price: job.price,
     timeline: buildTimeline(job, code),
-    explanation: showTechnician ? buildExplanation(job, tech) : null,
+    explanation: showTechnician ? buildExplanation(job, tech, ratingSummary) : null,
     disruption: buildDisruption(job),
+    feedbackEligible: job.status === "completed" && !!job.assigned_technician_id,
   };
 }

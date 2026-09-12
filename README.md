@@ -78,6 +78,7 @@ cp .env.example .env.local      # fill in Supabase URL + keys
 #   supabase/migrations/0003_tiebreak_agent.sql
 #   supabase/migrations/0004_dispatch_policy.sql
 #   supabase/migrations/0005_public_tracking.sql   (customer tracking token)
+#   supabase/migrations/0006_job_feedback.sql      (customer feedback + rating)
 
 npm run seed                    # load demo technicians + jobs
 npm run dev                     # http://localhost:3000

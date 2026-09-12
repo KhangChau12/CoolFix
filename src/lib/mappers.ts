@@ -6,11 +6,12 @@ import type {
   AgentDecisionLog,
   ApprovalRequest,
   Job,
+  JobFeedback,
   NotificationRecord,
   RuntimeConfig,
   Technician,
 } from "./types";
-import { DISPATCH_POLICY } from "./types";
+import { DISPATCH_POLICY, FEEDBACK_IMPROVEMENT_TAGS, FEEDBACK_POSITIVE_TAGS } from "./types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -245,15 +246,58 @@ function toISO(v: unknown): string {
 }
 
 /** A stored dispatch_policy is usable only if it has all four tiers, each
- *  with all five component weights as numbers. Anything partial → use the
+ *  with all six component weights as numbers. Anything partial → use the
  *  shipped default rather than scoring off a half-filled policy. */
 function isFullPolicy(p: unknown): p is RuntimeConfig["dispatchPolicy"] {
   if (!p || typeof p !== "object") return false;
   const tiers = ["urgent", "priority", "standard", "flexible"] as const;
-  const keys = ["travel", "skillFit", "availability", "slaHeadroom", "loadBalance"] as const;
+  const keys = [
+    "travel",
+    "skillFit",
+    "availability",
+    "slaHeadroom",
+    "loadBalance",
+    "customerSatisfaction",
+  ] as const;
   return tiers.every((tier) => {
     const row = (p as Record<string, unknown>)[tier];
     if (!row || typeof row !== "object") return false;
     return keys.every((k) => typeof (row as Record<string, unknown>)[k] === "number");
   });
+}
+
+// ── Job feedback ────────────────────────────────────────────────────
+
+export function rowToFeedback(r: any): JobFeedback {
+  return {
+    feedback_id: r.feedback_id,
+    job_id: r.job_id,
+    technician_id: r.technician_id,
+    rating: Number(r.rating),
+    positive_tags: sanitizeTagArray(r.positive_tags, FEEDBACK_POSITIVE_TAGS),
+    improvement_tags: sanitizeTagArray(r.improvement_tags, FEEDBACK_IMPROVEMENT_TAGS),
+    comment: r.comment ?? null,
+    created_at: toISO(r.created_at),
+  };
+}
+
+export function feedbackToRow(f: JobFeedback) {
+  return {
+    feedback_id: f.feedback_id,
+    job_id: f.job_id,
+    technician_id: f.technician_id,
+    rating: f.rating,
+    positive_tags: f.positive_tags,
+    improvement_tags: f.improvement_tags,
+    comment: f.comment,
+    created_at: f.created_at,
+  };
+}
+
+/** Defensive re-filter on read: a row's tag arrays only ever come from our
+ *  own validated writes, but this keeps the mapper honest even against a
+ *  hand-edited row and means the domain type's tag unions are never a lie. */
+function sanitizeTagArray<T extends string>(v: unknown, allowed: readonly T[]): T[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter((x): x is T => (allowed as readonly string[]).includes(x));
 }

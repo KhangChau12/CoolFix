@@ -55,7 +55,7 @@ const CH = 56;
 // name, instead of floating below it where it used to collide with the
 // return-to-Notification arc. Rail anchor points still use CH — only the
 // drawn box grows — so the column/row math below is untouched.
-const CH3 = 74;
+const CH3 = 86;
 const COL_W = 234; // column pitch: card width + a generous fixed gutter
 const TIER_GAP = 190;
 const T1_Y = 50;
@@ -1212,7 +1212,7 @@ function Station({
                 flex: "1 1 auto",
                 display: "flex",
                 alignItems: "center",
-                padding: "0 11px 0 15px",
+                padding: "0 11px 10px 15px",
                 fontFamily: "var(--mono)",
                 fontSize: 9.5,
                 lineHeight: 1.35,

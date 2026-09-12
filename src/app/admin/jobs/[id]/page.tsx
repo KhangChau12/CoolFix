@@ -15,26 +15,37 @@ import MapView from "@/components/MapView";
 import { TierBadge, StatusDot } from "@/components/ui";
 import { STATUS_ICON } from "@/lib/icons";
 import { fmtSGDateTime } from "@/lib/time";
-import type { Job, NotificationRecord, Technician } from "@/lib/types";
+import {
+  FEEDBACK_IMPROVEMENT_TAG_LABEL,
+  FEEDBACK_POSITIVE_TAG_LABEL,
+  type Job,
+  type JobFeedback,
+  type NotificationRecord,
+  type Technician,
+} from "@/lib/types";
 
 export default function AdminJobPage({ params }: { params: { id: string } }) {
   const jobId = params.id;
   const [job, setJob] = useState<Job | null>(null);
   const [tech, setTech] = useState<Technician | null>(null);
+  const [feedback, setFeedback] = useState<JobFeedback | null>(null);
   const [notes, setNotes] = useState<NotificationRecord[]>([]);
   const [notFound, setNotFound] = useState(false);
   const [mapOk, setMapOk] = useState(true);
 
   const load = useCallback(async () => {
     try {
-      const [{ job, technician }, { notifications }] = await Promise.all([
-        apiGet<{ job: Job; technician: Technician | null }>(`/api/jobs/${jobId}`),
+      const [{ job, technician, feedback }, { notifications }] = await Promise.all([
+        apiGet<{ job: Job; technician: Technician | null; feedback: JobFeedback | null }>(
+          `/api/jobs/${jobId}`,
+        ),
         apiGet<{ notifications: NotificationRecord[] }>(
           `/api/notifications?job=${encodeURIComponent(jobId)}`,
         ),
       ]);
       setJob(job);
       setTech(technician);
+      setFeedback(feedback);
       setNotes(
         notifications
           .slice()
@@ -47,6 +58,7 @@ export default function AdminJobPage({ params }: { params: { id: string } }) {
 
   useRealtime("jobs", load);
   useRealtime("notifications", load);
+  useRealtime("job_feedback", load);
   useEffect(() => {
     load();
   }, [load]);
@@ -133,6 +145,48 @@ export default function AdminJobPage({ params }: { params: { id: string } }) {
       )}
 
       <PipelineReplay jobId={jobId} />
+
+      {feedback && (
+        <div className="card" style={{ padding: 16 }}>
+          <div className="spread" style={{ marginBottom: 10 }}>
+            <strong style={{ fontSize: 13.5 }}>Customer feedback</strong>
+            <span className="mono faint" style={{ fontSize: 11 }}>
+              {fmtSGDateTime(feedback.created_at)}
+            </span>
+          </div>
+          <div className="row" style={{ gap: 2 }}>
+            {[1, 2, 3, 4, 5].map((n) => (
+              <STATUS_ICON.star
+                key={n}
+                size={15}
+                strokeWidth={1.75}
+                color={n <= feedback.rating ? "#e0a72e" : "var(--border-strong)"}
+                fill={n <= feedback.rating ? "#e0a72e" : "none"}
+              />
+            ))}
+            <span className="mono" style={{ fontSize: 12, marginLeft: 6 }}>{feedback.rating}/5</span>
+          </div>
+          {(feedback.positive_tags.length > 0 || feedback.improvement_tags.length > 0) && (
+            <div className="row" style={{ gap: 6, flexWrap: "wrap", marginTop: 10 }}>
+              {feedback.positive_tags.map((t) => (
+                <span key={t} className="chip" style={{ fontSize: 10.5 }}>
+                  {FEEDBACK_POSITIVE_TAG_LABEL[t]}
+                </span>
+              ))}
+              {feedback.improvement_tags.map((t) => (
+                <span key={t} className="chip" style={{ fontSize: 10.5, color: "var(--text-muted)" }}>
+                  {FEEDBACK_IMPROVEMENT_TAG_LABEL[t]}
+                </span>
+              ))}
+            </div>
+          )}
+          {feedback.comment && (
+            <p className="muted" style={{ fontSize: 12.5, marginTop: 10, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
+              &ldquo;{feedback.comment}&rdquo;
+            </p>
+          )}
+        </div>
+      )}
 
       <div className="card" style={{ padding: 16 }}>
         <div className="spread" style={{ marginBottom: 10 }}>

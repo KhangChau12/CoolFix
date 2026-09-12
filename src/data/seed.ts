@@ -1,4 +1,4 @@
-import type { AgentDecisionLog, Job, NotificationRecord, Technician } from "@/lib/types";
+import type { AgentDecisionLog, Job, JobFeedback, NotificationRecord, Technician } from "@/lib/types";
 import { SG_LANDMARKS } from "@/lib/geo";
 import { generateTrackingToken } from "@/lib/trackingToken";
 import {
@@ -635,6 +635,205 @@ const SPECS: SeedJobSpec[] = [
     stage: "assigned",
     createdHoursAgo: 8,
   },
+  // ── Completed jobs (job_2020+) ──────────────────────────────────────
+  // Purely to give the customer-feedback demo something to look at:
+  // `status: "completed"` jobs are excluded from every clash / route /
+  // capacity check already (see findTimeClash, sameDayJobs, etc.), so
+  // these are inert for scheduling — they exist only so seedFeedback()
+  // below has real completed jobs + technicians to attach ratings to.
+  // Deliberately leaves tech_gopal/tech_amir/tech_farah/tech_kelvin with
+  // zero completed jobs (zero feedback) — the cold-start "Not enough
+  // ratings" path needs a technician who actually has none.
+  {
+    id: "job_2020",
+    customer: "Wendy Ang",
+    email: "wendy.ang@example.sg",
+    phone: "+65 9111 0020",
+    address: "Blk 118 Bishan St 12, #04-55",
+    loc: { lat: 1.352, lng: 103.85 },
+    desc: "Annual aircon servicing, 2 units.",
+    category: "routine",
+    skill: ["basic_maintenance"],
+    tier: "standard",
+    dayOffset: -6,
+    hour: 10,
+    hourMode: "fixed",
+    status: "completed",
+    tech: "tech_marcus",
+    stage: "done",
+    createdHoursAgo: 200,
+  },
+  {
+    id: "job_2021",
+    customer: "Bryan Teo",
+    email: "bryan.teo@example.sg",
+    phone: "+65 9111 0021",
+    address: "45 Sin Ming Ave, #06-10",
+    loc: { lat: 1.356, lng: 103.836 },
+    desc: "Routine filter cleaning.",
+    category: "routine",
+    skill: ["basic_maintenance"],
+    tier: "standard",
+    dayOffset: -5,
+    hour: 14,
+    hourMode: "fixed",
+    status: "completed",
+    tech: "tech_marcus",
+    stage: "done",
+    createdHoursAgo: 176,
+  },
+  {
+    id: "job_2022",
+    customer: "Nadia Rahman",
+    email: "nadia.rahman@example.sg",
+    phone: "+65 9111 0022",
+    address: "Blk 230 Bishan St 22, #02-88",
+    loc: { lat: 1.353, lng: 103.847 },
+    desc: "Aircon not cooling, refrigerant top-up.",
+    category: "not_cooling",
+    skill: ["refrigerant_handling"],
+    tier: "priority",
+    dayOffset: -4,
+    hour: 9,
+    hourMode: "fixed",
+    status: "completed",
+    tech: "tech_marcus",
+    stage: "done",
+    createdHoursAgo: 150,
+  },
+  {
+    id: "job_2023",
+    customer: "Gerald Lim",
+    email: "gerald.lim@example.sg",
+    phone: "+65 9111 0023",
+    address: "Blk 190 Bishan St 13, #07-14",
+    loc: { lat: 1.351, lng: 103.851 },
+    desc: "Routine servicing before a house move.",
+    category: "routine",
+    skill: ["basic_maintenance"],
+    tier: "standard",
+    dayOffset: -3,
+    hour: 11,
+    hourMode: "fixed",
+    status: "completed",
+    tech: "tech_marcus",
+    stage: "done",
+    createdHoursAgo: 120,
+  },
+  {
+    id: "job_2024",
+    customer: "Suzanne Ho",
+    email: "suzanne.ho@example.sg",
+    phone: "+65 9111 0024",
+    address: "10 Sin Ming Rd, #03-21",
+    loc: { lat: 1.355, lng: 103.839 },
+    desc: "Aircon making a rattling noise.",
+    category: "not_cooling",
+    skill: ["refrigerant_handling"],
+    tier: "priority",
+    dayOffset: -2,
+    hour: 13,
+    hourMode: "fixed",
+    status: "completed",
+    tech: "tech_marcus",
+    stage: "done",
+    createdHoursAgo: 96,
+  },
+  {
+    id: "job_2025",
+    customer: "Marcus Wee",
+    email: "marcus.wee@example.sg",
+    phone: "+65 9111 0025",
+    address: "Blk 125 Bishan St 12, #05-33",
+    loc: { lat: 1.3515, lng: 103.8495 },
+    desc: "Routine servicing, 1 unit.",
+    category: "routine",
+    skill: ["basic_maintenance"],
+    tier: "standard",
+    dayOffset: -1,
+    hour: 10,
+    hourMode: "fixed",
+    status: "completed",
+    tech: "tech_marcus",
+    stage: "done",
+    createdHoursAgo: 60,
+  },
+  {
+    id: "job_2026",
+    customer: "Priscilla Tan",
+    email: "priscilla.tan@example.sg",
+    phone: "+65 9111 0026",
+    address: "Blk 405 Tampines St 41, #10-02",
+    loc: { lat: 1.353, lng: 103.956 },
+    desc: "Routine servicing for a rental unit.",
+    category: "routine",
+    skill: ["basic_maintenance"],
+    tier: "standard",
+    dayOffset: -3,
+    hour: 9,
+    hourMode: "fixed",
+    status: "completed",
+    tech: "tech_priya",
+    stage: "done",
+    createdHoursAgo: 110,
+  },
+  {
+    id: "job_2027",
+    customer: "Hafiz Rosli",
+    email: "hafiz.rosli@example.sg",
+    phone: "+65 9111 0027",
+    address: "18 Sin Ming Lane, #04-08",
+    loc: { lat: 1.3548, lng: 103.8375 },
+    desc: "Power tripping when aircon starts.",
+    category: "install_electrical",
+    skill: ["electrical_work"],
+    tier: "priority",
+    dayOffset: -5,
+    hour: 15,
+    hourMode: "fixed",
+    status: "completed",
+    tech: "tech_wei_jie",
+    stage: "done",
+    createdHoursAgo: 170,
+  },
+  {
+    id: "job_2028",
+    customer: "Corinne Lau",
+    email: "corinne.lau@example.sg",
+    phone: "+65 9111 0028",
+    address: "Blk 310 Jurong East St 32, #02-19",
+    loc: { lat: 1.3492, lng: 103.729 },
+    desc: "New wiring for a wall-mounted unit.",
+    category: "install_electrical",
+    skill: ["electrical_work"],
+    tier: "standard",
+    dayOffset: -2,
+    hour: 14,
+    hourMode: "fixed",
+    status: "completed",
+    tech: "tech_wei_jie",
+    stage: "done",
+    createdHoursAgo: 90,
+  },
+  {
+    id: "job_2029",
+    customer: "Facility Ops — one-north",
+    email: "ops@onenorth-fac.example.sg",
+    phone: "+65 9111 0029",
+    address: "5 Fusionopolis Way, #08-15, one-north",
+    loc: { lat: 1.2998, lng: 103.788 },
+    desc: "Chiller plant quarterly maintenance.",
+    category: "commercial",
+    skill: ["commercial_chiller"],
+    tier: "priority",
+    dayOffset: -4,
+    hour: 10,
+    hourMode: "fixed",
+    status: "completed",
+    tech: "tech_hui_ling",
+    stage: "done",
+    createdHoursAgo: 140,
+  },
   ...buildFillerSpecs(),
 ];
 
@@ -1008,4 +1207,52 @@ export function seedAgentActivity(
   }
 
   return { decisions, notifications };
+}
+
+// ── Demo feedback ───────────────────────────────────────────────────
+// Hand-placed, not generated: a handful of completed jobs get a rating so
+// the technician performance UI / scoring's customerSatisfaction component
+// have something real to show out of the box. Deliberately uneven —
+// tech_marcus ends up with enough history (6) to clear the "strong
+// customer satisfaction" explanation threshold and produce a trend; a few
+// technicians (Gopal, Amir, Farah, Kelvin) are left with ZERO feedback on
+// purpose, to demo the cold-start "Not enough ratings" path.
+const FEEDBACK_SPECS: {
+  jobId: string;
+  rating: number;
+  positive: string[];
+  improvement: string[];
+  comment: string | null;
+  daysAgo: number;
+}[] = [
+  { jobId: "job_2020", rating: 5, positive: ["professional", "on_time"], improvement: [], comment: "Great service, very tidy.", daysAgo: 6 },
+  { jobId: "job_2021", rating: 5, positive: ["fast", "friendly"], improvement: [], comment: null, daysAgo: 5 },
+  { jobId: "job_2022", rating: 4, positive: ["professional", "explained_clearly"], improvement: ["pricing_explanation"], comment: "Fixed it quickly, wish the quote was clearer upfront.", daysAgo: 4 },
+  { jobId: "job_2023", rating: 5, positive: ["professional", "on_time", "clean_work"], improvement: [], comment: null, daysAgo: 3 },
+  { jobId: "job_2024", rating: 5, positive: ["on_time", "friendly"], improvement: [], comment: "Marcus is great, always ask for him.", daysAgo: 2 },
+  { jobId: "job_2025", rating: 5, positive: ["professional", "fast"], improvement: [], comment: null, daysAgo: 1 },
+  { jobId: "job_2026", rating: 5, positive: ["friendly", "professional"], improvement: [], comment: null, daysAgo: 3 },
+  { jobId: "job_2027", rating: 3, positive: ["professional"], improvement: ["communication", "late_arrival"], comment: "Arrived later than the window without a heads-up.", daysAgo: 5 },
+  { jobId: "job_2028", rating: 4, positive: ["explained_clearly"], improvement: [], comment: null, daysAgo: 2 },
+  { jobId: "job_2029", rating: 4, positive: ["professional", "explained_clearly"], improvement: [], comment: "Solid quarterly PM, as always.", daysAgo: 4 },
+];
+
+export function seedFeedback(jobs: Job[]): JobFeedback[] {
+  const byId = new Map(jobs.map((j) => [j.job_id, j]));
+  const out: JobFeedback[] = [];
+  for (const spec of FEEDBACK_SPECS) {
+    const job = byId.get(spec.jobId);
+    if (!job || !job.assigned_technician_id || job.status !== "completed") continue;
+    out.push({
+      feedback_id: `seedfb_${spec.jobId}`,
+      job_id: job.job_id,
+      technician_id: job.assigned_technician_id,
+      rating: spec.rating,
+      positive_tags: spec.positive as JobFeedback["positive_tags"],
+      improvement_tags: spec.improvement as JobFeedback["improvement_tags"],
+      comment: spec.comment,
+      created_at: addHours(nowISO(), -spec.daysAgo * 24),
+    });
+  }
+  return out;
 }

@@ -14,7 +14,9 @@
     "robustness": "tsx scripts/robustness.ts",
     "concurrency": "tsx scripts/concurrency.ts",
     "tracking:unit": "tsx scripts/trackingUnit.ts",
-    "tracking:smoke": "tsx scripts/trackingSmoke.ts"
+    "tracking:smoke": "tsx scripts/trackingSmoke.ts",
+    "feedback:unit": "tsx scripts/feedbackUnit.ts",
+    "feedback:smoke": "tsx scripts/feedbackSmoke.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.45.4",

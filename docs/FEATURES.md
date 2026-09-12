@@ -52,6 +52,31 @@ is no customer login/session, and a database id can never be substituted for it
 |---|---|---|
 | `/api/public/jobs/:token` | `GET` | The token page's data source — status, ETA, technician (once assigned), map coordinates, appointment window, service summary, timeline, a plain-language "why this technician" explanation, and disruption messaging if the appointment was replanned. Returns a generic 404 for any malformed/unknown token — never distinguishes the two, and never accepts a job id in place of the token. |
 
+Once the job reaches `completed`, the same page shows a feedback form (star
+rating 1-5, fixed positive/improvement tag chips, optional comment) — see
+§1.5. Submitting is a separate token-gated call, not part of the tracking
+GET above.
+
+### 1.5 Customer feedback — closes the loop back into scheduling
+One rating per completed job, submitted through the same tracking token as
+§1.4 (never a job id/technician id the client supplies). Feeds two things:
+a customer-facing technician profile (§2.6) and a new, small
+`customerSatisfaction` term in the Assignment Agent's scoring (§4) — a SOFT
+signal only, weighted ~5% by default, that never overrides a hard
+constraint (skill, hours, no double-booking, route feasibility).
+
+| Endpoint | Method | Used for |
+|---|---|---|
+| `/api/public/jobs/:token/feedback` | `GET` | Whether feedback is eligible/already submitted for this booking, and the submitted rating if so. |
+| `/api/public/jobs/:token/feedback` | `POST` | Submit `{ rating, positive_tags, improvement_tags, comment }`. `409` if the job isn't completed/assigned yet or feedback already exists; `400` for a bad rating/tag/oversized comment. One row per job, enforced by a DB unique index (`job_feedback.job_id`) so a race between two submissions can't create two rows. |
+
+Rating math (`src/lib/rating.ts`): the customer-facing number is a plain
+average ("4.8 / 5, 127 ratings"); the number scoring actually reads is a
+Bayesian-smoothed estimate that pulls a low-volume average back toward a
+neutral prior (4.3, weight 8) — so one 5★ review isn't worth 100, and a
+technician with zero reviews is never penalised (they score exactly at the
+prior, same as "presumed competent").
+
 ---
 
 ## 2. Admin console — `/admin/*`
@@ -118,13 +143,18 @@ location.
 
 ### 2.6 Technicians — `/admin/technicians`
 Roster management: view fleet (skills, certs, workload, working hours), add a new
-technician.
+technician. Each row expands into a performance panel — rating distribution,
+top customer-mentioned tags (positive + improvement), and completed-job count
+(the one *objective* completion metric this codebase has real data for; there's
+no recorded arrival-vs-scheduled timestamp anywhere to compute a genuine
+on-time %, so the UI doesn't invent one). A technician with no feedback yet
+shows "Not enough ratings", never a misleading "0.0★".
 
 | Endpoint | Method | Used for |
 |---|---|---|
-| `/api/technicians` | `GET` | List roster. |
+| `/api/technicians` | `GET` | List roster + a `ratings` map (one `TechnicianRatingSummary` per technician — average, smoothed, count, distribution, top tags, trend; see §1.5). |
 | `/api/technicians` | `POST` | Add a technician. |
-| `/api/bookings` | `GET` | Compute current workload per technician. |
+| `/api/bookings` | `GET` | Compute current workload + completed-job count per technician. |
 
 ### 2.7 Approvals (HITL) — `/admin/approvals`
 Human-in-the-loop queue: disruption re-plans / assignment edge-cases that need a
@@ -175,6 +205,8 @@ freeze window, base prices, HITL sensitivity, LLM mode.
 | `/api/reset` | `POST` | Wipe and re-seed the entire dataset (demo reset). |
 | `/api/health` | `GET` | Liveness + LLM mode/provider readiness + Supabase env + DB row counts. |
 | `/api/public/jobs/:token` | `GET` | Customer tracking — the only endpoint gated by the tracking token instead of app-internal trust. Sanitized, allow-listed response (see §1.4); generic `404` for any invalid/unknown token. |
+| `/api/public/jobs/:token/feedback` | `GET` | Feedback eligibility + submitted state for this booking (see §1.5). |
+| `/api/public/jobs/:token/feedback` | `POST` | Submit feedback for a completed job. Job/technician are derived from the token server-side, never from the request body. |
 
 ---
 

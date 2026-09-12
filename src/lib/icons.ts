@@ -32,6 +32,7 @@ import {
   Search,
   Share2,
   Sliders,
+  Star,
   Smartphone,
   Sparkles,
   SquareStack,
@@ -99,4 +100,5 @@ export const STATUS_ICON = {
   chevronUp: ChevronUp,
   bell: Bell,
   share: Share2,
+  star: Star,
 } as const;
