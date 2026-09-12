@@ -102,6 +102,8 @@ interface DisplayProps extends CommonProps {
   route?: RouteLine | null;
   /** Live LTA camera observations shown as clickable map markers. */
   trafficCameras?: TrafficCamera[];
+  /** Enable map zoom controls and mouse-wheel zoom for the technician route view. */
+  interactiveZoom?: boolean;
 }
 
 type Props = PickProps | DisplayProps;
@@ -277,8 +279,8 @@ export default function MapView(props: Props) {
         const map = L.map(holderRef.current, {
           center: [initCenter.lat, initCenter.lng],
           zoom: 13,
-          zoomControl: props.mode === "pick",
-          scrollWheelZoom: props.mode === "pick",
+          zoomControl: props.mode === "pick" || (props.mode === "display" && props.interactiveZoom === true),
+          scrollWheelZoom: props.mode === "pick" || (props.mode === "display" && props.interactiveZoom === true),
         });
         L.tileLayer(TILE_URL, { attribution: TILE_ATTRIB, maxZoom: 19 }).addTo(map);
 
