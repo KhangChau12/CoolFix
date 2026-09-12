@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { apiGet, apiSend } from "@/lib/client";
 import { Toast } from "@/components/ui";
 import { ScoringExplainer, SCORING_COMPONENTS } from "@/components/scoring";
+import { STATUS_ICON, TIER_ICON } from "@/lib/icons";
 import {
   DISPATCH_POLICY,
   SCORE_COMPONENTS,
@@ -106,7 +107,8 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="stack" style={{ gap: 20, maxWidth: 780 }}>
+    <div className="settings-shell">
+      <div className="settings-main stack" style={{ gap: 20, maxWidth: 780 }}>
       <div>
         <h1 style={{ fontSize: 22, margin: 0 }}>Settings — the rulebook the agents run on</h1>
         <p className="muted" style={{ margin: "4px 0 0", fontSize: 13, lineHeight: 1.55 }}>
@@ -334,8 +336,137 @@ export default function SettingsPage() {
       </div>
 
       {toast && <Toast message={toast.msg} kind={toast.kind} onClose={() => setToast(null)} />}
+      </div>
+
+      <div className="settings-context">
+        <WhatChangedPanel cfg={cfg} draft={draft} dirty={dirty} busy={busy} onSave={save} onDiscard={() => setDraft(cfg)} />
+      </div>
+
+      <style>{`
+        .settings-shell { display: grid; grid-template-columns: 1fr; gap: 24px; align-items: start; }
+        .settings-context { display: none; }
+        @media (min-width: 1200px) {
+          .settings-shell { grid-template-columns: minmax(0, 780px) 260px; }
+          .settings-context { display: block; position: sticky; top: 22px; }
+        }
+      `}</style>
     </div>
   );
+}
+
+/** Desktop-only sticky panel (>=1200px) showing a live diff of pending
+ *  changes before save — real utility for a coordinator about to commit a
+ *  business-rule change, not decorative filler for the dead right column. */
+function WhatChangedPanel({
+  cfg,
+  draft,
+  dirty,
+  busy,
+  onSave,
+  onDiscard,
+}: {
+  cfg: RuntimeConfig | null;
+  draft: RuntimeConfig;
+  dirty: boolean;
+  busy: boolean;
+  onSave: () => void;
+  onDiscard: () => void;
+}) {
+  const changes = cfg ? diffConfig(cfg, draft) : [];
+
+  return (
+    <div className="card" style={{ padding: 16 }}>
+      <h3 style={{ fontSize: 13, margin: "0 0 4px" }}>What changed</h3>
+      <p className="faint" style={{ fontSize: 11, lineHeight: 1.5, margin: "0 0 12px" }}>
+        A live diff against what&rsquo;s saved — check this before committing a rule change.
+      </p>
+      {!dirty ? (
+        <div className="row" style={{ gap: 6, color: "var(--text-faint)", fontSize: 12 }}>
+          <STATUS_ICON.check size={13} strokeWidth={2.25} />
+          Nothing pending — matches what&rsquo;s live.
+        </div>
+      ) : (
+        <div className="stack" style={{ gap: 8 }}>
+          {changes.map((c) => (
+            <div key={c.label} style={{ fontSize: 11.5, lineHeight: 1.5 }}>
+              <div style={{ fontWeight: 600, color: "var(--text)" }}>{c.label}</div>
+              <div className="mono" style={{ color: "var(--text-muted)" }}>
+                {c.from} <span style={{ color: "var(--text-faint)" }}>→</span>{" "}
+                <span style={{ color: "var(--brand-ink)", fontWeight: 600 }}>{c.to}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {dirty && (
+        <div className="row" style={{ gap: 8, marginTop: 14 }}>
+          <button className="btn btn-primary" style={{ fontSize: 12, padding: "7px 12px" }} disabled={busy} onClick={onSave}>
+            {busy ? "Saving…" : "Save changes"}
+          </button>
+          <button className="btn btn-ghost" style={{ fontSize: 12, padding: "7px 12px" }} onClick={onDiscard}>
+            Discard
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function diffConfig(cfg: RuntimeConfig, draft: RuntimeConfig): { label: string; from: string; to: string }[] {
+  const out: { label: string; from: string; to: string }[] = [];
+
+  if (cfg.freezeWindowHours !== draft.freezeWindowHours) {
+    out.push({ label: "Freeze window", from: `${cfg.freezeWindowHours}h`, to: `${draft.freezeWindowHours}h` });
+  }
+  if (cfg.hitlMaxCustomersAffected !== draft.hitlMaxCustomersAffected) {
+    out.push({
+      label: "HITL: max customers affected",
+      from: String(cfg.hitlMaxCustomersAffected),
+      to: String(draft.hitlMaxCustomersAffected),
+    });
+  }
+  if (cfg.hitlMaxAddedTravelKm !== draft.hitlMaxAddedTravelKm) {
+    out.push({
+      label: "HITL: max added travel",
+      from: `${cfg.hitlMaxAddedTravelKm}km`,
+      to: `${draft.hitlMaxAddedTravelKm}km`,
+    });
+  }
+  if (cfg.capacityFlexiblePerDay !== draft.capacityFlexiblePerDay) {
+    out.push({
+      label: "Capacity: flexible/day",
+      from: String(cfg.capacityFlexiblePerDay),
+      to: String(draft.capacityFlexiblePerDay),
+    });
+  }
+  if (cfg.capacityTotalPerDay !== draft.capacityTotalPerDay) {
+    out.push({
+      label: "Capacity: total/day",
+      from: String(cfg.capacityTotalPerDay),
+      to: String(draft.capacityTotalPerDay),
+    });
+  }
+  if (cfg.llmMode !== draft.llmMode) {
+    out.push({ label: "LLM mode", from: cfg.llmMode, to: draft.llmMode });
+  }
+  for (const skill of Object.keys(draft.basePrice) as (keyof RuntimeConfig["basePrice"])[]) {
+    if (cfg.basePrice[skill] !== draft.basePrice[skill]) {
+      out.push({
+        label: `Price: ${SKILL_LABEL[skill]}`,
+        from: `${cfg.basePrice[skill]} SGD`,
+        to: `${draft.basePrice[skill]} SGD`,
+      });
+    }
+  }
+  for (const tier of TIERS) {
+    const before = cfg.dispatchPolicy[tier];
+    const after = draft.dispatchPolicy[tier];
+    if (SCORE_COMPONENTS.some((k) => Math.abs((before[k] ?? 0) - (after[k] ?? 0)) > 0.001)) {
+      out.push({ label: `Dispatch policy: ${TIER_META[tier].label}`, from: "adjusted", to: "pending save" });
+    }
+  }
+
+  return out;
 }
 
 // ── One tier's dispatch policy: preset chips + a stacked-bar view of the
@@ -373,8 +504,9 @@ function PolicyTierCard({
     <div className="card" style={{ padding: 14, background: "var(--surface-2)" }}>
       <div className="spread" style={{ marginBottom: 10, alignItems: "baseline" }}>
         <div>
-          <strong style={{ fontSize: 13 }}>
-            {TIER_META[tier].emoji} {TIER_META[tier].label}
+          <strong style={{ fontSize: 13, display: "inline-flex", alignItems: "center", gap: 6 }}>
+            {(() => { const TierIcon = TIER_ICON[tier]; return <TierIcon size={13} strokeWidth={2.1} color={`var(${TIER_META[tier].colorVar})`} />; })()}
+            {TIER_META[tier].label}
           </strong>
           <span className="faint" style={{ fontSize: 11, marginLeft: 8 }}>
             SLA {TIER_SLA_TEXT[tier]}

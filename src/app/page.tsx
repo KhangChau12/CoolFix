@@ -1,4 +1,8 @@
+"use client";
+
 import Link from "next/link";
+import { PERSONA_ICON } from "@/lib/icons";
+import { IconTile } from "@/components/ui";
 
 // Landing / persona picker. Not part of the product surface — just a
 // convenient entry point for the demo into the three interfaces.
@@ -7,7 +11,7 @@ const CARDS = [
   {
     href: "/admin",
     tag: "COORDINATOR",
-    emoji: "🖥️",
+    icon: PERSONA_ICON.company,
     title: "Company",
     sub: "Dispatch dashboard — live Agent Reasoning Feed, master schedule, HITL approvals. The primary demo surface.",
     accent: "#4f46e5",
@@ -15,7 +19,7 @@ const CARDS = [
   {
     href: "/book",
     tag: "PUBLIC",
-    emoji: "📝",
+    icon: PERSONA_ICON.customer,
     title: "Customer",
     sub: "Aircon servicing booking form. Pick a response tier, describe the problem, track the status live.",
     accent: "#45825a",
@@ -23,7 +27,7 @@ const CARDS = [
   {
     href: "/tech",
     tag: "MOBILE",
-    emoji: "📱",
+    icon: PERSONA_ICON.technician,
     title: "Technician",
     sub: "The technician's personal schedule app. Receive jobs, acknowledge notifications, update from the field.",
     accent: "#b07830",
@@ -34,8 +38,8 @@ const PIPELINE = [
   { name: "Job-Intake", kind: "LLM", color: "var(--agent-intake)" },
   { name: "Pricing", kind: "RULE", color: "var(--agent-pricing)" },
   { name: "Capacity", kind: "RULE", color: "var(--agent-capacity)" },
-  { name: "Tech-State", kind: "RULE", color: "var(--agent-techstate)" },
-  { name: "Assignment", kind: "LLM/RULE", color: "var(--agent-assignment)" },
+  { name: "Assignment", kind: "RULE", color: "var(--agent-assignment)" },
+  { name: "Tie-break", kind: "LLM", color: "var(--agent-assignment)" },
   { name: "Disruption", kind: "LLM", color: "var(--agent-disruption)" },
   { name: "Notification", kind: "LLM", color: "#706c64" },
 ];
@@ -108,7 +112,7 @@ export default function Home() {
           }}
         >
           <span className="live-dot" style={{ width: 6, height: 6 }} />
-          7-agent pipeline · human-in-the-loop · Singapore aircon dispatch
+          8-agent pipeline · human-in-the-loop · Singapore aircon dispatch
         </div>
 
         <h1
@@ -190,9 +194,8 @@ export default function Home() {
                 boxShadow: "var(--shadow-sm)",
               }}
             >
-              <div style={{ width: 5, borderRadius: 3, background: c.accent, height: 24, marginBottom: 14 }} />
-              <div className="row" style={{ gap: 9, marginBottom: 2 }}>
-                <span style={{ fontSize: 20 }}>{c.emoji}</span>
+              <IconTile icon={c.icon} accent={c.accent} tint={`${c.accent}1a`} size={38} iconSize={18} />
+              <div className="row" style={{ gap: 9, marginTop: 12, marginBottom: 2 }}>
                 <span
                   className="mono"
                   style={{

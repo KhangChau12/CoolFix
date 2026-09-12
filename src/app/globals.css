@@ -86,6 +86,38 @@
   --font: 'IBM Plex Sans', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: 'IBM Plex Mono', "SF Mono", "Roboto Mono", Menlo, Consolas, monospace;
+
+  /* Type scale — matches the ad-hoc font sizes already used across pages,
+     so adopting these is a substitution, not a redesign. */
+  --text-2xs: 10px;
+  --text-xs: 11.5px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 15.5px;
+  --text-lg: 18px;
+  --text-xl: 22px;
+  --text-2xl: 28px;
+  --text-display: 44px;
+
+  /* Spacing scale — codifies the most-used gap/padding values already in use. */
+  --space-1: 4px;
+  --space-2: 6px;
+  --space-3: 8px;
+  --space-4: 12px;
+  --space-5: 16px;
+  --space-6: 20px;
+  --space-7: 24px;
+  --space-8: 32px;
+
+  /* Warm/friendly surface additions for customer-facing pages. */
+  --bg-customer-tint: #fdf9f2;
+  --illustration-tint: #f1eefb;
+  --focus-ring: 0 0 0 3px var(--brand-tint);
+
+  /* Icon sizing — standardizes the Lucide `size` prop app-wide. */
+  --icon-sm: 14px;
+  --icon-md: 18px;
+  --icon-lg: 24px;
 }
 
 * { box-sizing: border-box; }

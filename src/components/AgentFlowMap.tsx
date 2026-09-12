@@ -32,6 +32,7 @@ import {
 } from "@/lib/flowMap";
 import { Candidates, ReplanOptions } from "./PipelineReplay";
 import { ScoreBars, ScoringExplainer } from "./scoring";
+import { STATUS_ICON } from "@/lib/icons";
 import type { AgentDecisionLog, Job } from "@/lib/types";
 
 // ── layout — a 3-tier "Z" grid, no diagonal or overlapping routes ──
@@ -661,8 +662,8 @@ function StationModal({
             </div>
             <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>{b.intuition}</div>
           </div>
-          <button className="btn btn-ghost" style={{ padding: "5px 9px", fontSize: 15 }} onClick={onClose} aria-label="Close">
-            ✕
+          <button className="btn btn-ghost" style={{ padding: "5px 9px" }} onClick={onClose} aria-label="Close">
+            <STATUS_ICON.close size={15} strokeWidth={2.25} />
           </button>
         </div>
 
