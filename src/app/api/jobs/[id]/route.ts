@@ -13,6 +13,14 @@ const TECH_TRANSITIONS: Record<string, JobStatus> = {
   completed: "completed",
 };
 
+// Finer-grained state within "in_progress" — see Job.tech_substatus. Cleared
+// once the job moves past in_progress (nothing to distinguish once done).
+const TECH_SUBSTATUS: Record<string, "en_route" | "arrived" | null> = {
+  en_route: "en_route",
+  arrived: "arrived",
+  completed: null,
+};
+
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   const job = await repo.getJob(params.id);
   if (!job) return NextResponse.json({ error: "Job not found" }, { status: 404 });
@@ -41,6 +49,6 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     );
   }
 
-  await repo.upsertJob({ ...job, status: nextStatus });
+  await repo.upsertJob({ ...job, status: nextStatus, tech_substatus: TECH_SUBSTATUS[action] });
   return NextResponse.json({ ok: true, status: nextStatus });
 }

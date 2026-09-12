@@ -366,7 +366,8 @@ export function AgentFlowMap({ jobId, job }: Props) {
   // Auto-follow the active/most-recent station while nothing is hovered.
   const lastDoneId = useMemo<StationId | null>(() => {
     let last: StationId | null = null;
-    for (let i = 0; i < shownStepCount; i++) last = steps[i].to;
+    const count = Math.min(shownStepCount, steps.length);
+    for (let i = 0; i < count; i++) last = steps[i].to;
     return last;
   }, [steps, shownStepCount]);
 
@@ -1490,8 +1491,6 @@ function summarize(row: AgentDecisionLog): [string, string][] {
   switch (row.agent_name) {
     case "JobIntakeAgent":
       push("skills", (o as { skill_required?: string[] }).skill_required?.join(", "), true);
-      push("urgency", (o as { urgency_hint?: string }).urgency_hint);
-      push("window", ((o as { time_window_hours?: [number, number] }).time_window_hours ?? []).join("–") + " h");
       push("injection", (o as { injection_attempt?: boolean }).injection_attempt ? "true — flagged" : "false — clean");
       break;
     case "PricingEngine":

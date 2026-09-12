@@ -1,5 +1,6 @@
 import type { AgentDecisionLog, Job, NotificationRecord, Technician } from "@/lib/types";
 import { SG_LANDMARKS } from "@/lib/geo";
+import { generateTrackingToken } from "@/lib/trackingToken";
 import {
   addHours,
   computeFreezePoint,
@@ -708,6 +709,8 @@ export function seedJobs(freezeWindowHours: number): Job[] {
       created_at: createdAt,
       pipeline_stage: s.stage,
       reschedule_history: [],
+      public_tracking_token: generateTrackingToken(),
+      tech_substatus: (s.status === "in_progress" ? "en_route" : null) as Job["tech_substatus"],
     };
   });
 
@@ -809,12 +812,6 @@ function demoBreakdown(id: string) {
 // ascending here, one row ~30s after the previous, the whole trail
 // finishing a few minutes after the job's created_at.
 
-function urgencyHintFor(tier: Job["tier"]): "low" | "medium" | "high" {
-  if (tier === "urgent") return "high";
-  if (tier === "flexible") return "low";
-  return "medium";
-}
-
 interface SeededRow {
   agent: AgentDecisionLog["agent_name"];
   kind: "llm" | "rule";
@@ -851,7 +848,6 @@ export function seedAgentActivity(
 
     const tier = job.tier;
     const meta = TIER_META[tier];
-    const urgency = urgencyHintFor(tier);
     const sb = job.score_breakdown ?? demoBreakdown(job.job_id);
     const basePrice = basePriceFor(job.skill_required);
     const certs = job.skill_required.map((s) => SKILL_CERT[s]).join(", ");
@@ -874,10 +870,9 @@ export function seedAgentActivity(
         input: { problem_description: job.problem_description, category_hint: job.problem_category },
         output: {
           skill_required: job.skill_required,
-          urgency_hint: urgency,
           injection_attempt: false,
         },
-        headline: `Classified as ${job.skill_required.join(" + ")} · urgency ${urgency}`,
+        headline: `Classified as ${job.skill_required.join(" + ")}`,
         outcome: "auto_commit",
         guardrails: ["Customer free-text treated as untrusted input (delimited, no instructions followed)."],
       },

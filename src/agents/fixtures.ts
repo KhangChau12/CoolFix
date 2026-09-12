@@ -200,30 +200,12 @@ function stubIntake(req: LlmRequest) {
   if (si.hint_skill && !skills.size) skills.add(si.hint_skill as SkillTag);
   if (!skills.size) skills.add("basic_maintenance");
 
-  const urgency =
-    si.tier === "urgent"
-      ? "high"
-      : /urgent|asap|now|immediately|unbearable|too hot|no cooling at all/i.test(text)
-        ? "high"
-        : si.tier === "priority"
-          ? "medium"
-          : "low";
-
-  const window: [number, number] =
-    si.tier === "urgent"
-      ? [2, 22]
-      : si.tier === "priority"
-        ? [4, 68]
-        : si.tier === "standard"
-          ? [12, 160]
-          : [24, 320];
-
+  // Scheduling urgency is tier-only (orchestrator.ts) — Job-Intake (real or
+  // stub) only classifies which skill(s) the visit needs.
   return {
     data: {
       skill_required: Array.from(skills),
-      urgency_hint: urgency,
       location_note: "",
-      time_window_hours: window,
       injection_attempt: injection,
       rationale: `Inferred from the description and category "${si.problem_category ?? "n/a"}"; ${
         injection ? "detected manipulation attempt, ignored." : "nothing unusual."

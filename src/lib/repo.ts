@@ -80,6 +80,19 @@ export async function upsertJob(j: Job): Promise<void> {
   orThrow(res, "upsertJob");
 }
 
+/** The ONLY lookup path for the public customer tracker — by tracking
+ *  token, never by job_id. Callers must not fall back to `getJob` with the
+ *  same input; see `/api/public/jobs/[token]`. */
+export async function getJobByTrackingToken(token: string): Promise<Job | undefined> {
+  const res = await sb()
+    .from("jobs")
+    .select("*")
+    .eq("public_tracking_token", token)
+    .maybeSingle();
+  const row = orThrow(res, "getJobByTrackingToken");
+  return row ? rowToJob(row) : undefined;
+}
+
 // ── Decision log ─────────────────────────────────────────────────
 
 export async function insertDecision(d: AgentDecisionLog): Promise<void> {

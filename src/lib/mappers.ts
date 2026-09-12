@@ -63,6 +63,8 @@ export function rowToJob(r: any): Job {
     created_at: toISO(r.created_at),
     pipeline_stage: r.pipeline_stage ?? "intake",
     reschedule_history: r.reschedule_history ?? [],
+    public_tracking_token: r.public_tracking_token,
+    tech_substatus: r.tech_substatus ?? null,
   };
 }
 
@@ -87,6 +89,8 @@ export function jobToRow(j: Job) {
     created_at: j.created_at,
     pipeline_stage: j.pipeline_stage,
     reschedule_history: j.reschedule_history,
+    public_tracking_token: j.public_tracking_token,
+    tech_substatus: j.tech_substatus,
   };
 }
 

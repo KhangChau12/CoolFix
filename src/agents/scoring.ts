@@ -47,7 +47,6 @@ import {
   isWithinWorkingHours,
   sameSgDay,
 } from "@/lib/time";
-import type { IntakeResult } from "./schemas";
 import type {
   Job,
   ScoreBreakdown,
@@ -76,7 +75,6 @@ export interface ScoreArgs {
   technicianId: string;
   jobLocation: { lat: number; lng: number };
   skillRequired: SkillTag[];
-  urgencyHint: IntakeResult["urgency_hint"];
   scheduledTime: string;
   /** The job being scored — excluded from clash / route / load maths. */
   ignoreJobId: string;
@@ -260,7 +258,7 @@ function rawComponentsForTech(
   const availabilityAbs = clamp01(remainingMin / Math.max(shiftMin, 1));
 
   // ── skillFit: certification (given) + seniority-for-complexity ──────
-  const complex = jobIsComplex(args.skillRequired, args.urgencyHint);
+  const complex = jobIsComplex(args.skillRequired, args.tier);
   const levelTerm =
     !complex || t.experience_level === "senior" ? 1 : JUNIOR_COMPLEX_LEVEL;
   const extraSkills = t.skill_tags.filter(
