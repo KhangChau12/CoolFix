@@ -12,6 +12,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
 import MapView from "@/components/MapView";
+import { ShareButton } from "@/components/ShareButton";
 
 interface PublicTimelineStep {
   key: string;
@@ -117,6 +118,14 @@ function TrackerCard({
         </div>
         <h1 style={{ fontSize: 21, margin: 0, lineHeight: 1.3 }}>{view.statusLabel}</h1>
         <p className="muted" style={{ fontSize: 13, marginTop: 8, marginBottom: 0 }}>{view.message}</p>
+
+        <div style={{ marginTop: 12 }}>
+          <ShareButton
+            url={typeof window !== "undefined" ? window.location.href : ""}
+            title="CoolFix — my service status"
+            text={`${view.statusLabel} (code ${view.trackingCode}):`}
+          />
+        </div>
 
         {view.eta != null && (
           <div style={{ marginTop: 16, display: "flex", alignItems: "baseline", gap: 8 }}>

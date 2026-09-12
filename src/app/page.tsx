@@ -35,7 +35,7 @@ const CARDS = [
   {
     href: "/track",
     tag: "PUBLIC · NO LOGIN",
-    emoji: "🔎",
+    icon: PERSONA_ICON.tracking,
     title: "Track My Service",
     sub: "Already booked? Enter your tracking code to see live status, ETA and your technician — no account needed.",
     accent: "#4f46e5",

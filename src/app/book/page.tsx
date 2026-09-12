@@ -21,6 +21,7 @@ import {
   type Tier,
 } from "@/lib/types";
 import { TIER_ICON, STATUS_ICON } from "@/lib/icons";
+import { ShareButton } from "@/components/ShareButton";
 import type { PipelineResult } from "@/agents/orchestrator";
 
 type Step = "welcome" | "form" | "tier" | "confirm" | "processing" | "track";
@@ -31,6 +32,30 @@ const AREA_KEYS = Object.keys(SG_LANDMARKS) as (keyof typeof SG_LANDMARKS)[];
 function estPrice(categoryValue: string, tier: Tier): number {
   const skill = CATEGORY_HINT_SKILL[categoryValue] ?? "basic_maintenance";
   return Math.round(DEFAULT_CONFIG.basePrice[skill] * TIER_META[tier].priceMultiplier);
+}
+
+type FormState = {
+  customer_name: string;
+  customer_email: string;
+  customer_phone: string;
+  address: string;
+  location: { lat: number; lng: number } | null;
+};
+
+type FormField = "customer_name" | "customer_email" | "address" | "location";
+
+// Same shape the backend enforces (schemas.ts validateBookingRequest) —
+// mirrored here so the customer sees the problem the moment they finish a
+// field / try to move on, instead of only after "Confirm booking" round-trips
+// to the server and comes back with a generic error.
+function getFormErrors(form: FormState, locationReady: boolean): Partial<Record<FormField, string>> {
+  const errors: Partial<Record<FormField, string>> = {};
+  if (!form.customer_name.trim()) errors.customer_name = "Please enter your name.";
+  if (!form.customer_email.trim()) errors.customer_email = "Please enter your email.";
+  else if (!/.+@.+\..+/.test(form.customer_email)) errors.customer_email = "That doesn't look like a valid email address.";
+  if (!form.address.trim()) errors.address = "Please enter the service address.";
+  if (!locationReady) errors.location = "Please pin the location on the map (or pick an area).";
+  return errors;
 }
 
 export default function BookPage() {
@@ -53,6 +78,17 @@ export default function BookPage() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // Field-level validation feedback for the "form" step: a field's problem
+  // shows up as soon as the customer finishes it (blur) or as soon as they
+  // try to move to the next step — never held back until "Confirm booking".
+  const [touched, setTouched] = useState<Partial<Record<FormField, boolean>>>({});
+  const [attemptedNext, setAttemptedNext] = useState(false);
+  const formErrors = getFormErrors(form, Boolean(form.location));
+  const showError = (field: FormField) => (touched[field] || attemptedNext) && formErrors[field];
+  function markTouched(field: FormField) {
+    setTouched((t) => ({ ...t, [field]: true }));
+  }
+
   function upd<K extends keyof typeof form>(k: K, v: (typeof form)[K]) {
     setForm((f) => ({ ...f, [k]: v }));
   }
@@ -74,8 +110,6 @@ export default function BookPage() {
       location: f.location ?? SG_LANDMARKS[f.area],
     }));
   }
-
-  const locationReady = Boolean(form.location);
 
   async function submit() {
     setBusy(true);
@@ -137,12 +171,23 @@ export default function BookPage() {
           <div className="card" style={{ padding: 24 }}>
             <h2 style={{ fontSize: 18 }}>Describe the problem</h2>
             <div className="stack" style={{ gap: 12, marginTop: 12 }}>
-              <Field label="Your name">
-                <input className="inp" value={form.customer_name} onChange={(e) => upd("customer_name", e.target.value)} />
+              <Field label="Your name" error={showError("customer_name")}>
+                <input
+                  className="inp"
+                  value={form.customer_name}
+                  onChange={(e) => upd("customer_name", e.target.value)}
+                  onBlur={() => markTouched("customer_name")}
+                />
               </Field>
               <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                <Field label="Email">
-                  <input className="inp" type="email" value={form.customer_email} onChange={(e) => upd("customer_email", e.target.value)} />
+                <Field label="Email" error={showError("customer_email")}>
+                  <input
+                    className="inp"
+                    type="email"
+                    value={form.customer_email}
+                    onChange={(e) => upd("customer_email", e.target.value)}
+                    onBlur={() => markTouched("customer_email")}
+                  />
                 </Field>
                 <Field label="Phone">
                   <input className="inp" value={form.customer_phone} onChange={(e) => upd("customer_phone", e.target.value)} />
@@ -154,6 +199,7 @@ export default function BookPage() {
                     ? "Area (for routing)"
                     : "Where's the aircon? Pin it on the map"
                 }
+                error={showError("location")}
               >
                 {!mapUnavailable && (
                   <MapView
@@ -163,7 +209,10 @@ export default function BookPage() {
                         ? { ...form.location, address: form.address }
                         : null
                     }
-                    onPick={onPickPlace}
+                    onPick={(p) => {
+                      onPickPlace(p);
+                      markTouched("location");
+                    }}
                     onUnavailable={onMapUnavailable}
                     height={240}
                   />
@@ -175,6 +224,7 @@ export default function BookPage() {
                     onChange={(e) => {
                       const area = e.target.value as keyof typeof SG_LANDMARKS;
                       setForm((f) => ({ ...f, area, location: SG_LANDMARKS[area] }));
+                      markTouched("location");
                     }}
                   >
                     {AREA_KEYS.map((k) => (
@@ -185,12 +235,13 @@ export default function BookPage() {
                   </select>
                 )}
               </Field>
-              <Field label="Address (for the technician)">
+              <Field label="Address (for the technician)" error={showError("address")}>
                 <input
                   className="inp"
                   placeholder="Block, street, unit — auto-filled from the map, edit if needed"
                   value={form.address}
                   onChange={(e) => upd("address", e.target.value)}
+                  onBlur={() => markTouched("address")}
                 />
               </Field>
               <Field label="Problem type">
@@ -224,13 +275,17 @@ export default function BookPage() {
               <button className="btn btn-ghost" onClick={() => setStep("welcome")}>Back</button>
               <button
                 className="btn btn-primary"
-                disabled={
-                  !form.customer_name ||
-                  !form.customer_email ||
-                  !form.address ||
-                  !locationReady
-                }
-                onClick={() => setStep("tier")}
+                onClick={() => {
+                  if (Object.keys(formErrors).length > 0) {
+                    // Reveal every problem at once instead of the customer
+                    // discovering them one field at a time — same trigger
+                    // as finishing a field (blur), just fired for all of
+                    // them together.
+                    setAttemptedNext(true);
+                    return;
+                  }
+                  setStep("tier");
+                }}
               >
                 Next: choose speed
               </button>
@@ -489,11 +544,30 @@ function BookingHelpPanel({ step, tier }: { step: Step; tier: Tier }) {
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  children,
+  error,
+}: {
+  label: string;
+  children: React.ReactNode;
+  /** Shown right under the field the moment it's known — set by the
+   *  caller once the field is touched (blur) or the customer tried to
+   *  advance to the next step. Falsy hides it entirely. */
+  error?: string | false;
+}) {
   return (
     <label style={{ display: "block", fontSize: 12 }}>
       <span className="muted" style={{ fontWeight: 600 }}>{label}</span>
       <div style={{ marginTop: 4 }}>{children}</div>
+      {error && (
+        <span
+          role="alert"
+          style={{ display: "block", marginTop: 4, fontSize: 11.5, color: "var(--tier-urgent)" }}
+        >
+          {error}
+        </span>
+      )}
     </label>
   );
 }
@@ -643,9 +717,17 @@ function TrackView({ result }: { result: PipelineResult }) {
             {j.public_tracking_token}
           </div>
         </div>
-        <Link href={`/track/${encodeURIComponent(j.public_tracking_token)}`} className="btn btn-primary" style={{ flexShrink: 0 }}>
-          Track my service →
-        </Link>
+        <div className="row" style={{ gap: 8, flexShrink: 0 }}>
+          <ShareButton
+            className="btn"
+            url={typeof window !== "undefined" ? `${window.location.origin}/track/${j.public_tracking_token}` : ""}
+            title="CoolFix — track my service"
+            text={`Track my CoolFix appointment (code ${j.public_tracking_token}):`}
+          />
+          <Link href={`/track/${encodeURIComponent(j.public_tracking_token)}`} className="btn btn-primary">
+            Track my service →
+          </Link>
+        </div>
       </div>
       <p className="faint" style={{ fontSize: 11, margin: "0 0 4px" }}>
         Save this code — you can check your status any time from any device at{" "}
