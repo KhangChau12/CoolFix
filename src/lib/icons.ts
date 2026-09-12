@@ -80,6 +80,7 @@ export const PERSONA_ICON = {
   company: Monitor,
   customer: ClipboardList,
   technician: Smartphone,
+  track: Search,
 } as const;
 
 /** Generic status/step icons used across booking steps, tech app, schedule, maps. */
