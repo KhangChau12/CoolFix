@@ -257,6 +257,22 @@ export default function SchedulePage() {
           )}
         </div>
         <div className="row" style={{ gap: 8 }} onClick={(e) => e.stopPropagation()}>
+          {view === "day" ? (
+            <div className="row" style={{ gap: 6 }}>
+              {dayOffset !== 0 && (
+                <button className="btn btn-ghost" onClick={() => setDayOffset(0)}>
+                  today
+                </button>
+              )}
+            </div>
+          ) : <div className="row" style={{ gap: 6 }}>
+              {(weekStartOffset > 0 || weekStartOffset + WEEK_SPAN <= 0) && (
+                <button className="btn btn-ghost" onClick={() => setDayOffset(0)}>
+                  this week
+                </button>
+              )}
+            </div>}
+
           {/* Day / Week toggle */}
           <div
             className="row"
@@ -301,11 +317,6 @@ export default function SchedulePage() {
               <button className="btn" onClick={() => setDayOffset((d) => d + 1)}>
                 →
               </button>
-              {dayOffset !== 0 && (
-                <button className="btn btn-ghost" onClick={() => setDayOffset(0)}>
-                  today
-                </button>
-              )}
             </div>
           ) : (
             <div className="row" style={{ gap: 6 }}>
@@ -315,11 +326,6 @@ export default function SchedulePage() {
               <button className="btn" onClick={() => setDayOffset((d) => d + WEEK_SPAN)}>
                 week →
               </button>
-              {(weekStartOffset > 0 || weekStartOffset + WEEK_SPAN <= 0) && (
-                <button className="btn btn-ghost" onClick={() => setDayOffset(0)}>
-                  this week
-                </button>
-              )}
             </div>
           )}
         </div>

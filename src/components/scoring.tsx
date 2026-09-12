@@ -23,6 +23,7 @@ export const SCORE_COMPONENT_COLOR: Record<ScoreComponent, string> = {
   availability: "#c98a3c",
   slaHeadroom: "#b0453b",
   loadBalance: "#5a7d9a",
+  customerSatisfaction: "#c2703d",
 };
 
 const BAR_PARTS: [ScoreComponent, string][] = [
@@ -31,6 +32,7 @@ const BAR_PARTS: [ScoreComponent, string][] = [
   ["availability", "availability"],
   ["slaHeadroom", "SLA headroom"],
   ["loadBalance", "load balance"],
+  ["customerSatisfaction", "customer satisfaction"],
 ];
 const BAR_KEY: Record<ScoreComponent, keyof NonNullable<AgentDecisionLog["score_breakdown"]>> = {
   travel: "travel",
@@ -38,6 +40,7 @@ const BAR_KEY: Record<ScoreComponent, keyof NonNullable<AgentDecisionLog["score_
   availability: "availability",
   slaHeadroom: "sla_headroom",
   loadBalance: "load_balance",
+  customerSatisfaction: "customer_satisfaction",
 };
 
 // ── The score, component by component, as bars ─────────────────────
@@ -59,7 +62,10 @@ export function ScoreBars({
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {BAR_PARTS.map(([key, label]) => {
-          const v = b[BAR_KEY[key]] as number;
+          // customer_satisfaction is optional — rows logged before this
+          // component existed don't have it. Treat missing as 0 rather
+          // than crashing on `.toFixed`.
+          const v = (b[BAR_KEY[key]] as number | undefined) ?? 0;
           return (
             <div
               key={key}
@@ -146,6 +152,14 @@ export const SCORING_COMPONENTS: {
       "Pulls work toward technicians who are below the fleet's median utilisation for the day.",
     why: "Left alone, a pure travel + skill score piles every job onto the two people nearest the city centre while others idle. Balancing utilisation keeps the roster sustainable and gives you slack for the next urgent call.",
   },
+  {
+    key: "customerSatisfaction",
+    label: "Customer satisfaction",
+    weightNote: "absolute [0,1] · small default weight",
+    measures:
+      "Bayesian-smoothed historical rating from past customer feedback (1-5★, minimum-sample smoothed toward a neutral prior so one review can't swing it). A technician with no ratings yet scores at that same neutral prior — never 0, never penalised for being new.",
+    why: "A soft tie-breaker only, by design: it runs after every hard constraint (skill, hours, no double-booking, route feasibility) has already filtered the pool, and its weight defaults to a conservative 5% everywhere. It can nudge which of several qualified technicians gets the job; it can never make an unqualified one win.",
+  },
 ];
 
 export function ScoringExplainer({ compact = false }: { compact?: boolean }) {
@@ -168,8 +182,8 @@ export function ScoringExplainer({ compact = false }: { compact?: boolean }) {
           Σ<sub>k</sub> policy[tier][k] · component<sub>k</sub>(tech, job)
         </span>
         <div style={{ marginTop: 5, color: "var(--text-faint)", fontSize: compact ? 9.5 : 10.5 }}>
-          k ∈ {"{"} travel, skillFit, availability, slaHeadroom, loadBalance {"}"} · each
-          component ∈ [0,1] · Σ policy[tier] = 1 → match ∈ [0,1]
+          k ∈ {"{"} travel, skillFit, availability, slaHeadroom, loadBalance,
+          customerSatisfaction {"}"} · each component ∈ [0,1] · Σ policy[tier] = 1 → match ∈ [0,1]
         </div>
         <div style={{ marginTop: 4, color: "var(--text-faint)", fontSize: compact ? 9.5 : 10.5 }}>
           travel &amp; availability are min-max ranked <em>within the candidate pool</em>, so

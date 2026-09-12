@@ -27,7 +27,11 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   const tech = job.assigned_technician_id
     ? await repo.getTechnician(job.assigned_technician_id)
     : null;
-  return NextResponse.json({ job, technician: tech ?? null });
+  // Additive — existing consumers destructure `{ job, technician }` and
+  // are unaffected. Customer feedback on this same job is not a leak of
+  // someone else's data; the admin job-detail replay also reads it.
+  const feedback = await repo.getFeedbackByJobId(job.job_id);
+  return NextResponse.json({ job, technician: tech ?? null, feedback: feedback ?? null });
 }
 
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {

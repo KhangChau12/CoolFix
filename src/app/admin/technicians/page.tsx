@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { apiGet, apiSend } from "@/lib/client";
 import { useRealtime } from "@/components/useRealtime";
-import { Toast, Avatar, Sparkline } from "@/components/ui";
+import { Toast, Avatar, Sparkline, MiniBarChart } from "@/components/ui";
+import { STATUS_ICON } from "@/lib/icons";
 import { SG_LANDMARKS } from "@/lib/geo";
 import { sgDayKey, nowISO, fmtSGTime } from "@/lib/time";
 import {
@@ -11,27 +12,38 @@ import {
   SKILL_LABEL,
   SKILL_CERT,
   SKILL_TAGS,
+  FEEDBACK_POSITIVE_TAG_LABEL,
+  FEEDBACK_IMPROVEMENT_TAG_LABEL,
+  FEEDBACK_POSITIVE_TAGS,
+  FEEDBACK_IMPROVEMENT_TAGS,
   type Job,
   type SkillTag,
   type Technician,
 } from "@/lib/types";
+import { topTags, type TechnicianRatingSummary } from "@/lib/rating";
 
 export default function TechniciansPage() {
   const [techs, setTechs] = useState<Technician[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [ratings, setRatings] = useState<Record<string, TechnicianRatingSummary>>({});
   const [showForm, setShowForm] = useState(false);
+  const [openId, setOpenId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ msg: string; kind: "success" | "error" } | null>(null);
 
   const load = useCallback(async () => {
     const [t, j] = await Promise.all([
-      apiGet<{ technicians: Technician[] }>("/api/technicians"),
+      apiGet<{ technicians: Technician[]; ratings: Record<string, TechnicianRatingSummary> }>(
+        "/api/technicians",
+      ),
       apiGet<{ jobs: Job[] }>("/api/bookings"),
     ]);
     setTechs(t.technicians);
+    setRatings(t.ratings ?? {});
     setJobs(j.jobs);
   }, []);
 
   useRealtime("technicians", load);
+  useRealtime("job_feedback", load);
   useEffect(() => {
     load();
   }, [load]);
@@ -63,6 +75,16 @@ export default function TechniciansPage() {
       upcomingCount: active.length,
       next: next ?? null,
     };
+  }
+
+  // The one OBJECTIVE completion metric this codebase actually has real
+  // data for. There's no recorded arrival-vs-scheduled timestamp anywhere
+  // in the job model, so a genuine "on-time %" or "first-visit resolution
+  // %" can't be computed without inventing numbers — completed job count
+  // is real, and sits alongside the rating (a subjective signal) rather
+  // than replacing it.
+  function completedCountFor(t: Technician): number {
+    return jobs.filter((j) => j.assigned_technician_id === t.technician_id && j.status === "completed").length;
   }
 
   return (
@@ -100,6 +122,8 @@ export default function TechniciansPage() {
                 <th>Skills</th>
                 <th>Today&apos;s utilisation</th>
                 <th>Board</th>
+                <th>Performance</th>
+                <th aria-label="Expand" />
               </tr>
             </thead>
             <tbody>
@@ -107,8 +131,11 @@ export default function TechniciansPage() {
                 const load = loadFor(t);
                 const barColor =
                   load.pct > 80 ? "var(--tier-urgent)" : load.pct > 50 ? "var(--tier-priority)" : "var(--tier-flexible)";
+                const rating = ratings[t.technician_id];
+                const isOpen = openId === t.technician_id;
                 return (
-                  <tr key={t.technician_id}>
+                  <Fragment key={t.technician_id}>
+                  <tr>
                     <td>
                       <div className="row" style={{ gap: 10 }}>
                         <Avatar name={t.name} index={i} size={36} />
@@ -166,7 +193,32 @@ export default function TechniciansPage() {
                         )}
                       </div>
                     </td>
+                    <td style={{ minWidth: 120 }}>
+                      <RatingSummaryCell rating={rating} />
+                    </td>
+                    <td style={{ width: 32 }}>
+                      <button
+                        className="btn"
+                        style={{ padding: "4px 8px", fontSize: 11 }}
+                        onClick={() => setOpenId(isOpen ? null : t.technician_id)}
+                        aria-label={isOpen ? "Collapse performance detail" : "Expand performance detail"}
+                      >
+                        {isOpen ? <STATUS_ICON.chevronUp size={13} /> : <STATUS_ICON.chevronDown size={13} />}
+                      </button>
+                    </td>
                   </tr>
+                  {isOpen && (
+                    <tr>
+                      <td colSpan={6} style={{ background: "var(--surface-2)", padding: "16px 18px" }}>
+                        <PerformanceDetail
+                          technicianName={t.name}
+                          rating={rating}
+                          completedJobs={completedCountFor(t)}
+                        />
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 );
               })}
             </tbody>
@@ -294,6 +346,104 @@ function AddTechForm({ onDone }: { onDone: (msg: string, ok: boolean) => void })
       >
         {busy ? "Saving…" : "Save technician"}
       </button>
+    </div>
+  );
+}
+
+// ── Rating cell (roster table) ──────────────────────────────────────
+// "Not enough ratings" instead of a misleading "0.0 ★" for a technician
+// with zero (or very few) reviews — see rating.ts's `average: null` case.
+function RatingSummaryCell({ rating }: { rating: TechnicianRatingSummary | undefined }) {
+  if (!rating || rating.average == null) {
+    return <span className="faint" style={{ fontSize: 11 }}>Not enough ratings</span>;
+  }
+  return (
+    <div>
+      <div className="row" style={{ gap: 5, alignItems: "baseline" }}>
+        <STATUS_ICON.star size={12} strokeWidth={2} fill="#e0a72e" color="#e0a72e" />
+        <strong style={{ fontSize: 13 }}>{rating.average.toFixed(1)}</strong>
+        <span className="faint" style={{ fontSize: 10.5 }}>
+          {rating.count} rating{rating.count === 1 ? "" : "s"}
+        </span>
+      </div>
+      {rating.trend && rating.trend !== "flat" && (
+        <div
+          className="faint"
+          style={{ fontSize: 10, marginTop: 2, color: rating.trend === "up" ? "var(--success)" : "var(--tier-priority)" }}
+        >
+          {rating.trend === "up" ? "↑ trending up" : "↓ trending down"}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Performance detail (expanded row) ───────────────────────────────
+// Rating distribution + top tags, alongside the one objective completion
+// metric this codebase actually has real data for (see completedCountFor's
+// comment — no arrival timestamps exist to compute a genuine on-time %).
+function PerformanceDetail({
+  technicianName,
+  rating,
+  completedJobs,
+}: {
+  technicianName: string;
+  rating: TechnicianRatingSummary | undefined;
+  completedJobs: number;
+}) {
+  const r = rating;
+  const topPositive = r ? topTags(r.positiveTagCounts, FEEDBACK_POSITIVE_TAGS, 3) : [];
+  const topImprovement = r ? topTags(r.improvementTagCounts, FEEDBACK_IMPROVEMENT_TAGS, 3) : [];
+
+  return (
+    <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+      <div>
+        <div className="faint" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
+          Rating distribution
+        </div>
+        {r && r.count > 0 ? (
+          <MiniBarChart
+            data={[5, 4, 3, 2, 1].map((n) => ({
+              label: `${n}★`,
+              value: r.distribution[n as 1 | 2 | 3 | 4 | 5],
+              color: n >= 4 ? "var(--tier-flexible)" : n === 3 ? "var(--tier-priority)" : "var(--tier-urgent)",
+            }))}
+            height={6}
+            gap={6}
+          />
+        ) : (
+          <div className="faint" style={{ fontSize: 11.5 }}>No feedback yet for {technicianName}.</div>
+        )}
+        <div className="faint" style={{ fontSize: 10.5, marginTop: 10 }}>
+          {completedJobs} completed job{completedJobs === 1 ? "" : "s"} (objective, from the job log)
+        </div>
+      </div>
+
+      <div>
+        <div className="faint" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
+          Customers mention
+        </div>
+        {topPositive.length === 0 && topImprovement.length === 0 ? (
+          <div className="faint" style={{ fontSize: 11.5 }}>Nothing yet.</div>
+        ) : (
+          <div className="stack" style={{ gap: 4 }}>
+            {topPositive.map(({ tag, count }) => (
+              <div key={tag} className="row" style={{ gap: 6, fontSize: 11.5 }}>
+                <STATUS_ICON.check size={11} strokeWidth={2.5} color="var(--success)" />
+                {FEEDBACK_POSITIVE_TAG_LABEL[tag]}
+                <span className="faint" style={{ marginLeft: "auto" }}>{count}</span>
+              </div>
+            ))}
+            {topImprovement.map(({ tag, count }) => (
+              <div key={tag} className="row" style={{ gap: 6, fontSize: 11.5, color: "var(--text-muted)" }}>
+                <span style={{ width: 11, textAlign: "center" }}>•</span>
+                {FEEDBACK_IMPROVEMENT_TAG_LABEL[tag]}
+                <span className="faint" style={{ marginLeft: "auto" }}>{count}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

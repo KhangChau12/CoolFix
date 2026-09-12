@@ -185,7 +185,16 @@ export interface ScoreBreakdown {
   sla_headroom: number;
   /** Pulls work toward technicians who are below the fleet's median load. */
   load_balance: number;
-  /** Sum of the five weighted components, in [0, 1]. */
+  /** Historical customer satisfaction — a Bayesian-smoothed rating (see
+   *  `src/lib/rating.ts`) so a brand-new technician or one with a single
+   *  review lands at a neutral prior instead of 0 or a noisy 5.0. A SOFT
+   *  signal only: it can never disqualify a technician (that's the hard
+   *  constraints in `scoring.ts`), only nudge the ranking among candidates
+   *  who already passed them. Optional because rows written before this
+   *  feature existed don't have it — treat missing as 0 (a neutral tier
+   *  weight default keeps this from skewing old data). */
+  customer_satisfaction?: number;
+  /** Sum of the weighted components, in [0, 1]. */
   total: number;
   /** Raw inputs behind the components, for the feed / tooltips. Not scored. */
   raw?: {
@@ -390,6 +399,77 @@ export interface NotificationRecord {
   acknowledged_at: string | null;
 }
 
+// ── Customer feedback (post-service, closes the loop) ──────────────
+// One rating per completed job, submitted by the customer through their
+// public tracking token (never a job_id/technician_id they supply — see
+// `/api/public/jobs/[token]/feedback`). Attaches to whichever technician
+// is `assigned_technician_id` on the job at completion time: the pipeline
+// never lets a completed job's assignment change afterwards (disruption /
+// bump logic explicitly skips `status === "completed"` jobs — see
+// scoring.ts / disruption.ts), so that field is always the technician who
+// actually did the work, reassignments included.
+
+/** Fixed, controlled vocabulary — never an arbitrary customer string. Keeps
+ *  aggregation meaningful ("Professional — 83") and closes off prompt
+ *  injection through a "tag" field entirely. */
+export const FEEDBACK_POSITIVE_TAGS = [
+  "professional",
+  "on_time",
+  "fast",
+  "friendly",
+  "explained_clearly",
+  "clean_work",
+] as const;
+export type FeedbackPositiveTag = (typeof FEEDBACK_POSITIVE_TAGS)[number];
+
+export const FEEDBACK_POSITIVE_TAG_LABEL: Record<FeedbackPositiveTag, string> = {
+  professional: "Professional",
+  on_time: "On time",
+  fast: "Fast",
+  friendly: "Friendly",
+  explained_clearly: "Explained the issue clearly",
+  clean_work: "Clean work",
+};
+
+export const FEEDBACK_IMPROVEMENT_TAGS = [
+  "late_arrival",
+  "communication",
+  "repair_quality",
+  "pricing_explanation",
+  "cleanliness",
+  "other",
+] as const;
+export type FeedbackImprovementTag = (typeof FEEDBACK_IMPROVEMENT_TAGS)[number];
+
+export const FEEDBACK_IMPROVEMENT_TAG_LABEL: Record<FeedbackImprovementTag, string> = {
+  late_arrival: "Late arrival",
+  communication: "Communication",
+  repair_quality: "Repair quality",
+  pricing_explanation: "Pricing explanation",
+  cleanliness: "Cleanliness",
+  other: "Other",
+};
+
+/** Longest a customer's free-text comment may be — bounded so it's cheap to
+ *  store/display and can never be used as an oversized-payload vector. It
+ *  is customer-facing display text ONLY: never concatenated into an agent
+ *  prompt (see src/lib/feedback.ts). */
+export const FEEDBACK_COMMENT_MAX_LEN = 500;
+
+export interface JobFeedback {
+  feedback_id: string;
+  job_id: string;
+  /** The technician who completed the job — derived server-side from the
+   *  job record, never accepted from the client. */
+  technician_id: string;
+  /** 1–5, integer. */
+  rating: number;
+  positive_tags: FeedbackPositiveTag[];
+  improvement_tags: FeedbackImprovementTag[];
+  comment: string | null;
+  created_at: string;
+}
+
 // ── Runtime config (Settings screen) ──────────────────────────────
 
 export interface RuntimeConfig {
@@ -426,7 +506,8 @@ export type ScoreComponent =
   | "skillFit"
   | "availability"
   | "slaHeadroom"
-  | "loadBalance";
+  | "loadBalance"
+  | "customerSatisfaction";
 
 export const SCORE_COMPONENTS: ScoreComponent[] = [
   "travel",
@@ -434,6 +515,7 @@ export const SCORE_COMPONENTS: ScoreComponent[] = [
   "availability",
   "slaHeadroom",
   "loadBalance",
+  "customerSatisfaction",
 ];
 
 export const SCORE_COMPONENT_LABEL: Record<ScoreComponent, string> = {
@@ -442,6 +524,7 @@ export const SCORE_COMPONENT_LABEL: Record<ScoreComponent, string> = {
   availability: "Availability",
   slaHeadroom: "SLA headroom",
   loadBalance: "Load balance",
+  customerSatisfaction: "Customer satisfaction",
 };
 
 /**
@@ -454,12 +537,19 @@ export const SCORE_COMPONENT_LABEL: Record<ScoreComponent, string> = {
  *                as much.
  *   • flexible — the customer has weeks of slack; spread the work to
  *                whoever is under-loaded and keep routes tight.
+ *
+ * `customerSatisfaction` (historical rating, see src/lib/rating.ts) is
+ * deliberately small (0.05 = 5%) everywhere — a SOFT tie-breaker among
+ * candidates who already cleared every hard constraint, never a reason on
+ * its own to prefer one qualified technician over another. The other five
+ * weights are scaled by 0.95 from their pre-feedback values so each row
+ * still sums to 1.0.
  */
 export const DISPATCH_POLICY: Record<Tier, Record<ScoreComponent, number>> = {
-  urgent: { travel: 0.42, skillFit: 0.28, availability: 0.12, slaHeadroom: 0.18, loadBalance: 0.0 },
-  priority: { travel: 0.34, skillFit: 0.26, availability: 0.15, slaHeadroom: 0.12, loadBalance: 0.13 },
-  standard: { travel: 0.28, skillFit: 0.22, availability: 0.17, slaHeadroom: 0.05, loadBalance: 0.28 },
-  flexible: { travel: 0.22, skillFit: 0.18, availability: 0.18, slaHeadroom: 0.02, loadBalance: 0.4 },
+  urgent: { travel: 0.399, skillFit: 0.266, availability: 0.114, slaHeadroom: 0.171, loadBalance: 0.0, customerSatisfaction: 0.05 },
+  priority: { travel: 0.323, skillFit: 0.247, availability: 0.143, slaHeadroom: 0.114, loadBalance: 0.124, customerSatisfaction: 0.05 },
+  standard: { travel: 0.266, skillFit: 0.209, availability: 0.162, slaHeadroom: 0.048, loadBalance: 0.266, customerSatisfaction: 0.05 },
+  flexible: { travel: 0.209, skillFit: 0.171, availability: 0.171, slaHeadroom: 0.019, loadBalance: 0.38, customerSatisfaction: 0.05 },
 };
 
 /**

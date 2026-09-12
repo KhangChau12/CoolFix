@@ -13,6 +13,7 @@ import { useParams } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
 import MapView from "@/components/MapView";
 import { ShareButton } from "@/components/ShareButton";
+import { FeedbackForm } from "@/components/FeedbackForm";
 
 interface PublicTimelineStep {
   key: string;
@@ -36,6 +37,7 @@ interface PublicJobView {
   timeline: PublicTimelineStep[];
   explanation: string | null;
   disruption: { headline: string; detail: string } | null;
+  feedbackEligible: boolean;
 }
 
 const POLL_MS = 4000;
@@ -259,6 +261,10 @@ function TrackerCard({
           ))}
         </div>
       </div>
+
+      {view.feedbackEligible && (
+        <FeedbackForm token={view.trackingToken} technicianName={view.technician?.name ?? "your technician"} />
+      )}
 
       {view.explanation && (
         <div className="card" style={{ padding: 20 }}>

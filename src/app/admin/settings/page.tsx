@@ -28,17 +28,17 @@ const POLICY_PRESETS: Record<
   speed: {
     label: "Speed first",
     blurb: "Nearest capable technician, fast. Best for urgent work.",
-    weights: { travel: 0.45, skillFit: 0.28, availability: 0.12, slaHeadroom: 0.15, loadBalance: 0.0 },
+    weights: { travel: 0.45, skillFit: 0.28, availability: 0.12, slaHeadroom: 0.10, loadBalance: 0.0, customerSatisfaction: 0.05 },
   },
   balanced: {
     label: "Balanced",
     blurb: "Trade travel against a sustainable, even day across the roster.",
-    weights: { travel: 0.3, skillFit: 0.24, availability: 0.16, slaHeadroom: 0.1, loadBalance: 0.2 },
+    weights: { travel: 0.3, skillFit: 0.24, availability: 0.16, slaHeadroom: 0.1, loadBalance: 0.15, customerSatisfaction: 0.05 },
   },
   fair: {
     label: "Spread the load",
     blurb: "Push work to under-loaded technicians. Best for flexible, non-urgent jobs.",
-    weights: { travel: 0.2, skillFit: 0.18, availability: 0.18, slaHeadroom: 0.02, loadBalance: 0.42 },
+    weights: { travel: 0.2, skillFit: 0.18, availability: 0.18, slaHeadroom: 0.02, loadBalance: 0.37, customerSatisfaction: 0.05 },
   },
 };
 
@@ -127,8 +127,8 @@ export default function SettingsPage() {
         <p className="muted" style={{ fontSize: 12.5, margin: "4px 0 14px", lineHeight: 1.55 }}>
           For every booking, the Assignment Agent first removes anyone who can&apos;t legally
           or physically do the job (wrong certification, off-shift, already booked, can&apos;t
-          reach it in time), then scores everyone left on five things and picks the best
-          match. You decide how much each of the five counts — and you can set that
+          reach it in time), then scores everyone left on six things and picks the best
+          match. You decide how much each of the six counts — and you can set that
           differently for each service tier.
         </p>
 
@@ -494,6 +494,7 @@ function PolicyTierCard({
     availability: "#c98a3c",
     slaHeadroom: "#b0453b",
     loadBalance: "#5a7d9a",
+    customerSatisfaction: "#c2703d",
   };
   const meta = SCORING_COMPONENTS.reduce(
     (m, c) => ({ ...m, [c.key]: c }),

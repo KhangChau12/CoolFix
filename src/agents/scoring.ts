@@ -40,6 +40,7 @@
 // the business lever (DISPATCH_POLICY / RuntimeConfig.dispatchPolicy).
 
 import { distanceKm, estimateDriveMinutes } from "@/lib/geo";
+import { satisfactionScore01 } from "@/lib/rating";
 import {
   addHours,
   findTimeClash,
@@ -109,6 +110,7 @@ export function scoreOneTech(
       availability: raw.availabilityAbs,
       slaHeadroom: raw.slaHeadroom,
       loadBalance: raw.loadBalance,
+      customerSatisfaction: raw.customerSatisfaction,
     },
     policyFor(ctx, args.tier),
     raw.rawFacts,
@@ -156,6 +158,7 @@ export function scorePool(
         availability: normAvail(raw.availabilityAbs),
         slaHeadroom: raw.slaHeadroom,
         loadBalance: raw.loadBalance,
+        customerSatisfaction: raw.customerSatisfaction,
       },
       policy,
       raw.rawFacts,
@@ -209,6 +212,10 @@ interface RawComponents {
   skillFit: number; // [0,1] absolute
   slaHeadroom: number; // [0,1] absolute
   loadBalance: number; // [0,1] absolute
+  /** Historical customer satisfaction — a SOFT signal (small default
+   *  weight, see DISPATCH_POLICY) that never runs until every hard
+   *  constraint above has already passed. See src/lib/rating.ts. */
+  customerSatisfaction: number; // [0,1] absolute
   rawFacts: NonNullable<ScoreBreakdown["raw"]>;
 }
 
@@ -285,12 +292,22 @@ function rawComponentsForTech(
   const medianUtil = fleetMedianUtil(ctx, args.scheduledTime);
   const loadBalance = clamp01(0.5 + (medianUtil - utilToday));
 
+  // ── customerSatisfaction: historical rating, Bayesian-smoothed ─────
+  // A SOFT signal only — it never ran until every hard constraint above
+  // already passed, and its tier weight defaults to 5% (DISPATCH_POLICY).
+  // `ratingSummaryFor` returns the cold-start summary (smoothed = prior)
+  // for a technician with zero feedback, so a new hire is never penalised.
+  const customerSatisfaction = satisfactionScore01(
+    ctx.ratingSummaryFor(t.technician_id).smoothed,
+  );
+
   return {
     travelAbs,
     availabilityAbs,
     skillFit: clamp01(skillFit),
     slaHeadroom,
     loadBalance,
+    customerSatisfaction,
     rawFacts: {
       detour_min: round1(detourMin),
       util_pct: Math.round(utilToday * 100),
@@ -439,6 +456,7 @@ function policyFor(
     availability: p.availability / sum,
     slaHeadroom: p.slaHeadroom / sum,
     loadBalance: p.loadBalance / sum,
+    customerSatisfaction: (Number(p.customerSatisfaction) || 0) / sum,
   };
 }
 
@@ -452,13 +470,15 @@ function weight(
   const availability = round3(comps.availability * policy.availability);
   const sla_headroom = round3(comps.slaHeadroom * policy.slaHeadroom);
   const load_balance = round3(comps.loadBalance * policy.loadBalance);
+  const customer_satisfaction = round3(comps.customerSatisfaction * policy.customerSatisfaction);
   return {
     travel,
     skill_fit,
     availability,
     sla_headroom,
     load_balance,
-    total: round3(travel + skill_fit + availability + sla_headroom + load_balance),
+    customer_satisfaction,
+    total: round3(travel + skill_fit + availability + sla_headroom + load_balance + customer_satisfaction),
     raw: rawFacts,
   };
 }

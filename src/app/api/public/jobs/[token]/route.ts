@@ -22,6 +22,7 @@ import { NextResponse } from "next/server";
 import * as repo from "@/lib/repo";
 import { isValidTrackingTokenFormat } from "@/lib/trackingTokenFormat";
 import { toPublicJobView } from "@/lib/publicTracking";
+import { summarizeTechnicianFeedback } from "@/lib/rating";
 
 export const dynamic = "force-dynamic";
 
@@ -54,6 +55,12 @@ export async function GET(_req: Request, { params }: { params: { token: string }
   const tech = job.assigned_technician_id
     ? await repo.getTechnician(job.assigned_technician_id)
     : null;
+  const ratingSummary = job.assigned_technician_id
+    ? summarizeTechnicianFeedback(
+        job.assigned_technician_id,
+        await repo.listFeedbackForTechnician(job.assigned_technician_id),
+      )
+    : null;
 
-  return NextResponse.json(toPublicJobView(job, tech ?? null));
+  return NextResponse.json(toPublicJobView(job, tech ?? null, ratingSummary));
 }

@@ -4,12 +4,27 @@
 import { NextResponse } from "next/server";
 import * as repo from "@/lib/repo";
 import { SKILL_TAGS, type SkillTag } from "@/lib/types";
+import { emptyRatingSummary, summarizeFeedbackByTechnician } from "@/lib/rating";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const technicians = await repo.listTechnicians();
-  return NextResponse.json({ technicians });
+  const [technicians, feedback] = await Promise.all([
+    repo.listTechnicians(),
+    repo.listFeedback(),
+  ]);
+  const summaries = summarizeFeedbackByTechnician(feedback);
+  // Additive field — existing consumers (`/tech`, `/book`'s map, etc.)
+  // destructure just `{ technicians }` and are unaffected. Every technician
+  // gets an entry, including the cold-start zero-ratings summary, so the
+  // admin roster never has to special-case "missing".
+  const ratings = Object.fromEntries(
+    technicians.map((t) => [
+      t.technician_id,
+      summaries.get(t.technician_id) ?? emptyRatingSummary(t.technician_id),
+    ]),
+  );
+  return NextResponse.json({ technicians, ratings });
 }
 
 export async function POST(req: Request) {
