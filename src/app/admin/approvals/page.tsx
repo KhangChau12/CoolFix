@@ -151,145 +151,145 @@ export default function ApprovalsPage() {
                 ` — frozen jobs impacted: ${a.frozen_jobs_impacted.join(", ")}`}
             </div>
 
-            {job && !mapFailed.has(a.approval_id) && (
-              <div style={{ marginBottom: 12 }}>
-                <MapView
-                  mode="display"
-                  customer={{ lat: job.location.lat, lng: job.location.lng, address: job.location.address }}
-                  extras={extraPins}
-                  height={200}
-                  onUnavailable={() => setMapFailed((s) => new Set(s).add(a.approval_id))}
-                />
-                <p className="faint row" style={{ fontSize: 10.5, margin: "5px 0 0", gap: 12, flexWrap: "wrap" }}>
-                  <span className="row" style={{ gap: 5 }}>
-                    <span style={{ width: 7, height: 7, borderRadius: 999, background: "var(--tier-standard)", flex: "none" }} />
-                    incoming urgent job
-                  </span>
-                  {extraPins.length > 0 && (
-                    <span className="row" style={{ gap: 5 }}>
-                      <span style={{ width: 7, height: 7, borderRadius: 999, background: "var(--tier-flexible)", flex: "none" }} />
-                      jobs this plan would move
-                    </span>
-                  )}
-                </p>
-              </div>
-            )}
-
             {disruptionRow && a.options.length > 0 && (
               <AgentReasoningPanel row={disruptionRow} jobId={a.job_id} />
             )}
 
-            {a.options.length === 0 ? (
-              <div
-                style={{
-                  padding: "11px 12px",
-                  borderRadius: 8,
-                  border: "1px solid var(--border)",
-                  background: "var(--surface-2)",
-                  fontSize: 12.5,
-                  color: "#3c3a4a",
-                  lineHeight: 1.6,
-                  marginBottom: 13,
-                }}
-              >
-                <strong style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--agent-disruption)" }}>
-                  Edge-case proposal
-                </strong>
-                <div style={{ marginTop: 5 }}>{a.reason}</div>
-                <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
-                  Approving records that you will run this dispatch by hand — nothing on the
-                  schedule is moved automatically.
-                </div>
-              </div>
-            ) : (
-              <>
-            <div className="faint" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
-              Choose a re-plan
-            </div>
-            <div
-              className="grid"
-              style={{ gridTemplateColumns: `repeat(auto-fit, minmax(220px, 1fr))`, gap: 10, marginBottom: 13 }}
-            >
-              {a.options.map((o) => (
-                <label
-                  key={o.option_id}
-                  style={{
-                    padding: 12,
-                    borderRadius: 8,
-                    cursor: "pointer",
-                    border: `1px solid ${selected === o.option_id ? "var(--brand)" : "var(--border)"}`,
-                    background: selected === o.option_id ? "var(--brand-tint)" : "var(--surface-2)",
-                  }}
-                >
-                  <div className="row" style={{ gap: 6 }}>
-                    <input
-                      type="radio"
-                      name={`opt-${a.approval_id}`}
-                      checked={selected === o.option_id}
-                      onChange={() => setChoice((c) => ({ ...c, [a.approval_id]: o.option_id }))}
-                    />
-                    <strong style={{ fontSize: 12 }}>{o.label}</strong>
-                    {o.recommended && (
-                      <span className="chip" style={{ fontSize: 9, marginLeft: "auto", background: "var(--brand)", color: "#fff", borderColor: "transparent" }}>
-                        ★ agent pick
-                      </span>
-                    )}
-                  </div>
-                  {o.plan_rationale && (
-                    <div
-                      style={{
-                        marginTop: 6,
-                        fontSize: 11,
-                        fontStyle: "italic",
-                        color: "#514f5d",
-                        lineHeight: 1.6,
-                      }}
-                    >
-                      “{o.plan_rationale}”
-                    </div>
-                  )}
+            <div className="hitl-cols">
+              <div className="hitl-col-options">
+                {a.options.length === 0 ? (
                   <div
-                    className="mono"
                     style={{
-                      marginTop: 8,
-                      background: "#fff",
+                      padding: "11px 12px",
+                      borderRadius: 8,
                       border: "1px solid var(--border)",
-                      borderRadius: 6,
-                      padding: "9px 10px",
-                      fontSize: 11,
+                      background: "var(--surface-2)",
+                      fontSize: 12.5,
                       color: "#3c3a4a",
-                      lineHeight: 1.7,
-                      whiteSpace: "pre-wrap",
+                      lineHeight: 1.6,
                     }}
                   >
-                    {o.summary}
-                    {o.moves.length > 0 &&
-                      "\n" +
-                        o.moves
-                          .map((mv) => `${mv.customer_name}: ${fmtSGDateTime(mv.from_time)} → ${fmtSGDateTime(mv.to_time)}`)
-                          .join("\n")}
+                    <strong style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--agent-disruption)" }}>
+                      Edge-case proposal
+                    </strong>
+                    <div style={{ marginTop: 5 }}>{a.reason}</div>
+                    <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+                      Approving records that you will run this dispatch by hand — nothing on the
+                      schedule is moved automatically.
+                    </div>
                   </div>
-                  <div className="mono faint" style={{ fontSize: 10, marginTop: 8, display: "grid", gap: 1 }}>
-                    <span>{o.trade_offs.customers_affected} customers affected · +{o.trade_offs.total_added_travel_km} km</span>
-                    <span>{o.trade_offs.sla_breaches} SLA breach · {o.trade_offs.frozen_jobs_touched} frozen touched</span>
-                    {(o.trade_offs.total_shift_hours != null || o.trade_offs.tightest_gap_hours != null) && (
-                      <span>
-                        {o.trade_offs.total_shift_hours != null && `shifted ${o.trade_offs.total_shift_hours}h`}
-                        {o.trade_offs.tightest_gap_hours != null && (
-                          <span style={{ color: o.trade_offs.tightest_gap_hours < 2 ? "var(--tier-urgent)" : undefined }}>
-                            {" · "}{o.trade_offs.tightest_gap_hours}h gap to next job{o.trade_offs.tightest_gap_hours < 2 ? " ⚠ tight" : ""}
-                          </span>
-                        )}
+                ) : (
+                  <>
+                    <div className="faint" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
+                      Choose a re-plan
+                    </div>
+                    <div className="hitl-options-grid">
+                      {a.options.map((o) => (
+                        <label
+                          key={o.option_id}
+                          style={{
+                            padding: 12,
+                            borderRadius: 8,
+                            cursor: "pointer",
+                            border: `1px solid ${selected === o.option_id ? "var(--brand)" : "var(--border)"}`,
+                            background: selected === o.option_id ? "var(--brand-tint)" : "var(--surface-2)",
+                          }}
+                        >
+                          <div className="row" style={{ gap: 6 }}>
+                            <input
+                              type="radio"
+                              name={`opt-${a.approval_id}`}
+                              checked={selected === o.option_id}
+                              onChange={() => setChoice((c) => ({ ...c, [a.approval_id]: o.option_id }))}
+                            />
+                            <strong style={{ fontSize: 12 }}>{o.label}</strong>
+                            {o.recommended && (
+                              <span className="chip" style={{ fontSize: 9, marginLeft: "auto", background: "var(--brand)", color: "#fff", borderColor: "transparent" }}>
+                                ★ agent pick
+                              </span>
+                            )}
+                          </div>
+                          {o.plan_rationale && (
+                            <div
+                              style={{
+                                marginTop: 6,
+                                fontSize: 11,
+                                fontStyle: "italic",
+                                color: "#514f5d",
+                                lineHeight: 1.6,
+                              }}
+                            >
+                              “{o.plan_rationale}”
+                            </div>
+                          )}
+                          <div
+                            className="mono"
+                            style={{
+                              marginTop: 8,
+                              background: "#fff",
+                              border: "1px solid var(--border)",
+                              borderRadius: 6,
+                              padding: "9px 10px",
+                              fontSize: 11,
+                              color: "#3c3a4a",
+                              lineHeight: 1.7,
+                              whiteSpace: "pre-wrap",
+                            }}
+                          >
+                            {o.summary}
+                            {o.moves.length > 0 &&
+                              "\n" +
+                                o.moves
+                                  .map((mv) => `${mv.customer_name}: ${fmtSGDateTime(mv.from_time)} → ${fmtSGDateTime(mv.to_time)}`)
+                                  .join("\n")}
+                          </div>
+                          <div className="mono faint" style={{ fontSize: 10, marginTop: 8, display: "grid", gap: 1 }}>
+                            <span>{o.trade_offs.customers_affected} customers affected · +{o.trade_offs.total_added_travel_km} km</span>
+                            <span>{o.trade_offs.sla_breaches} SLA breach · {o.trade_offs.frozen_jobs_touched} frozen touched</span>
+                            {(o.trade_offs.total_shift_hours != null || o.trade_offs.tightest_gap_hours != null) && (
+                              <span>
+                                {o.trade_offs.total_shift_hours != null && `shifted ${o.trade_offs.total_shift_hours}h`}
+                                {o.trade_offs.tightest_gap_hours != null && (
+                                  <span style={{ color: o.trade_offs.tightest_gap_hours < 2 ? "var(--tier-urgent)" : undefined }}>
+                                    {" · "}{o.trade_offs.tightest_gap_hours}h gap to next job{o.trade_offs.tightest_gap_hours < 2 ? " ⚠ tight" : ""}
+                                  </span>
+                                )}
+                              </span>
+                            )}
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {job && !mapFailed.has(a.approval_id) && (
+                <div className="hitl-col-map">
+                  <MapView
+                    mode="display"
+                    customer={{ lat: job.location.lat, lng: job.location.lng, address: job.location.address }}
+                    extras={extraPins}
+                    height={200}
+                    onUnavailable={() => setMapFailed((s) => new Set(s).add(a.approval_id))}
+                  />
+                  <p className="faint row" style={{ fontSize: 10.5, margin: "5px 0 0", gap: 12, flexWrap: "wrap" }}>
+                    <span className="row" style={{ gap: 5 }}>
+                      <span style={{ width: 7, height: 7, borderRadius: 999, background: "var(--tier-standard)", flex: "none" }} />
+                      incoming urgent job
+                    </span>
+                    {extraPins.length > 0 && (
+                      <span className="row" style={{ gap: 5 }}>
+                        <span style={{ width: 7, height: 7, borderRadius: 999, background: "var(--tier-flexible)", flex: "none" }} />
+                        jobs this plan would move
                       </span>
                     )}
-                  </div>
-                </label>
-              ))}
+                  </p>
+                </div>
+              )}
             </div>
-              </>
-            )}
 
-            <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+            <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 13 }}>
               <button
                 className="btn btn-approve btn-lg"
                 disabled={busy === a.approval_id}
@@ -342,6 +342,22 @@ export default function ApprovalsPage() {
       )}
 
       {toast && <Toast message={toast.msg} kind={toast.kind} onClose={() => setToast(null)} />}
+
+      <style>{`
+        .hitl-cols { display: flex; flex-direction: column; gap: 14px; }
+        .hitl-col-options { flex: 1 1 auto; min-width: 0; }
+        .hitl-col-map { flex: none; }
+        .hitl-options-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+        @media (min-width: 900px) {
+          .hitl-cols { flex-direction: row; align-items: flex-start; }
+          .hitl-col-options { order: 1; }
+          .hitl-col-map { order: 2; width: 300px; }
+          .hitl-options-grid { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+        }
+        @media (min-width: 1300px) {
+          .hitl-col-map { width: 340px; }
+        }
+      `}</style>
     </div>
   );
 }
