@@ -184,6 +184,7 @@ export default function RecommendedRouting({
           <MapView
             mode="display"
             height={270}
+            interactiveZoom
             customer={{ ...currentJob.location }}
             technician={{ ...tech.location, name: tech.name }}
             route={{
