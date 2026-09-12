@@ -478,10 +478,42 @@ function TrackView({ result }: { result: PipelineResult }) {
   return (
     <div className="card" style={{ padding: 24 }}>
       <div className="spread">
-        <h2 style={{ fontSize: 18, margin: 0 }}>Booking {j.job_id}</h2>
+        <h2 style={{ fontSize: 18, margin: 0 }}>Booking confirmed</h2>
         <span className="chip">{TIER_META[j.tier].emoji} {TIER_META[j.tier].label}</span>
       </div>
       <p className="muted" style={{ fontSize: 13 }}>{result.message}</p>
+
+      {/* Tracking code — the customer's durable, no-login way back to this
+          booking's status from any device (see /track/:token). */}
+      <div
+        className="row"
+        style={{
+          gap: 12,
+          marginTop: 4,
+          marginBottom: 4,
+          padding: "12px 14px",
+          borderRadius: 10,
+          background: "var(--brand-tint)",
+          border: "1px solid #d3cef7",
+          flexWrap: "wrap",
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 180 }}>
+          <div className="faint" style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+            Tracking code
+          </div>
+          <div className="mono" style={{ fontSize: 15, fontWeight: 600, marginTop: 2 }}>
+            {j.public_tracking_token}
+          </div>
+        </div>
+        <Link href={`/track/${encodeURIComponent(j.public_tracking_token)}`} className="btn btn-primary" style={{ flexShrink: 0 }}>
+          Track my service →
+        </Link>
+      </div>
+      <p className="faint" style={{ fontSize: 11, margin: "0 0 4px" }}>
+        Save this code — you can check your status any time from any device at{" "}
+        <code>coolfix/track</code>, no account needed.
+      </p>
 
       <PipelineProgress jobId={jobId} finalStatus={result.status} />
 

@@ -1,5 +1,6 @@
 import type { AgentDecisionLog, Job, NotificationRecord, Technician } from "@/lib/types";
 import { SG_LANDMARKS } from "@/lib/geo";
+import { generateTrackingToken } from "@/lib/trackingToken";
 import {
   addHours,
   computeFreezePoint,
@@ -708,6 +709,8 @@ export function seedJobs(freezeWindowHours: number): Job[] {
       created_at: createdAt,
       pipeline_stage: s.stage,
       reschedule_history: [],
+      public_tracking_token: generateTrackingToken(),
+      tech_substatus: (s.status === "in_progress" ? "en_route" : null) as Job["tech_substatus"],
     };
   });
 

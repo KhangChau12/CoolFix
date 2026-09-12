@@ -12,7 +12,9 @@
     "eval": "tsx scripts/eval.ts",
     "fuzz": "tsx scripts/fuzz.ts",
     "robustness": "tsx scripts/robustness.ts",
-    "concurrency": "tsx scripts/concurrency.ts"
+    "concurrency": "tsx scripts/concurrency.ts",
+    "tracking:unit": "tsx scripts/trackingUnit.ts",
+    "tracking:smoke": "tsx scripts/trackingSmoke.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.45.4",

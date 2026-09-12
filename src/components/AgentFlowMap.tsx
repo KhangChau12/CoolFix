@@ -359,7 +359,8 @@ export function AgentFlowMap({ jobId, job }: Props) {
   // Auto-follow the active/most-recent station while nothing is hovered.
   const lastDoneId = useMemo<StationId | null>(() => {
     let last: StationId | null = null;
-    for (let i = 0; i < shownStepCount; i++) last = steps[i].to;
+    const count = Math.min(shownStepCount, steps.length);
+    for (let i = 0; i < count; i++) last = steps[i].to;
     return last;
   }, [steps, shownStepCount]);
 

@@ -42,6 +42,7 @@ import {
   snapToUrgentDispatchSlot,
 } from "@/lib/time";
 import type { ApprovalRequest, Job } from "@/lib/types";
+import { generateTrackingToken } from "@/lib/trackingToken";
 
 export interface PipelineResult {
   job: Job;
@@ -103,6 +104,10 @@ async function runBookingPipelineUnsafe(
   const ctx = await AgentContext.create();
   const now = nowISO();
   const jobId = `job_${Date.now().toString(36)}${(jobIdSeq++).toString(36)}`;
+  // Generated once per booking and carried unchanged through every later
+  // `job = {...job, ...}` reassignment below — this is the customer's
+  // durable access key for /track/:token, independent of job_id.
+  const trackingToken = generateTrackingToken();
 
   logDecision(ctx, {
     agent: "Orchestrator",
@@ -150,6 +155,8 @@ async function runBookingPipelineUnsafe(
     created_at: now,
     pipeline_stage: "intake",
     reschedule_history: [],
+    public_tracking_token: trackingToken,
+    tech_substatus: null,
   });
 
   // ── 1. Job-Intake (LLM) ─────────────────────────────────────────
@@ -215,6 +222,8 @@ async function runBookingPipelineUnsafe(
     created_at: now,
     pipeline_stage: "scoring",
     reschedule_history: [],
+    public_tracking_token: trackingToken,
+    tech_substatus: null,
   };
   ctx.stageJob(job);
 

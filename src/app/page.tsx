@@ -28,6 +28,14 @@ const CARDS = [
     sub: "The technician's personal schedule app. Receive jobs, acknowledge notifications, update from the field.",
     accent: "#b07830",
   },
+  {
+    href: "/track",
+    tag: "PUBLIC · NO LOGIN",
+    emoji: "🔎",
+    title: "Track My Service",
+    sub: "Already booked? Enter your tracking code to see live status, ETA and your technician — no account needed.",
+    accent: "#4f46e5",
+  },
 ];
 
 const PIPELINE = [

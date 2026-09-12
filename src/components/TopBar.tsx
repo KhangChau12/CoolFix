@@ -6,13 +6,14 @@ const PERSONAS = [
   { key: "admin", href: "/admin", label: "Company" },
   { key: "technician", href: "/tech", label: "Technician" },
   { key: "customer", href: "/book", label: "Customer" },
+  { key: "tracking", href: "/track", label: "Track" },
 ] as const;
 
 export function TopBar({
   active,
   context,
 }: {
-  active: "admin" | "technician" | "customer";
+  active: "admin" | "technician" | "customer" | "tracking";
   /** Small monospace context pill, e.g. "DISPATCH CONSOLE · SG" */
   context: string;
 }) {

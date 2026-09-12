@@ -217,6 +217,17 @@ export interface Job {
   pipeline_stage: PipelineStage;
   /** Set when this job was moved by a disruption re-plan. */
   reschedule_history: RescheduleEntry[];
+  /** Public, unguessable access token for the customer tracking page
+   *  (`/track/:token`, `GET /api/public/jobs/:token`). Generated server-side
+   *  once at booking creation — see `src/lib/trackingToken.ts`. Never derived
+   *  from `job_id`, never accepted from a client. */
+  public_tracking_token: string;
+  /** Finer-grained technician state within `status === "in_progress"` — the
+   *  job-status enum only distinguishes "in progress" from "completed", but
+   *  the customer tracker needs to say "on the way" vs. "has arrived". Set
+   *  by the technician-status PATCH, cleared once the job leaves
+   *  in_progress. */
+  tech_substatus: "en_route" | "arrived" | null;
 }
 
 export type PipelineStage =
