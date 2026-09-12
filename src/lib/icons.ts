@@ -30,6 +30,7 @@ import {
   Repeat,
   Scale,
   Search,
+  Share2,
   Sliders,
   Smartphone,
   Sparkles,
@@ -80,7 +81,7 @@ export const PERSONA_ICON = {
   company: Monitor,
   customer: ClipboardList,
   technician: Smartphone,
-  track: Search,
+  tracking: Search,
 } as const;
 
 /** Generic status/step icons used across booking steps, tech app, schedule, maps. */
@@ -97,4 +98,5 @@ export const STATUS_ICON = {
   chevronRight: ChevronRight,
   chevronUp: ChevronUp,
   bell: Bell,
+  share: Share2,
 } as const;
