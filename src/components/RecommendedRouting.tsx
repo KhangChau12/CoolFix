@@ -46,7 +46,10 @@ export default function RecommendedRouting({
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [routeChangeNotice, setRouteChangeNotice] = useState<string | null>(null);
+  const [pendingRecommendation, setPendingRecommendation] = useState<Recommendation | null>(null);
   const notifyingSignature = useRef<string | null>(null);
+  const activeSignature = useRef<string | null>(null);
+  const recommendationRef = useRef<Recommendation | null>(null);
 
   useEffect(() => {
     if (!destinations.some((job) => job.job_id === selectedJobId)) {
@@ -56,11 +59,14 @@ export default function RecommendedRouting({
 
   useEffect(() => {
     setRouteChangeNotice(null);
+    setPendingRecommendation(null);
+    activeSignature.current = null;
+    recommendationRef.current = null;
   }, [selectedJobId]);
 
   const selectedJob = destinations.find((job) => job.job_id === selectedJobId) ?? destinations[0];
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (applyResult = true) => {
     if (!tech || !selectedJob) return;
     setLoading(true);
     setError(null);
@@ -105,8 +111,21 @@ export default function RecommendedRouting({
           setRouteChangeNotice("Route updated — review the new route before changing navigation.");
         }
       }
-      setRecommendation(result);
-      setUpdatedAt(new Date());
+
+      const routeChanged = Boolean(
+        activeSignature.current && activeSignature.current !== signature,
+      );
+      if (!applyResult && recommendationRef.current) {
+        // Background checks must not move the technician's active route. Hold
+        // the new recommendation until the technician explicitly reviews it.
+        if (routeChanged) setPendingRecommendation(result);
+      } else {
+        recommendationRef.current = result;
+        activeSignature.current = signature;
+        setRecommendation(result);
+        setPendingRecommendation(null);
+        setUpdatedAt(new Date());
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to calculate a route.");
     } finally {
@@ -116,10 +135,21 @@ export default function RecommendedRouting({
 
   useEffect(() => {
     setRecommendation(null);
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 180_000);
+    void refresh(true);
+    const timer = window.setInterval(() => void refresh(false), 180_000);
     return () => window.clearInterval(timer);
   }, [refresh]);
+
+  function applyPendingRecommendation() {
+    if (!pendingRecommendation) return;
+    const signature = routeSignature(pendingRecommendation.recommended);
+    recommendationRef.current = pendingRecommendation;
+    activeSignature.current = signature;
+    setRecommendation(pendingRecommendation);
+    setPendingRecommendation(null);
+    setUpdatedAt(new Date());
+    setRouteChangeNotice("Route update applied. Navigation can now be changed.");
+  }
 
   if (!tech) {
     return <div style={{ padding: 24 }} className="muted">Loading technician position…</div>;
@@ -147,8 +177,13 @@ export default function RecommendedRouting({
               From {tech.name}&rsquo;s current roster position to the selected stop.
             </p>
           </div>
-          <button className="btn" style={{ fontSize: 11.5, padding: "6px 9px" }} onClick={() => void refresh()} disabled={loading}>
-            {loading ? "Updating…" : "Refresh"}
+          <button
+            className={`btn${pendingRecommendation ? " routing-update-button" : ""}`}
+            style={{ fontSize: 11.5, padding: "6px 9px" }}
+            onClick={() => (pendingRecommendation ? applyPendingRecommendation() : void refresh(true))}
+            disabled={loading}
+          >
+            {loading ? "Checking…" : pendingRecommendation ? "Review route update" : "Refresh"}
           </button>
         </div>
       </div>
@@ -236,6 +271,19 @@ export default function RecommendedRouting({
       )}
 
       {loading && !route && <div className="muted" style={{ padding: 18, textAlign: "center" }}>Calculating OSRM routes and checking live traffic cameras…</div>}
+      <style>{`
+        .routing-update-button {
+          color: #fff;
+          background: #c56a19;
+          border-color: #c56a19;
+          animation: routing-update-pulse 1.6s ease-in-out infinite;
+        }
+        .routing-update-button:hover { background: #a95310; border-color: #a95310; }
+        @keyframes routing-update-pulse {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(197, 106, 25, 0.25); }
+          50% { box-shadow: 0 0 0 5px rgba(197, 106, 25, 0.12); }
+        }
+      `}</style>
     </div>
   );
 }
