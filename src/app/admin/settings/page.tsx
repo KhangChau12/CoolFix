@@ -167,6 +167,49 @@ export default function SettingsPage() {
         </div>
       </div>
 
+      {/* ── Adaptive policy ── */}
+      <div className="card" style={{ padding: 18 }}>
+        <strong style={{ fontSize: 14 }}>Adaptive policy — feedback-informed recommendations</strong>
+        <p className="muted" style={{ fontSize: 12.5, margin: "4px 0 14px", lineHeight: 1.55 }}>
+          Customer ratings and fixed tags are aggregated by delivery tier. The system
+          proposes small, explainable changes only after enough completed jobs and
+          technicians contribute evidence. Free-text comments never affect weights.
+          Hard safety constraints, eligibility, pricing, and SLA rules are untouched.
+        </p>
+        <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+          <button
+            className="chip"
+            style={{ cursor: "pointer", background: draft.adaptivePolicy.enabled ? "var(--brand)" : "var(--surface-2)", color: draft.adaptivePolicy.enabled ? "#fff" : "var(--text-muted)", borderColor: draft.adaptivePolicy.enabled ? "var(--brand)" : "var(--border)" }}
+            onClick={() => set("adaptivePolicy", { ...draft.adaptivePolicy, enabled: !draft.adaptivePolicy.enabled })}
+          >
+            {draft.adaptivePolicy.enabled ? "Adaptive policy enabled" : "Adaptive policy disabled"}
+          </button>
+          {(["recommendation_only", "automatic"] as const).map((mode) => (
+            <button
+              key={mode}
+              className="chip"
+              style={{ cursor: "pointer", background: draft.adaptivePolicy.mode === mode ? "var(--brand)" : "var(--surface-2)", color: draft.adaptivePolicy.mode === mode ? "#fff" : "var(--text-muted)", borderColor: draft.adaptivePolicy.mode === mode ? "var(--brand)" : "var(--border)" }}
+              onClick={() => set("adaptivePolicy", { ...draft.adaptivePolicy, mode })}
+            >
+              {mode === "automatic" ? "Automatic (opt-in)" : "Recommendation only"}
+            </button>
+          ))}
+        </div>
+        <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <NumberField label="Minimum feedback records" value={draft.adaptivePolicy.minFeedbackCount} min={20} max={1000} step={1} onChange={(v) => set("adaptivePolicy", { ...draft.adaptivePolicy, minFeedbackCount: v })} />
+          <NumberField label="Minimum unique technicians" value={draft.adaptivePolicy.minUniqueTechnicians} min={2} max={50} step={1} onChange={(v) => set("adaptivePolicy", { ...draft.adaptivePolicy, minUniqueTechnicians: v })} />
+          <NumberField label="Maximum change per update" value={draft.adaptivePolicy.maxChangePerUpdate} min={0.005} max={0.02} step={0.005} onChange={(v) => set("adaptivePolicy", { ...draft.adaptivePolicy, maxChangePerUpdate: v })} />
+          <NumberField label="Cooldown between changes" value={draft.adaptivePolicy.cooldownDays} min={1} max={90} step={1} unit="days" onChange={(v) => set("adaptivePolicy", { ...draft.adaptivePolicy, cooldownDays: v })} />
+          <NumberField label="Minimum confidence" value={draft.adaptivePolicy.minConfidence} min={0.5} max={1} step={0.05} onChange={(v) => set("adaptivePolicy", { ...draft.adaptivePolicy, minConfidence: v })} />
+          <NumberField label="Maximum customer-satisfaction weight" value={draft.adaptivePolicy.maxCustomerSatisfactionWeight} min={0.05} max={0.15} step={0.01} onChange={(v) => set("adaptivePolicy", { ...draft.adaptivePolicy, maxCustomerSatisfactionWeight: v })} />
+        </div>
+        <p className="faint" style={{ fontSize: 11, lineHeight: 1.5, margin: "12px 0 0" }}>
+          Default flow: recommendation → coordinator review → apply. Automatic mode is
+          intentionally opt-in and still enforces sample, confidence, cooldown, step-size,
+          anomaly, and policy-version checks.
+        </p>
+      </div>
+
       {/* ── Demo clock ── */}
       <div className="card" style={{ padding: 18 }}>
         <strong style={{ fontSize: 14 }}>Scheduling clock — test another date</strong>
@@ -515,6 +558,13 @@ function diffConfig(cfg: RuntimeConfig, draft: RuntimeConfig): { label: string; 
   }
   if (cfg.llmMode !== draft.llmMode) {
     out.push({ label: "LLM mode", from: cfg.llmMode, to: draft.llmMode });
+  }
+  if (JSON.stringify(cfg.adaptivePolicy) !== JSON.stringify(draft.adaptivePolicy)) {
+    out.push({
+      label: "Adaptive policy",
+      from: cfg.adaptivePolicy.enabled ? `${cfg.adaptivePolicy.mode}, enabled` : "disabled",
+      to: draft.adaptivePolicy.enabled ? `${draft.adaptivePolicy.mode}, enabled` : "disabled",
+    });
   }
   for (const skill of Object.keys(draft.basePrice) as (keyof RuntimeConfig["basePrice"])[]) {
     if (cfg.basePrice[skill] !== draft.basePrice[skill]) {

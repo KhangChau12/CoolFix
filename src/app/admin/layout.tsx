@@ -17,6 +17,7 @@ const NAV = [
   { href: "/admin/queue", label: "Job Queue", icon: NAV_ICON.queue },
   { href: "/admin/technicians", label: "Technicians", icon: NAV_ICON.technicians },
   { href: "/admin/approvals", label: "Approvals (HITL)", icon: NAV_ICON.approvals, badgeKey: "approvals" },
+  { href: "/admin/company", label: "Company", icon: NAV_ICON.settings },
   { href: "/admin/settings", label: "Settings", icon: NAV_ICON.settings },
 ];
 

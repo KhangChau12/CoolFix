@@ -25,6 +25,10 @@ interface OsrmRoute {
   distance: number;
   duration: number;
   geometry?: { coordinates?: LonLat[] };
+  legs?: Array<{
+    duration?: number;
+    steps?: Array<{ geometry?: { coordinates?: LonLat[] } }>;
+  }>;
 }
 
 interface OsrmResponse {
@@ -58,6 +62,17 @@ function numberParam(value: string | null): number | null {
   if (value == null || value.trim() === "") return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+}
+
+function pointsParam(value: string | null): LatLng[] | null {
+  if (!value) return null;
+  const points = value.split(";").map((pair) => {
+    const [lng, lat] = pair.split(",").map(Number);
+    return { lat, lng };
+  });
+  return points.length >= 2 && points.every((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng))
+    ? points
+    : null;
 }
 
 function validSingaporePoint(p: LatLng): boolean {
@@ -193,16 +208,18 @@ async function getTrafficCameras(): Promise<TrafficCamera[]> {
 
 export async function GET(request: NextRequest) {
   const search = request.nextUrl.searchParams;
+  const points = pointsParam(search.get("points"));
   const from = {
-    lat: numberParam(search.get("fromLat")),
-    lng: numberParam(search.get("fromLng")),
+    lat: points?.[0]?.lat ?? numberParam(search.get("fromLat")),
+    lng: points?.[0]?.lng ?? numberParam(search.get("fromLng")),
   };
   const to = {
-    lat: numberParam(search.get("toLat")),
-    lng: numberParam(search.get("toLng")),
+    lat: points?.at(-1)?.lat ?? numberParam(search.get("toLat")),
+    lng: points?.at(-1)?.lng ?? numberParam(search.get("toLng")),
   };
 
   if (
+    (search.get("points") && !points) ||
     from.lat == null ||
     from.lng == null ||
     to.lat == null ||
@@ -213,7 +230,11 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Valid Singapore origin and destination are required." }, { status: 400 });
   }
 
-  const coordinates = `${from.lng},${from.lat};${to.lng},${to.lat}`;
+  const routePoints = points ?? [from as LatLng, to as LatLng];
+  if (routePoints.some((point) => !validSingaporePoint(point))) {
+    return NextResponse.json({ error: "All route points must be valid Singapore coordinates." }, { status: 400 });
+  }
+  const coordinates = routePoints.map((point) => `${point.lng},${point.lat}`).join(";");
   const routeUrl =
     `${OSRM_BASE.replace(/\/$/, "")}/route/v1/driving/${coordinates}` +
     "?alternatives=true&overview=full&geometries=geojson&steps=true";
@@ -238,6 +259,11 @@ export async function GET(request: NextRequest) {
     const trafficAvailable = trafficResult.status === "fulfilled";
     const routes = osrm.routes.slice(0, 3).map((route, index) => {
       const geometry = route.geometry?.coordinates ?? [];
+      const legs = (route.legs ?? []).map((leg) => {
+        const legGeometry = leg.steps?.flatMap((step) => step.geometry?.coordinates ?? []) ?? [];
+        return legGeometry;
+      });
+      const legDurations = (route.legs ?? []).map((leg) => leg.duration ?? 0);
       const nearbyCameras = cameras.filter(
         (camera) => geometry.length > 1 && distanceToRoute(camera, geometry) <= 1.5,
       );
@@ -264,6 +290,8 @@ export async function GET(request: NextRequest) {
         incidentPenalty,
         adjustedTime,
         geometry,
+        legs,
+        legDurations,
         nearbyCameraIds: nearbyCameras.map((camera) => camera.camera_id),
         congestionSegments,
       };

@@ -55,6 +55,8 @@ export function logDecision(ctx: AgentContext, i: LogInput): AgentDecisionLog {
     headline: i.headline,
     latency_ms: i.latencyMs ?? 0,
     guardrail_notes: i.guardrailNotes ?? [],
+    policy_version: ctx.config?.policyVersion ?? null,
+    dispatch_policy_snapshot: ctx.config?.dispatchPolicy ?? null,
   };
   ctx.bufferDecision(entry);
   return entry;

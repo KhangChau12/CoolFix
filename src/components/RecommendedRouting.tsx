@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiGet, apiSend } from "@/lib/client";
-import MapView, { type TrafficCamera } from "@/components/MapView";
+import MapView, { type RouteSegment, type TrafficCamera } from "@/components/MapView";
 import type { Job, Technician } from "@/lib/types";
 
 interface RouteOption {
@@ -13,6 +13,8 @@ interface RouteOption {
   incidentPenalty: number;
   adjustedTime: number;
   geometry: Array<[number, number]>;
+  legs: Array<Array<[number, number]>>;
+  legDurations: number[];
   nearbyCameraIds: string[];
   congestionSegments: Array<{
     coordinates: Array<[number, number]>;
@@ -32,9 +34,11 @@ interface Recommendation {
 export default function RecommendedRouting({
   tech,
   currentJob,
+  dayJobs,
 }: {
   tech: Technician | undefined;
   currentJob: Job | null;
+  dayJobs: Job[];
 }) {
   const [recommendation, setRecommendation] = useState<Recommendation | null>(null);
   const [loading, setLoading] = useState(false);
@@ -42,6 +46,7 @@ export default function RecommendedRouting({
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [routeChangeNotice, setRouteChangeNotice] = useState<string | null>(null);
   const [pendingRecommendation, setPendingRecommendation] = useState<Recommendation | null>(null);
+  const [showAllRoutes, setShowAllRoutes] = useState(true);
   const notifyingSignature = useRef<string | null>(null);
   const activeSignature = useRef<string | null>(null);
   const recommendationRef = useRef<Recommendation | null>(null);
@@ -54,7 +59,9 @@ export default function RecommendedRouting({
   // stable route inputs rather than object identity, otherwise an unchanged
   // job object would clear and redraw the map on every safety poll.
   const routeJobKey = currentJob
-    ? `${currentJob.job_id}|${currentJob.location.lat}|${currentJob.location.lng}`
+    ? `${currentJob.job_id}|${currentJob.location.lat}|${currentJob.location.lng}|${dayJobs
+        .map((job) => `${job.job_id}:${job.scheduled_time}:${job.location.lat},${job.location.lng}`)
+        .join("|")}`
     : "";
   const routeTechKey = tech
     ? `${tech.technician_id}|${tech.location.lat}|${tech.location.lng}`
@@ -73,6 +80,18 @@ export default function RecommendedRouting({
         toLat: String(job.location.lat),
         toLng: String(job.location.lng),
       });
+      const orderedStops = [
+        job,
+        ...dayJobs
+          .filter((dayJob) => dayJob.status !== "completed" && dayJob.job_id !== job.job_id)
+          .sort((a, b) => a.scheduled_time.localeCompare(b.scheduled_time)),
+      ];
+      params.set(
+        "points",
+        [technician.location, ...orderedStops.map((stop) => stop.location)]
+          .map((point) => `${point.lng},${point.lat}`)
+          .join(";"),
+      );
       const result = await apiGet<Recommendation>(`/api/routing/recommendation?${params}`);
       const signature = routeSignature(result.recommended);
       const storageKey = `coolfix-route-signature:${technician.technician_id}:${job.job_id}`;
@@ -133,6 +152,7 @@ export default function RecommendedRouting({
     setRecommendation(null);
     setRouteChangeNotice(null);
     setPendingRecommendation(null);
+    setShowAllRoutes(true);
     activeSignature.current = null;
     recommendationRef.current = null;
     notifyingSignature.current = null;
@@ -166,7 +186,27 @@ export default function RecommendedRouting({
   }
 
   const route = recommendation?.recommended;
-  const routeCoordinates = route?.geometry.map(([lng, lat]) => [lat, lng] as [number, number]);
+  const firstLeg = route?.legs?.[0];
+  const routeCoordinates = (firstLeg && firstLeg.length > 1 ? firstLeg : route?.geometry)?.map(
+    ([lng, lat]) => [lat, lng] as [number, number],
+  );
+  const remainingStops = dayJobs
+    .filter((job) => job.status !== "completed")
+    .sort((a, b) => a.scheduled_time.localeCompare(b.scheduled_time));
+  const routeSegments: RouteSegment[] = (route?.legs ?? []).slice(1).map((leg) => ({
+    coordinates: leg.map(([lng, lat]) => [lat, lng] as [number, number]),
+    color: "#9ca3af",
+    dashArray: "6 5",
+  }));
+  const currentWorkEta = route?.legDurations?.[0] ?? route?.adjustedTime ?? 0;
+  const otherStops = remainingStops
+    .filter((job) => job.job_id !== currentJob.job_id)
+    .map((job) => ({
+      lat: job.location.lat,
+      lng: job.location.lng,
+      label: job.customer_name,
+      role: "other" as const,
+    }));
 
   return (
     <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
@@ -175,17 +215,27 @@ export default function RecommendedRouting({
           <div>
             <h2 style={{ fontSize: 18 }}>Recommended routing</h2>
             <p className="muted" style={{ fontSize: 12, margin: 0 }}>
-              From {tech.name}&rsquo;s current position to {currentJob.customer_name}&rsquo;s service stop.
+              From {tech.name}&rsquo;s current position through today&rsquo;s remaining service stops.
             </p>
           </div>
-          <button
-            className={`btn${pendingRecommendation ? " routing-update-button" : ""}`}
-            style={{ fontSize: 11.5, padding: "6px 9px" }}
-            onClick={() => (pendingRecommendation ? applyPendingRecommendation() : void refresh(true))}
-            disabled={loading}
-          >
-            {loading ? "Checking…" : pendingRecommendation ? "Review route update" : "Check for updates"}
-          </button>
+          <div className="row" style={{ gap: 6, flexShrink: 0 }}>
+            <button
+              className="btn"
+              style={{ fontSize: 11.5, padding: "6px 9px" }}
+              onClick={() => setShowAllRoutes((visible) => !visible)}
+              disabled={loading || !route}
+            >
+              {showAllRoutes ? "Current work route" : "Show all route"}
+            </button>
+            <button
+              className={`btn${pendingRecommendation ? " routing-update-button" : ""}`}
+              style={{ fontSize: 11.5, padding: "6px 9px" }}
+              onClick={() => (pendingRecommendation ? applyPendingRecommendation() : void refresh(true))}
+              disabled={loading}
+            >
+              {loading ? "Checking…" : pendingRecommendation ? "Review route update" : "Check for updates"}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -202,15 +252,18 @@ export default function RecommendedRouting({
             height={270}
             interactiveZoom
             customer={{ ...currentJob.location }}
+            customerColor="#2563eb"
+            extras={showAllRoutes ? otherStops : []}
             technician={{ ...tech.location, name: tech.name }}
             route={{
               coordinates: routeCoordinates,
-              color: "var(--brand)",
+              color: "#2563eb",
               congestionSegments: route.congestionSegments.map((segment) => ({
                 coordinates: segment.coordinates.map(([lng, lat]) => [lat, lng] as [number, number]),
                 severity: segment.severity,
               })),
             }}
+            routeSegments={showAllRoutes ? routeSegments : []}
             trafficCameras={recommendation?.cameras ?? []}
           />
 
@@ -222,17 +275,8 @@ export default function RecommendedRouting({
 
           <div className="card" style={{ padding: 13 }}>
             <div className="spread" style={{ alignItems: "baseline", gap: 8 }}>
-              <strong style={{ fontSize: 14 }}>Best current route</strong>
-              <span className="mono" style={{ color: "var(--brand-ink)", fontWeight: 700 }}>{formatDuration(route.adjustedTime)}</span>
-            </div>
-            <div className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>
-              {formatDistance(route.distance)} · {route.nearbyCameraIds.length} nearby traffic camera{route.nearbyCameraIds.length === 1 ? "" : "s"}
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "5px 12px", marginTop: 12, fontSize: 11.5 }}>
-              <span className="muted">Normal OSRM time</span><span className="mono">{formatDuration(route.normalTime)}</span>
-              <span className="muted">Congestion delay</span><span className="mono">+{formatDuration(route.congestionDelay)}</span>
-              <span className="muted">Incident penalty</span><span className="mono">+{formatDuration(route.incidentPenalty)}</span>
-              <strong style={{ paddingTop: 6, borderTop: "1px solid var(--border)" }}>Adjusted time</strong><strong className="mono" style={{ paddingTop: 6, borderTop: "1px solid var(--border)" }}>{formatDuration(route.adjustedTime)}</strong>
+              <strong style={{ fontSize: 14 }}>Current work ETA</strong>
+              <span className="mono" style={{ color: "var(--brand-ink)", fontWeight: 700 }}>{formatDuration(currentWorkEta)}</span>
             </div>
           </div>
 
@@ -243,7 +287,7 @@ export default function RecommendedRouting({
                 {recommendation.routes.map((option, index) => (
                   <div key={option.id} className="row" style={{ justifyContent: "space-between", padding: "9px 10px", border: "1px solid var(--border)", borderRadius: 8, background: index === 0 ? "var(--brand-tint)" : "var(--surface)" }}>
                     <span style={{ fontSize: 11.5 }}>{index === 0 ? "Recommended" : `Alternative ${index}`} · {formatDistance(option.distance)}</span>
-                    <span className="mono" style={{ fontSize: 11 }}>{formatDuration(option.adjustedTime)}</span>
+                    <span className="muted" style={{ fontSize: 11 }}>Route option</span>
                   </div>
                 ))}
               </div>

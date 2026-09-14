@@ -7,7 +7,7 @@ import { useRealtime } from "@/components/useRealtime";
 import { TopBar } from "@/components/TopBar";
 import MapView, { type PickedPlace } from "@/components/MapView";
 import { SG_LANDMARKS } from "@/lib/geo";
-import { hoursBetween, nowISO } from "@/lib/time";
+import { hoursBetween } from "@/lib/time";
 import {
   PROBLEM_CATEGORIES,
   TIER_META,
@@ -386,16 +386,6 @@ export default function BookPage() {
                 {TIER_META[tier].label} · ~{estPrice(form.problem_category, tier)} SGD
               </dd>
             </dl>
-            {form.location && !mapUnavailable && (
-              <div style={{ marginTop: 14 }}>
-                <MapView
-                  mode="display"
-                  customer={{ ...form.location, address: form.address }}
-                  onUnavailable={() => setMapUnavailable(true)}
-                  height={170}
-                />
-              </div>
-            )}
             {err && <p style={{ color: "var(--tier-urgent)", fontSize: 13 }}>{err}</p>}
             <div className="row" style={{ gap: 8, marginTop: 16 }}>
               <button className="btn btn-ghost" onClick={() => setStep("tier")}>Back</button>
@@ -623,22 +613,12 @@ function fmtWhen(iso: string): string {
   }).format(new Date(iso));
 }
 
-/** "in ~3h" / "in ~40 min" / "started" — a friendly ETA from now. */
-function etaText(iso: string): string {
-  const h = hoursBetween(nowISO(), iso);
-  if (h <= 0) return "now / in progress";
-  if (h < 1) return `in ~${Math.round(h * 60)} min`;
-  if (h < 24) return `in ~${Math.round(h)}h`;
-  return `in ~${Math.round(h / 24)} day${Math.round(h / 24) > 1 ? "s" : ""}`;
-}
-
 function TrackView({ result }: { result: PipelineResult }) {
   // Start from the pipeline's own result, then keep it live: the booking
   // may be rescheduled by the Disruption Agent or a coordinator after this
   // page loads, and the customer should see that without a refresh.
   const [job, setJob] = useState<Job>(result.job);
   const [tech, setTech] = useState<Technician | null>(null);
-  const [mapOk, setMapOk] = useState(true);
   const jobId = result.job.job_id;
 
   const load = useCallback(async () => {
@@ -664,9 +644,6 @@ function TrackView({ result }: { result: PipelineResult }) {
     Math.round(hoursBetween(j.freeze_point, j.scheduled_time)),
   );
   const rescheduled = j.reschedule_history.length > 0;
-  const techEnRoute = j.status === "in_progress";
-  const showTechOnMap =
-    !!tech && ["assigned", "frozen", "in_progress"].includes(j.status);
 
   const milestones = [
     { key: "received", label: "Request received", done: true },
@@ -736,7 +713,7 @@ function TrackView({ result }: { result: PipelineResult }) {
 
       <PipelineProgress jobId={jobId} finalStatus={result.status} />
 
-      {/* live technician + ETA card, once assigned */}
+      {/* live technician card, once assigned */}
       {tech && ["assigned", "frozen", "in_progress"].includes(j.status) && (
         <div
           className="row"
@@ -760,47 +737,25 @@ function TrackView({ result }: { result: PipelineResult }) {
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 14, fontWeight: 600 }}>{tech.name}</div>
             <div className="muted" style={{ fontSize: 12 }}>
-              {tech.experience_level} · arriving {etaText(j.scheduled_time)} ({fmtWhen(j.scheduled_time)})
+              {tech.experience_level}
             </div>
           </div>
         </div>
       )}
 
-      {/* live service map — customer address + assigned technician */}
-      {mapOk ? (
-        <div style={{ marginTop: 12 }}>
-          <MapView
-            mode="display"
-            customer={{
-              lat: j.location.lat,
-              lng: j.location.lng,
-              address: j.location.address,
-            }}
-            technician={
-              showTechOnMap && tech
-                ? { lat: tech.location.lat, lng: tech.location.lng, name: tech.name }
-                : null
-            }
-            active={techEnRoute}
-            onUnavailable={() => setMapOk(false)}
-            height={230}
-          />
-        </div>
-      ) : (
-        <div
-          style={{
-            marginTop: 12,
-            padding: "10px 12px",
-            borderRadius: 10,
-            background: "var(--surface-2)",
-            border: "1px solid var(--border)",
-            fontSize: 12.5,
-          }}
-        >
-          <span className="muted">Service address: </span>
-          {j.location.address}
-        </div>
-      )}
+      <div
+        style={{
+          marginTop: 12,
+          padding: "10px 12px",
+          borderRadius: 10,
+          background: "var(--surface-2)",
+          border: "1px solid var(--border)",
+          fontSize: 12.5,
+        }}
+      >
+        <span className="muted">Service address: </span>
+        {j.location.address}
+      </div>
 
       <div style={{ display: "grid", gap: 0, marginTop: 12 }}>
         {milestones.map((m, i) => (

@@ -16,7 +16,9 @@
     "tracking:unit": "tsx scripts/trackingUnit.ts",
     "tracking:smoke": "tsx scripts/trackingSmoke.ts",
     "feedback:unit": "tsx scripts/feedbackUnit.ts",
-    "feedback:smoke": "tsx scripts/feedbackSmoke.ts"
+    "feedback:smoke": "tsx scripts/feedbackSmoke.ts",
+    "adaptive:unit": "tsx scripts/adaptivePolicyUnit.ts",
+    "adaptive:smoke": "tsx scripts/adaptivePolicySmoke.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.45.4",

@@ -11,7 +11,6 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
-import MapView from "@/components/MapView";
 import { ShareButton } from "@/components/ShareButton";
 import { FeedbackForm } from "@/components/FeedbackForm";
 
@@ -30,9 +29,6 @@ interface PublicJobView {
   appointment: { date: string; start: string; end: string };
   service: { category: string; summary: string };
   technician: { name: string; specialty: string } | null;
-  location: { lat: number; lng: number };
-  technicianLocation: { lat: number; lng: number } | null;
-  eta: number | null;
   price: number;
   timeline: PublicTimelineStep[];
   explanation: string | null;
@@ -49,7 +45,6 @@ export default function TrackTokenPage() {
   const [view, setView] = useState<PublicJobView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [mapOk, setMapOk] = useState(true);
 
   const load = useCallback(async () => {
     try {
@@ -96,22 +91,13 @@ export default function TrackTokenPage() {
           </div>
         )}
 
-        {view && <TrackerCard view={view} mapOk={mapOk} onMapFail={() => setMapOk(false)} />}
+        {view && <TrackerCard view={view} />}
       </div>
     </div>
   );
 }
 
-function TrackerCard({
-  view,
-  mapOk,
-  onMapFail,
-}: {
-  view: PublicJobView;
-  mapOk: boolean;
-  onMapFail: () => void;
-}) {
-  const active = view.status === "en_route";
+function TrackerCard({ view }: { view: PublicJobView }) {
   return (
     <div className="stack" style={{ gap: 14 }}>
       <div className="card" style={{ padding: 24 }}>
@@ -128,32 +114,6 @@ function TrackerCard({
             text={`${view.statusLabel} (code ${view.trackingCode}):`}
           />
         </div>
-
-        {view.eta != null && (
-          <div style={{ marginTop: 16, display: "flex", alignItems: "baseline", gap: 8 }}>
-            <span className="faint" style={{ fontSize: 11, textTransform: "uppercase" }}>ETA</span>
-            <span className="mono" style={{ fontSize: 28, fontWeight: 600, letterSpacing: "-0.02em" }}>
-              {view.eta} min
-            </span>
-          </div>
-        )}
-
-        {mapOk ? (
-          <div style={{ marginTop: 16 }}>
-            <MapView
-              mode="display"
-              customer={{ lat: view.location.lat, lng: view.location.lng, address: view.service.category }}
-              technician={
-                view.technicianLocation && view.technician
-                  ? { lat: view.technicianLocation.lat, lng: view.technicianLocation.lng, name: view.technician.name }
-                  : null
-              }
-              active={active}
-              onUnavailable={onMapFail}
-              height={220}
-            />
-          </div>
-        ) : null}
 
         {view.technician && (
           <div

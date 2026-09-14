@@ -221,7 +221,7 @@ export default function TechApp() {
         </div>
 
         {techTab === "routing" ? (
-          <RecommendedRouting tech={tech} currentJob={heroJob} />
+          <RecommendedRouting tech={tech} currentJob={heroJob} dayJobs={todayTimeline} />
         ) : (
           <>
             {/* collapsible messages — never pushes the rest of the day out of view */}

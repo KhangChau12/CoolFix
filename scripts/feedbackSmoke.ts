@@ -72,7 +72,7 @@ async function main() {
   const freshJob: Job = {
     ...job2020,
     job_id: "job_test_completed_1",
-    public_tracking_token: "CF-TEST-0001-AAAA",
+    public_tracking_token: "CF-2345-6789-ABCD",
     assigned_technician_id: "tech_marcus",
     status: "completed",
   };
@@ -91,7 +91,7 @@ async function main() {
   const freshJob2: Job = {
     ...job2020,
     job_id: "job_test_completed_2",
-    public_tracking_token: "CF-TEST-0002-BBBB",
+    public_tracking_token: "CF-2346-789A-BCDE",
     assigned_technician_id: "tech_priya",
     status: "completed",
   };
@@ -108,7 +108,7 @@ async function main() {
   const freshJob3: Job = {
     ...job2020,
     job_id: "job_test_completed_3",
-    public_tracking_token: "CF-TEST-0003-CCCC",
+    public_tracking_token: "CF-2347-89AB-CDEF",
     assigned_technician_id: "tech_wei_jie",
     status: "completed",
   };
@@ -127,7 +127,7 @@ async function main() {
   const pendingJob: Job = {
     ...job2020,
     job_id: "job_test_pending",
-    public_tracking_token: "CF-TEST-0004-DDDD",
+    public_tracking_token: "CF-2348-9ABC-DEFG",
     assigned_technician_id: null,
     status: "pending",
   };
@@ -138,7 +138,7 @@ async function main() {
   const assignedNotDone: Job = {
     ...job2020,
     job_id: "job_test_assigned",
-    public_tracking_token: "CF-TEST-0005-EEEE",
+    public_tracking_token: "CF-2349-ABCD-EFGH",
     assigned_technician_id: "tech_marcus",
     status: "assigned",
   };
@@ -169,7 +169,7 @@ async function main() {
   const raceJob: Job = {
     ...job2020,
     job_id: "job_test_race",
-    public_tracking_token: "CF-TEST-0006-FFFF",
+    public_tracking_token: "CF-2356-BCDE-FGHI",
     assigned_technician_id: "tech_hui_ling",
     status: "completed",
   };
@@ -236,7 +236,7 @@ async function main() {
     const reassigned: Job = {
       ...job2020,
       job_id: "job_test_reassigned",
-      public_tracking_token: "CF-TEST-0007-GGGG",
+      public_tracking_token: "CF-2357-CDEF-GHJK",
       assigned_technician_id: "tech_hui_ling", // final technician
       status: "completed",
       reschedule_history: [

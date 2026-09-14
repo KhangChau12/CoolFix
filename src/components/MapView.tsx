@@ -65,8 +65,8 @@ export interface MapPin {
   lat: number;
   lng: number;
   label: string;
-  /** "customer" (blue) | "tech" (amber) | "alt" (green) — picks the pin colour. */
-  role?: "customer" | "tech" | "alt";
+  /** "customer" (blue) | "tech" (amber) | "alt" (green) | "other" (gray). */
+  role?: "customer" | "tech" | "alt" | "other";
 }
 
 export interface RouteLine {
@@ -77,6 +77,14 @@ export interface RouteLine {
     coordinates: Array<[number, number]>;
     severity: "low" | "medium" | "high";
   }>;
+}
+
+export interface RouteSegment {
+  coordinates: Array<[number, number]>;
+  color: string;
+  weight?: number;
+  opacity?: number;
+  dashArray?: string;
 }
 
 export interface TrafficCamera {
@@ -92,6 +100,7 @@ export interface TrafficCamera {
 interface DisplayProps extends CommonProps {
   mode: "display";
   customer: { lat: number; lng: number; address: string };
+  customerColor?: string;
   technician?: { lat: number; lng: number; name: string } | null;
   /** Tighten the visual style when the technician is en route. */
   active?: boolean;
@@ -100,6 +109,8 @@ interface DisplayProps extends CommonProps {
   extras?: MapPin[];
   /** Optional routed geometry, supplied as [lat, lng] pairs. */
   route?: RouteLine | null;
+  /** Additional legs, such as the remaining stops on a technician's day route. */
+  routeSegments?: RouteSegment[];
   /** Live LTA camera observations shown as clickable map markers. */
   trafficCameras?: TrafficCamera[];
   /** Enable map zoom controls and mouse-wheel zoom for the technician route view. */
@@ -229,6 +240,7 @@ export default function MapView(props: Props) {
   const custMarkerRef = useRef<LeafletMarker | null>(null);
   const techMarkerRef = useRef<LeafletMarker | null>(null);
   const lineRef = useRef<LeafletPolyline | null>(null);
+  const routeSegmentsRef = useRef<LeafletPolyline[]>([]);
   const congestionSegmentsRef = useRef<LeafletPolyline[]>([]);
   const extraMarkersRef = useRef<LeafletMarker[]>([]);
   const trafficMarkersRef = useRef<LeafletMarker[]>([]);
@@ -325,6 +337,7 @@ export default function MapView(props: Props) {
       custMarkerRef.current = null;
       techMarkerRef.current = null;
       lineRef.current = null;
+      routeSegmentsRef.current = [];
       congestionSegmentsRef.current = [];
       extraMarkersRef.current = [];
       trafficMarkersRef.current = [];
@@ -364,6 +377,7 @@ export default function MapView(props: Props) {
   // ── display mode: customer + technician markers, line, fit ──
   const dCustLat = props.mode === "display" ? props.customer.lat : null;
   const dCustLng = props.mode === "display" ? props.customer.lng : null;
+  const dCustomerColor = props.mode === "display" ? props.customerColor ?? "var(--tier-standard)" : "";
   const dTechLat = props.mode === "display" ? props.technician?.lat ?? null : null;
   const dTechLng = props.mode === "display" ? props.technician?.lng ?? null : null;
   const dActive = props.mode === "display" ? Boolean(props.active) : false;
@@ -372,6 +386,7 @@ export default function MapView(props: Props) {
     ? dExtras.map((e) => `${e.lat.toFixed(4)},${e.lng.toFixed(4)},${e.role ?? ""}`).join("|")
     : "";
   const dRoute = props.mode === "display" ? props.route ?? null : null;
+  const dRouteSegments = props.mode === "display" ? props.routeSegments ?? [] : [];
   const dRouteKey = dRoute
     ? [
         dRoute.coordinates.map(([lat, lng]) => `${lat.toFixed(5)},${lng.toFixed(5)}`).join("|"),
@@ -380,6 +395,9 @@ export default function MapView(props: Props) {
         ),
       ].join("||")
     : "";
+  const dRouteSegmentsKey = dRouteSegments
+    .map((segment) => `${segment.color}:${segment.coordinates.map(([lat, lng]) => `${lat.toFixed(5)},${lng.toFixed(5)}`).join(";")}`)
+    .join("||");
   const dTrafficCameras = props.mode === "display" ? props.trafficCameras ?? [] : [];
   const dTrafficKey = dTrafficCameras
     .map((camera) => `${camera.camera_id},${camera.lat.toFixed(5)},${camera.lng.toFixed(5)},${camera.timestamp},${camera.severity ?? ""},${camera.incident ? "incident" : ""}`)
@@ -400,17 +418,18 @@ export default function MapView(props: Props) {
 
     if (!custMarkerRef.current) {
       custMarkerRef.current = L.marker([dCustLat, dCustLng], {
-        icon: makePinIcon(L, "var(--tier-standard)"),
+        icon: makePinIcon(L, dCustomerColor),
       })
         .addTo(map)
         .bindPopup(`<b>Your address</b><br>${escapeHtml(p.customer.address)}`);
     } else {
       custMarkerRef.current.setLatLng([dCustLat, dCustLng]);
+      custMarkerRef.current.setIcon(makePinIcon(L, dCustomerColor));
     }
 
     // Extra read-only markers (other jobs a re-plan touches). Rebuilt
     // whenever the set changes — small counts, so a clear-and-readd is fine.
-    const EXTRA_COLOR = { customer: "var(--tier-standard)", tech: "var(--tier-priority)", alt: "var(--tier-flexible)" };
+    const EXTRA_COLOR = { customer: "var(--tier-standard)", tech: "var(--tier-priority)", alt: "var(--tier-flexible)", other: "#9ca3af" };
     for (const m of extraMarkersRef.current) m.remove();
     extraMarkersRef.current = [];
     if (dExtras) {
@@ -492,7 +511,27 @@ export default function MapView(props: Props) {
           );
         }
       }
-      const fitPts = [...pts, ...(dExtras?.map((e) => [e.lat, e.lng] as [number, number]) ?? [])].filter(
+      for (const segment of routeSegmentsRef.current) segment.remove();
+      routeSegmentsRef.current = [];
+      for (const segment of dRouteSegments) {
+        const segmentPts = segment.coordinates.filter((point) =>
+          isWithinSG({ lat: point[0], lng: point[1] }),
+        );
+        if (segmentPts.length < 2) continue;
+        routeSegmentsRef.current.push(
+          L.polyline(segmentPts, {
+            color: segment.color,
+            weight: segment.weight ?? 4,
+            opacity: segment.opacity ?? 0.9,
+            dashArray: segment.dashArray,
+          }).addTo(map),
+        );
+      }
+      const fitPts = [
+        ...pts,
+        ...dRouteSegments.flatMap((segment) => segment.coordinates),
+        ...(dExtras?.map((e) => [e.lat, e.lng] as [number, number]) ?? []),
+      ].filter(
         (pt) => isWithinSG({ lat: pt[0], lng: pt[1] }),
       );
       if (fitPts.length >= 2) {
@@ -516,7 +555,7 @@ export default function MapView(props: Props) {
       map.setView([dCustLat, dCustLng], 14, { animate: false });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, mode, dCustLat, dCustLng, dTechLat, dTechLng, dActive, dExtrasKey, dRouteKey, dTrafficKey]);
+  }, [ready, mode, dCustLat, dCustLng, dCustomerColor, dTechLat, dTechLng, dActive, dExtrasKey, dRouteKey, dRouteSegmentsKey, dTrafficKey]);
 
   // ── search box (pick only) ──
   const [q, setQ] = useState("");

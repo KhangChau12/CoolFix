@@ -48,6 +48,29 @@ Every agent writes one row to `agent_decision_log` (agent, reasoning kind, input
 outputs, score breakdown, guardrail notes). That table is the Agent Reasoning Feed
 on the Admin dashboard and the observability artifact for the submission.
 
+### Adaptive dispatch policy
+
+Customer feedback closes a second, conservative loop: completed-job feedback is
+joined to its delivery tier, technician, assignment score, reschedule history, and
+the policy snapshot used at assignment time. `src/lib/adaptivePolicy.ts` aggregates
+validated ratings and fixed tags, applies Bayesian smoothing, requires both a
+minimum sample and multiple technicians, caps one technician's contribution, flags
+suspicious bursts/repeated patterns, and proposes at most a small normalized change
+to soft scoring weights. Free-text comments are never an adaptive signal and are
+never sent to an LLM.
+
+The default flow is recommendation-only: a coordinator opens `/admin/company`,
+reviews the explanation and included/excluded feedback IDs, approves, and applies.
+Settings can explicitly enable automatic mode, but the same checks, cooldown, audit
+history, and optimistic policy-version check still apply. Rollback restores the
+exact previous tier snapshot and creates a rollback history row.
+
+The current app has no authentication, company table, or production tenant
+isolation. Adaptive data is therefore scoped to the explicit `demo-company` value;
+complete Sybil protection and real `company_id` authorization require those later
+identity systems. Arrival/start/completion event timestamps are also not currently
+recorded, so late-arrival frequency is reported as unavailable rather than guessed.
+
 ## Stack
 
 - **Next.js 14** (App Router) + TypeScript — one app, all three UIs + agent API
@@ -79,6 +102,8 @@ cp .env.example .env.local      # fill in Supabase URL + keys
 #   supabase/migrations/0004_dispatch_policy.sql
 #   supabase/migrations/0005_public_tracking.sql   (customer tracking token)
 #   supabase/migrations/0006_job_feedback.sql      (customer feedback + rating)
+#   supabase/migrations/0007_runtime_clock.sql     (runtime clock fields)
+#   supabase/migrations/0008_adaptive_dispatch_policy.sql
 
 npm run seed                    # load demo technicians + jobs
 npm run dev                     # http://localhost:3000
@@ -95,6 +120,8 @@ npm run dev                     # http://localhost:3000
 | `npm run robustness` | runs the demo-critical scenarios at a few SGT hours (guards against time-of-day fragility); `ROBUSTNESS_HOURS=…` to widen the sweep |
 | `npm run fuzz` | throws unusual bookings (emoji, huge text, injection, category mismatch) at the pipeline and checks the always-true invariants |
 | `npm run concurrency` | fires several bookings at once; checks the schedule stays consistent (the pipeline serializes itself) |
+| `npm run adaptive:unit` | deterministic adaptive-policy, smoothing, anomaly, normalization, and safety tests |
+| `npm run adaptive:smoke` | DB-backed recommendation → approval → apply → future assignment snapshot → rollback flow |
 
 All four run under whatever `LLM_MODE` is set (`LLM_MODE=stub npm run …` forces the
 deterministic offline path). Run them one at a time — they share the Supabase project
@@ -104,7 +131,7 @@ and wipe/re-seed between cases.
 
 | Path | Persona | Purpose |
 |---|---|---|
-| `/admin` | Coordinator | Dashboard, Agent Reasoning Feed, master schedule, HITL queue, Settings |
+| `/admin` | Coordinator | Dashboard, Agent Reasoning Feed, master schedule, HITL queue, Company, Settings |
 | `/book` | Customer | Booking form + status tracker |
 | `/tech` | Technician | Mobile-first job schedule, notification acknowledgement |
 

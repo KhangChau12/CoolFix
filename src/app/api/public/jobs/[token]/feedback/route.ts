@@ -10,6 +10,7 @@
 // the authenticated job record, never echoed back from the request.
 
 import { NextResponse } from "next/server";
+import { createHash } from "node:crypto";
 import * as repo from "@/lib/repo";
 import { isValidTrackingTokenFormat } from "@/lib/trackingTokenFormat";
 import { validateFeedbackSubmission, type FeedbackValidationError } from "@/lib/feedback";
@@ -47,8 +48,11 @@ async function resolveJob(token: string): Promise<Job | null> {
   }
 }
 
-function isEligible(job: Job): boolean {
-  return job.status === "completed" && !!job.assigned_technician_id;
+async function isEligible(job: Job): Promise<boolean> {
+  if (job.status !== "completed" || !job.assigned_technician_id) return false;
+  // A completed row is not enough on its own: the assigned technician must
+  // still resolve to a verified roster record before feedback is accepted.
+  return !!(await repo.getTechnician(job.assigned_technician_id));
 }
 
 function publicFeedback(f: JobFeedback) {
@@ -65,7 +69,7 @@ export async function GET(_req: Request, { params }: { params: { token: string }
   const job = await resolveJob(params.token ?? "");
   if (!job) return NextResponse.json(NOT_FOUND, { status: 404 });
 
-  const eligible = isEligible(job);
+  const eligible = await isEligible(job);
   const existing = eligible ? await repo.getFeedbackByJobId(job.job_id) : undefined;
 
   return NextResponse.json({
@@ -79,7 +83,7 @@ export async function POST(req: Request, { params }: { params: { token: string }
   const job = await resolveJob(params.token ?? "");
   if (!job) return NextResponse.json(NOT_FOUND, { status: 404 });
 
-  if (!isEligible(job)) {
+  if (!(await isEligible(job))) {
     return NextResponse.json(NOT_ELIGIBLE, { status: 409 });
   }
 
@@ -103,6 +107,11 @@ export async function POST(req: Request, { params }: { params: { token: string }
     return NextResponse.json(ALREADY_SUBMITTED, { status: 409 });
   }
 
+  // Best-effort anti-spam protection for the unauthenticated public form.
+  // Store only short-lived salted hashes, never raw IP/user-agent values.
+  const rate = await feedbackRateLimit(req, params.token ?? "");
+  if (!rate.ok) return NextResponse.json({ error: rate.error }, { status: 429 });
+
   const feedback: JobFeedback = {
     feedback_id: `fb_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
     job_id: job.job_id,
@@ -116,6 +125,10 @@ export async function POST(req: Request, { params }: { params: { token: string }
     improvement_tags: validated.value.improvement_tags,
     comment: validated.value.comment,
     created_at: new Date().toISOString(),
+    source_hash: rate.sourceHash,
+    flagged: false,
+    excluded_from_adaptation: false,
+    flag_reason: null,
   };
 
   const result = await repo.insertFeedbackIfAbsent(feedback);
@@ -132,6 +145,39 @@ export async function POST(req: Request, { params }: { params: { token: string }
   await logFeedbackEvent(result.feedback);
 
   return NextResponse.json({ ok: true, feedback: publicFeedback(result.feedback) }, { status: 201 });
+}
+
+async function feedbackRateLimit(req: Request, token: string): Promise<
+  | { ok: true; sourceHash: string }
+  | { ok: false; error: string }
+> {
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+  const userAgent = req.headers.get("user-agent") ?? "unknown";
+  const session = req.headers.get("x-feedback-session") ?? "";
+  const salt = process.env.FEEDBACK_RATE_LIMIT_SALT ?? "coolfix-demo-rate-limit";
+  const hash = (value: string) => createHash("sha256").update(`${salt}:${value}`).digest("hex").slice(0, 32);
+  const sourceHash = hash(`${ip}:${userAgent}`);
+  const tokenHash = hash(token);
+  const sessionHash = session ? hash(session) : null;
+  const since = new Date(Date.now() - 10 * 60_000).toISOString();
+
+  const [sourceCount, tokenCount, sessionCount] = await Promise.all([
+    repo.countRecentFeedbackAttempts({ sourceHash }, since),
+    repo.countRecentFeedbackAttempts({ trackingTokenHash: tokenHash }, since),
+    sessionHash ? repo.countRecentFeedbackAttempts({ sessionHash }, since) : Promise.resolve(0),
+  ]);
+  if (sourceCount >= 8) return { ok: false, error: "Too many feedback attempts. Please try again later." };
+  if (tokenCount >= 3) return { ok: false, error: "Too many attempts for this booking. Please try again later." };
+  if (sessionCount >= 8) return { ok: false, error: "Too many feedback attempts. Please try again later." };
+
+  await repo.insertFeedbackAttempt({
+    attempt_id: `fba_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`,
+    tracking_token_hash: tokenHash,
+    source_hash: sourceHash,
+    session_hash: sessionHash,
+    created_at: new Date().toISOString(),
+  });
+  return { ok: true, sourceHash };
 }
 
 /** A single, lightweight row in the existing decision/reasoning feed —

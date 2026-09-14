@@ -3,8 +3,8 @@
 
 import { NextResponse } from "next/server";
 import * as repo from "@/lib/repo";
-import type { RuntimeConfig, ScoreComponent, Tier } from "@/lib/types";
-import { DISPATCH_POLICY, SCORE_COMPONENTS, TIERS } from "@/lib/types";
+import type { AdaptivePolicyChangeHistory, RuntimeConfig, ScoreComponent, Tier } from "@/lib/types";
+import { DEMO_COMPANY_ID, DISPATCH_POLICY, SCORE_COMPONENTS, TIERS } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -63,9 +63,48 @@ export async function PATCH(req: Request) {
   if (b.basePrice) patch.basePrice = b.basePrice;
   if (b.llmMode === "stub" || b.llmMode === "gateway" || b.llmMode === "openai")
     patch.llmMode = b.llmMode;
+  if (b.adaptivePolicy) {
+    const a = b.adaptivePolicy;
+    patch.adaptivePolicy = {
+      enabled: Boolean(a.enabled),
+      mode: a.mode === "automatic" ? "automatic" : "recommendation_only",
+      minFeedbackCount: Math.max(20, Math.min(1000, Math.round(Number(a.minFeedbackCount ?? 20)))),
+      minUniqueTechnicians: Math.max(2, Math.min(50, Math.round(Number(a.minUniqueTechnicians ?? 3)))),
+      maxChangePerUpdate: clamp(Number(a.maxChangePerUpdate ?? 0.02), 0.005, 0.02),
+      cooldownDays: Math.max(1, Math.min(90, Math.round(Number(a.cooldownDays ?? 14)))),
+      minConfidence: clamp(Number(a.minConfidence ?? 0.75), 0.5, 1),
+      maxCustomerSatisfactionWeight: clamp(Number(a.maxCustomerSatisfactionWeight ?? 0.15), 0.05, 0.15),
+    };
+  }
 
   try {
+    const before = await repo.getConfig();
+    const policyChanged = patch.dispatchPolicy !== undefined && JSON.stringify(patch.dispatchPolicy) !== JSON.stringify(before.dispatchPolicy);
+    // Settings submits the whole draft. Do not create a new dispatch-policy
+    // version merely because an unrelated adaptive setting changed.
+    if (!policyChanged) delete patch.dispatchPolicy;
     const config = await repo.updateConfig(patch);
+    if (policyChanged) {
+      for (const tier of TIERS) {
+        if (JSON.stringify(before.dispatchPolicy[tier]) === JSON.stringify(config.dispatchPolicy[tier])) continue;
+        const history: AdaptivePolicyChangeHistory = {
+          change_id: `aph_manual_${Date.now().toString(36)}_${tier}`,
+          recommendation_id: null,
+          company_id: DEMO_COMPANY_ID,
+          tier,
+          before_policy: before.dispatchPolicy[tier],
+          after_policy: config.dispatchPolicy[tier],
+          reason: "Manual dispatch-policy settings update.",
+          supporting_metrics: { source: "manual_settings" },
+          feedback_ids: [],
+          approved_by: "manual settings UI",
+          change_mode: "manual",
+          created_at: new Date().toISOString(),
+          rollback_of_change_id: null,
+        };
+        await repo.insertAdaptiveHistory(history);
+      }
+    }
     return NextResponse.json({ config });
   } catch (error) {
     return NextResponse.json(

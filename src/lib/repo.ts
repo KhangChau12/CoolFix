@@ -9,12 +9,16 @@ import { serviceClient } from "./supabase";
 import { configureClock } from "./time";
 import {
   approvalToRow,
+  adaptiveHistoryToRow,
+  adaptiveRecommendationToRow,
   configToRow,
   decisionToRow,
   feedbackToRow,
   jobToRow,
   notificationToRow,
   rowToApproval,
+  rowToAdaptiveHistory,
+  rowToAdaptiveRecommendation,
   rowToConfig,
   rowToDecision,
   rowToFeedback,
@@ -26,6 +30,8 @@ import {
 import type {
   AgentDecisionLog,
   ApprovalRequest,
+  AdaptivePolicyChangeHistory,
+  AdaptivePolicyRecommendation,
   Job,
   JobFeedback,
   NotificationRecord,
@@ -80,7 +86,12 @@ export async function getJob(id: string): Promise<Job | undefined> {
 }
 
 export async function upsertJob(j: Job): Promise<void> {
-  const res = await sb().from("jobs").upsert(jobToRow(j));
+  const row = jobToRow(j);
+  let res = await sb().from("jobs").upsert(row);
+  if (res.error && hasMissingPolicySnapshotColumn(res.error)) {
+    const { dispatch_policy_version: _version, dispatch_policy_snapshot: _snapshot, ...legacyRow } = row;
+    res = await sb().from("jobs").upsert(legacyRow);
+  }
   orThrow(res, "upsertJob");
 }
 
@@ -100,7 +111,12 @@ export async function getJobByTrackingToken(token: string): Promise<Job | undefi
 // ── Decision log ─────────────────────────────────────────────────
 
 export async function insertDecision(d: AgentDecisionLog): Promise<void> {
-  const res = await sb().from("agent_decision_log").insert(decisionToRow(d));
+  const row = decisionToRow(d);
+  let res = await sb().from("agent_decision_log").insert(row);
+  if (res.error && hasMissingPolicySnapshotColumn(res.error)) {
+    const { policy_version: _version, dispatch_policy_snapshot: _snapshot, ...legacyRow } = row;
+    res = await sb().from("agent_decision_log").insert(legacyRow);
+  }
   orThrow(res, "insertDecision");
 }
 
@@ -200,20 +216,44 @@ export async function getConfig(): Promise<RuntimeConfig> {
 }
 
 export async function updateConfig(patch: Partial<RuntimeConfig>): Promise<RuntimeConfig> {
-  const row = configToRow(patch);
+  const effectivePatch = { ...patch };
+  if (patch.dispatchPolicy !== undefined) {
+    const current = await getConfig();
+    effectivePatch.policyVersion = nextPolicyVersion(current.policyVersion);
+  } else {
+    // policy_version is server-owned; unrelated settings must not accept a
+    // browser-supplied version string.
+    delete effectivePatch.policyVersion;
+  }
+  const row = configToRow(effectivePatch);
   let res = await sb().from("runtime_config").upsert(row);
 
   // Older hosted databases may not have applied migration 0007 yet. Keep
   // clock editing usable by retrying through the existing dispatch_policy
   // JSONB column; once 0007 is applied, the normal columns are used instead.
-  if (res.error && hasMissingClockColumn(res.error)) {
+  if (res.error && (hasMissingClockColumn(res.error) || hasMissingAdaptiveConfigColumn(res.error))) {
     const current = patch.dispatchPolicy ? null : await getConfig();
     const fallbackPatch = current
       ? { ...patch, dispatchPolicy: current.dispatchPolicy }
       : patch;
     const fallbackRow = configToRow(fallbackPatch, { embedClockFallback: true });
-    delete fallbackRow.clock_mode;
-    delete fallbackRow.custom_time_iso;
+    if (hasMissingClockColumn(res.error)) {
+      delete fallbackRow.clock_mode;
+      delete fallbackRow.custom_time_iso;
+    }
+    if (hasMissingAdaptiveConfigColumn(res.error)) {
+      for (const key of [
+        "policy_version",
+        "adaptive_policy_enabled",
+        "adaptive_policy_mode",
+        "adaptive_min_feedback_count",
+        "adaptive_min_unique_technicians",
+        "adaptive_max_change",
+        "adaptive_cooldown_days",
+        "adaptive_min_confidence",
+        "adaptive_max_customer_satisfaction_weight",
+      ]) delete fallbackRow[key];
+    }
     res = await sb().from("runtime_config").upsert(fallbackRow);
   }
 
@@ -221,10 +261,43 @@ export async function updateConfig(patch: Partial<RuntimeConfig>): Promise<Runti
   return getConfig();
 }
 
+function nextPolicyVersion(current: string): string {
+  const match = /^policy-v(\d+)$/.exec(current);
+  return `policy-v${match ? Number(match[1]) + 1 : Date.now()}`;
+}
+
+/** Update only if the caller still holds the policy version it analyzed. */
+export async function updateConfigForPolicyVersion(
+  patch: Partial<RuntimeConfig>,
+  expectedVersion: string,
+  nextVersion: string,
+): Promise<RuntimeConfig | null> {
+  const row = configToRow({ ...patch, policyVersion: nextVersion });
+  const res = await sb()
+    .from("runtime_config")
+    .update(row)
+    .eq("id", 1)
+    .eq("policy_version", expectedVersion)
+    .select()
+    .maybeSingle();
+  if (res.error) throw new Error(`[repo:updateConfigForPolicyVersion] ${JSON.stringify(res.error)}`);
+  return res.data ? rowToConfig(res.data) : null;
+}
+
 function hasMissingClockColumn(error: unknown): boolean {
   const text = JSON.stringify(error) ?? String(error);
   return text.includes("PGRST204") &&
     (text.includes("clock_mode") || text.includes("custom_time_iso"));
+}
+
+function hasMissingAdaptiveConfigColumn(error: unknown): boolean {
+  const text = JSON.stringify(error) ?? String(error);
+  return text.includes("PGRST204") && /(policy_version|adaptive_)/.test(text);
+}
+
+function hasMissingPolicySnapshotColumn(error: unknown): boolean {
+  const text = JSON.stringify(error) ?? String(error);
+  return text.includes("PGRST204") && /(dispatch_policy_version|dispatch_policy_snapshot|policy_version)/.test(text);
 }
 
 // ── Job feedback ───────────────────────────────────────────────
@@ -249,7 +322,15 @@ export type InsertFeedbackResult =
  * otherwise-working environment that just hasn't run that migration yet.
  */
 export async function insertFeedbackIfAbsent(f: JobFeedback): Promise<InsertFeedbackResult> {
-  const res = await sb().from("job_feedback").insert(feedbackToRow(f)).select().maybeSingle();
+  let row = feedbackToRow(f);
+  let res = await sb().from("job_feedback").insert(row).select().maybeSingle();
+  // Keep the original feedback flow readable while migration 0008 is being
+  // rolled out. Adaptive moderation fields are optional at this boundary;
+  // the database unique index from 0006 remains the duplicate guard.
+  if (res.error && isMissingAdaptiveFeedbackColumn(res.error)) {
+    const { source_hash: _sourceHash, flagged: _flagged, excluded_from_adaptation: _excluded, flag_reason: _reason, ...legacyRow } = row;
+    res = await sb().from("job_feedback").insert(legacyRow).select().maybeSingle();
+  }
   if (res.error) {
     const code = (res.error as { code?: string }).code;
     if (code === "23505") return { ok: false, reason: "duplicate" };
@@ -257,6 +338,11 @@ export async function insertFeedbackIfAbsent(f: JobFeedback): Promise<InsertFeed
     throw new Error(`[repo:insertFeedbackIfAbsent] ${JSON.stringify(res.error)}`);
   }
   return { ok: true, feedback: f };
+}
+
+function isMissingAdaptiveFeedbackColumn(error: unknown): boolean {
+  const text = JSON.stringify(error) ?? String(error);
+  return text.includes("PGRST204") && /(source_hash|flagged|excluded_from_adaptation|flag_reason)/.test(text);
 }
 
 /** True if a Supabase/PostgREST error means "the table doesn't exist" —
@@ -305,12 +391,95 @@ export async function listFeedbackForTechnician(technicianId: string): Promise<J
   return (res.data ?? []).map(rowToFeedback);
 }
 
+export async function updateFeedbackModeration(
+  feedbackId: string,
+  patch: { flagged: boolean; excluded_from_adaptation: boolean; flag_reason: string | null },
+): Promise<void> {
+  const res = await sb().from("job_feedback").update(patch).eq("feedback_id", feedbackId);
+  orThrow(res, "updateFeedbackModeration");
+}
+
+export async function countRecentFeedbackAttempts(
+  where: { trackingTokenHash?: string; sourceHash?: string; sessionHash?: string },
+  sinceISO: string,
+): Promise<number> {
+  let query = sb().from("feedback_submission_attempts").select("attempt_id", { count: "exact", head: true }).gte("created_at", sinceISO);
+  if (where.trackingTokenHash) query = query.eq("tracking_token_hash", where.trackingTokenHash);
+  if (where.sourceHash) query = query.eq("source_hash", where.sourceHash);
+  if (where.sessionHash) query = query.eq("session_hash", where.sessionHash);
+  const res = await query;
+  if (res.error) {
+    if (isMissingTableError(res.error)) return 0;
+    orThrow(res, "countRecentFeedbackAttempts");
+  }
+  return res.count ?? 0;
+}
+
+export async function insertFeedbackAttempt(attempt: {
+  attempt_id: string;
+  tracking_token_hash: string;
+  source_hash: string;
+  session_hash: string | null;
+  created_at: string;
+}): Promise<void> {
+  const res = await sb().from("feedback_submission_attempts").insert(attempt);
+  if (res.error && !isMissingTableError(res.error)) orThrow(res, "insertFeedbackAttempt");
+}
+
+export async function listAdaptiveRecommendations(limit = 50): Promise<AdaptivePolicyRecommendation[]> {
+  const res = await sb()
+    .from("adaptive_policy_recommendations")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  return orThrow(res, "listAdaptiveRecommendations").map(rowToAdaptiveRecommendation);
+}
+
+export async function getAdaptiveRecommendation(id: string): Promise<AdaptivePolicyRecommendation | undefined> {
+  const res = await sb().from("adaptive_policy_recommendations").select("*").eq("recommendation_id", id).maybeSingle();
+  const row = orThrow(res, "getAdaptiveRecommendation");
+  return row ? rowToAdaptiveRecommendation(row) : undefined;
+}
+
+export async function insertAdaptiveRecommendation(r: AdaptivePolicyRecommendation): Promise<void> {
+  const res = await sb().from("adaptive_policy_recommendations").insert(adaptiveRecommendationToRow(r));
+  orThrow(res, "insertAdaptiveRecommendation");
+}
+
+export async function updateAdaptiveRecommendation(
+  id: string,
+  patch: Partial<AdaptivePolicyRecommendation>,
+): Promise<AdaptivePolicyRecommendation | undefined> {
+  const row: Record<string, unknown> = {};
+  for (const key of [
+    "status", "approved_at", "applied_at", "applied_by", "new_policy_version",
+  ] as const) {
+    if (patch[key] !== undefined) row[key] = patch[key];
+  }
+  const res = await sb().from("adaptive_policy_recommendations").update(row).eq("recommendation_id", id).select().maybeSingle();
+  const result = orThrow(res, "updateAdaptiveRecommendation");
+  return result ? rowToAdaptiveRecommendation(result) : undefined;
+}
+
+export async function insertAdaptiveHistory(h: AdaptivePolicyChangeHistory): Promise<void> {
+  const res = await sb().from("adaptive_policy_change_history").insert(adaptiveHistoryToRow(h));
+  orThrow(res, "insertAdaptiveHistory");
+}
+
+export async function listAdaptiveHistory(limit = 50): Promise<AdaptivePolicyChangeHistory[]> {
+  const res = await sb().from("adaptive_policy_change_history").select("*").order("created_at", { ascending: false }).limit(limit);
+  return orThrow(res, "listAdaptiveHistory").map(rowToAdaptiveHistory);
+}
+
 // ── Bulk reset (demo) ──────────────────────────────────────────
 
 export async function wipeAll(): Promise<void> {
   for (const table of [
     // job_feedback references jobs + technicians (FK) — must go first.
     "job_feedback",
+    "feedback_submission_attempts",
+    "adaptive_policy_change_history",
+    "adaptive_policy_recommendations",
     "agent_decision_log",
     "approval_requests",
     "notifications",
@@ -324,7 +493,7 @@ export async function wipeAll(): Promise<void> {
       // hasn't run that migration yet lose the reset/seed workflow
       // entirely over a table it doesn't have rows in anyway.
       const code = (res.error as { code?: string }).code;
-      if (table === "job_feedback" && code === "PGRST205") continue;
+      if (["job_feedback", "feedback_submission_attempts", "adaptive_policy_change_history", "adaptive_policy_recommendations"].includes(table) && code === "PGRST205") continue;
       orThrow(res, `wipe:${table}`);
     }
   }
@@ -334,6 +503,9 @@ function idCol(table: string): string {
   return (
     {
       job_feedback: "feedback_id",
+      feedback_submission_attempts: "attempt_id",
+      adaptive_policy_change_history: "change_id",
+      adaptive_policy_recommendations: "recommendation_id",
       agent_decision_log: "log_id",
       approval_requests: "approval_id",
       notifications: "notification_id",

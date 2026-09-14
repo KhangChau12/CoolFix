@@ -157,6 +157,8 @@ async function runBookingPipelineUnsafe(
     reschedule_history: [],
     public_tracking_token: trackingToken,
     tech_substatus: null,
+    dispatch_policy_version: ctx.config.policyVersion,
+    dispatch_policy_snapshot: ctx.config.dispatchPolicy,
   });
 
   // ── 1. Job-Intake (LLM) ─────────────────────────────────────────
@@ -229,6 +231,8 @@ async function runBookingPipelineUnsafe(
     reschedule_history: [],
     public_tracking_token: trackingToken,
     tech_substatus: null,
+    dispatch_policy_version: ctx.config.policyVersion,
+    dispatch_policy_snapshot: ctx.config.dispatchPolicy,
   };
   ctx.stageJob(job);
 

@@ -4,6 +4,8 @@
 
 import type {
   AgentDecisionLog,
+  AdaptivePolicyChangeHistory,
+  AdaptivePolicyRecommendation,
   ApprovalRequest,
   Job,
   JobFeedback,
@@ -66,6 +68,8 @@ export function rowToJob(r: any): Job {
     reschedule_history: r.reschedule_history ?? [],
     public_tracking_token: r.public_tracking_token,
     tech_substatus: r.tech_substatus ?? null,
+    dispatch_policy_version: r.dispatch_policy_version ?? null,
+    dispatch_policy_snapshot: r.dispatch_policy_snapshot ?? null,
   };
 }
 
@@ -92,6 +96,8 @@ export function jobToRow(j: Job) {
     reschedule_history: j.reschedule_history,
     public_tracking_token: j.public_tracking_token,
     tech_substatus: j.tech_substatus,
+    dispatch_policy_version: j.dispatch_policy_version ?? null,
+    dispatch_policy_snapshot: j.dispatch_policy_snapshot ?? null,
   };
 }
 
@@ -113,6 +119,8 @@ export function rowToDecision(r: any): AgentDecisionLog {
     headline: r.headline,
     latency_ms: r.latency_ms ?? 0,
     guardrail_notes: r.guardrail_notes ?? [],
+    policy_version: r.policy_version ?? null,
+    dispatch_policy_snapshot: r.dispatch_policy_snapshot ?? null,
   };
 }
 
@@ -134,6 +142,8 @@ export function decisionToRow(d: AgentDecisionLog) {
     headline: d.headline,
     latency_ms: d.latency_ms,
     guardrail_notes: d.guardrail_notes,
+    policy_version: d.policy_version ?? null,
+    dispatch_policy_snapshot: d.dispatch_policy_snapshot ?? null,
   };
 }
 
@@ -235,6 +245,17 @@ export function rowToConfig(r: any): RuntimeConfig {
       commercial_chiller: 320,
     },
     llmMode: r.llm_mode ?? "stub",
+    policyVersion: r.policy_version ?? "policy-v1",
+    adaptivePolicy: {
+      enabled: r.adaptive_policy_enabled ?? false,
+      mode: r.adaptive_policy_mode === "automatic" ? "automatic" : "recommendation_only",
+      minFeedbackCount: Number(r.adaptive_min_feedback_count ?? 20),
+      minUniqueTechnicians: Number(r.adaptive_min_unique_technicians ?? 3),
+      maxChangePerUpdate: Number(r.adaptive_max_change ?? 0.02),
+      cooldownDays: Number(r.adaptive_cooldown_days ?? 14),
+      minConfidence: Number(r.adaptive_min_confidence ?? 0.75),
+      maxCustomerSatisfactionWeight: Number(r.adaptive_max_customer_satisfaction_weight ?? 0.15),
+    },
   };
 }
 
@@ -268,6 +289,17 @@ export function configToRow(
     row.capacity_total_per_day = c.capacityTotalPerDay;
   if (c.basePrice !== undefined) row.base_price = c.basePrice;
   if (c.llmMode !== undefined) row.llm_mode = c.llmMode;
+  if (c.policyVersion !== undefined) row.policy_version = c.policyVersion;
+  if (c.adaptivePolicy !== undefined) {
+    row.adaptive_policy_enabled = c.adaptivePolicy.enabled;
+    row.adaptive_policy_mode = c.adaptivePolicy.mode;
+    row.adaptive_min_feedback_count = c.adaptivePolicy.minFeedbackCount;
+    row.adaptive_min_unique_technicians = c.adaptivePolicy.minUniqueTechnicians;
+    row.adaptive_max_change = c.adaptivePolicy.maxChangePerUpdate;
+    row.adaptive_cooldown_days = c.adaptivePolicy.cooldownDays;
+    row.adaptive_min_confidence = c.adaptivePolicy.minConfidence;
+    row.adaptive_max_customer_satisfaction_weight = c.adaptivePolicy.maxCustomerSatisfactionWeight;
+  }
   return row;
 }
 
@@ -318,6 +350,10 @@ export function rowToFeedback(r: any): JobFeedback {
     improvement_tags: sanitizeTagArray(r.improvement_tags, FEEDBACK_IMPROVEMENT_TAGS),
     comment: r.comment ?? null,
     created_at: toISO(r.created_at),
+    source_hash: r.source_hash ?? null,
+    flagged: r.flagged ?? false,
+    excluded_from_adaptation: r.excluded_from_adaptation ?? false,
+    flag_reason: r.flag_reason ?? null,
   };
 }
 
@@ -331,6 +367,100 @@ export function feedbackToRow(f: JobFeedback) {
     improvement_tags: f.improvement_tags,
     comment: f.comment,
     created_at: f.created_at,
+    source_hash: f.source_hash ?? null,
+    flagged: f.flagged ?? false,
+    excluded_from_adaptation: f.excluded_from_adaptation ?? false,
+    flag_reason: f.flag_reason ?? null,
+  };
+}
+
+export function rowToAdaptiveRecommendation(r: any): AdaptivePolicyRecommendation {
+  return {
+    recommendation_id: r.recommendation_id,
+    company_id: r.company_id ?? "demo-company",
+    tier: r.tier,
+    current_policy: r.current_policy,
+    proposed_policy: r.proposed_policy,
+    changes: r.changes ?? [],
+    supporting_metrics: r.supporting_metrics ?? {},
+    sample_count: Number(r.sample_count ?? 0),
+    unique_technician_count: Number(r.unique_technician_count ?? 0),
+    confidence: Number(r.confidence ?? 0),
+    explanation: r.explanation ?? "",
+    limitations: r.limitations ?? [],
+    included_feedback_ids: r.included_feedback_ids ?? [],
+    excluded_feedback_ids: r.excluded_feedback_ids ?? [],
+    status: r.status,
+    created_at: toISO(r.created_at),
+    approved_at: r.approved_at ? toISO(r.approved_at) : null,
+    applied_at: r.applied_at ? toISO(r.applied_at) : null,
+    applied_by: r.applied_by ?? null,
+    previous_policy_version: r.previous_policy_version,
+    new_policy_version: r.new_policy_version ?? null,
+    source: r.source ?? "rule",
+  };
+}
+
+export function adaptiveRecommendationToRow(r: AdaptivePolicyRecommendation) {
+  return {
+    recommendation_id: r.recommendation_id,
+    company_id: r.company_id,
+    tier: r.tier,
+    current_policy: r.current_policy,
+    proposed_policy: r.proposed_policy,
+    changes: r.changes,
+    supporting_metrics: r.supporting_metrics,
+    sample_count: r.sample_count,
+    unique_technician_count: r.unique_technician_count,
+    confidence: r.confidence,
+    explanation: r.explanation,
+    limitations: r.limitations,
+    included_feedback_ids: r.included_feedback_ids,
+    excluded_feedback_ids: r.excluded_feedback_ids,
+    status: r.status,
+    created_at: r.created_at,
+    approved_at: r.approved_at,
+    applied_at: r.applied_at,
+    applied_by: r.applied_by,
+    previous_policy_version: r.previous_policy_version,
+    new_policy_version: r.new_policy_version,
+    source: r.source,
+  };
+}
+
+export function rowToAdaptiveHistory(r: any): AdaptivePolicyChangeHistory {
+  return {
+    change_id: r.change_id,
+    recommendation_id: r.recommendation_id ?? null,
+    company_id: r.company_id ?? "demo-company",
+    tier: r.tier,
+    before_policy: r.before_policy,
+    after_policy: r.after_policy,
+    reason: r.reason,
+    supporting_metrics: r.supporting_metrics ?? {},
+    feedback_ids: r.feedback_ids ?? [],
+    approved_by: r.approved_by ?? null,
+    change_mode: r.change_mode,
+    created_at: toISO(r.created_at),
+    rollback_of_change_id: r.rollback_of_change_id ?? null,
+  };
+}
+
+export function adaptiveHistoryToRow(h: AdaptivePolicyChangeHistory) {
+  return {
+    change_id: h.change_id,
+    recommendation_id: h.recommendation_id,
+    company_id: h.company_id,
+    tier: h.tier,
+    before_policy: h.before_policy,
+    after_policy: h.after_policy,
+    reason: h.reason,
+    supporting_metrics: h.supporting_metrics,
+    feedback_ids: h.feedback_ids,
+    approved_by: h.approved_by,
+    change_mode: h.change_mode,
+    created_at: h.created_at,
+    rollback_of_change_id: h.rollback_of_change_id,
   };
 }
 

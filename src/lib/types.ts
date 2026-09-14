@@ -237,6 +237,10 @@ export interface Job {
    *  by the technician-status PATCH, cleared once the job leaves
    *  in_progress. */
   tech_substatus: "en_route" | "arrived" | null;
+  /** Policy snapshot used by the assignment pass; historical jobs keep this
+   * even after the company changes its current policy. */
+  dispatch_policy_version?: string | null;
+  dispatch_policy_snapshot?: DispatchPolicy | null;
 }
 
 export type PipelineStage =
@@ -315,6 +319,9 @@ export interface AgentDecisionLog {
   latency_ms: number;
   /** Guardrail notes: injection flags, least-privilege denials, etc. */
   guardrail_notes: string[];
+  /** Configuration snapshot that produced this decision, when applicable. */
+  policy_version?: string | null;
+  dispatch_policy_snapshot?: DispatchPolicy | null;
 }
 
 export interface CandidateScore {
@@ -468,6 +475,11 @@ export interface JobFeedback {
   improvement_tags: FeedbackImprovementTag[];
   comment: string | null;
   created_at: string;
+  /** Privacy-preserving source fingerprint used only for abuse detection. */
+  source_hash?: string | null;
+  flagged?: boolean;
+  excluded_from_adaptation?: boolean;
+  flag_reason?: string | null;
 }
 
 // ── Runtime config (Settings screen) ──────────────────────────────
@@ -486,7 +498,9 @@ export interface RuntimeConfig {
    * keep costs even". Replaces the old flat `scoreWeights` — see
    * `DISPATCH_POLICY` for the shipped defaults and `src/agents/scoring.ts`.
    */
-  dispatchPolicy: Record<Tier, Record<ScoreComponent, number>>;
+  dispatchPolicy: DispatchPolicy;
+  /** Monotonic application identifier for future assignment snapshots. */
+  policyVersion: string;
   /** Disruption auto-commit threshold: max customers affected. */
   hitlMaxCustomersAffected: number;
   /** Disruption auto-commit threshold: max added travel km. */
@@ -498,6 +512,7 @@ export interface RuntimeConfig {
   /** Base price (SGD) per required skill. */
   basePrice: Record<SkillTag, number>;
   llmMode: "stub" | "gateway" | "openai";
+  adaptivePolicy: AdaptivePolicySettings;
 }
 
 // ── Assignment scoring ────────────────────────────────────────────
@@ -512,6 +527,102 @@ export type ScoreComponent =
   | "slaHeadroom"
   | "loadBalance"
   | "customerSatisfaction";
+
+export type DispatchPolicy = Record<Tier, Record<ScoreComponent, number>>;
+
+export type AdaptivePolicyMode = "recommendation_only" | "automatic";
+
+export interface AdaptivePolicySettings {
+  enabled: boolean;
+  mode: AdaptivePolicyMode;
+  minFeedbackCount: number;
+  minUniqueTechnicians: number;
+  maxChangePerUpdate: number;
+  cooldownDays: number;
+  minConfidence: number;
+  maxCustomerSatisfactionWeight: number;
+}
+
+export type AdaptiveRecommendationStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "applied"
+  | "rolled_back";
+
+export type AdaptiveRecommendationSource = "rule" | "ai_recommendation" | "manual";
+
+export interface AdaptivePolicyChange {
+  component: ScoreComponent;
+  oldWeight: number;
+  newWeight: number;
+  delta: number;
+  reason: string;
+}
+
+export interface AdaptivePolicyRecommendation {
+  recommendation_id: string;
+  company_id: string;
+  tier: Tier;
+  current_policy: Record<ScoreComponent, number>;
+  proposed_policy: Record<ScoreComponent, number>;
+  changes: AdaptivePolicyChange[];
+  supporting_metrics: Record<string, unknown>;
+  sample_count: number;
+  unique_technician_count: number;
+  confidence: number;
+  explanation: string;
+  limitations: string[];
+  included_feedback_ids: string[];
+  excluded_feedback_ids: string[];
+  status: AdaptiveRecommendationStatus;
+  created_at: string;
+  approved_at: string | null;
+  applied_at: string | null;
+  applied_by: string | null;
+  previous_policy_version: string;
+  new_policy_version: string | null;
+  source: AdaptiveRecommendationSource;
+}
+
+export interface AdaptiveModeAnalysis {
+  tier: Tier;
+  policyVersion: string;
+  sampleCount: number;
+  uniqueTechnicianCount: number;
+  averageRating: number | null;
+  smoothedRating: number;
+  trend: "up" | "down" | "flat" | null;
+  distribution: Record<1 | 2 | 3 | 4 | 5, number>;
+  positiveTags: { tag: string; count: number }[];
+  improvementTags: { tag: string; count: number }[];
+  rescheduleFrequency: number | null;
+  lateArrivalFrequency: number | null;
+  averageScoreComponents: Partial<Record<ScoreComponent, number>>;
+  includedFeedbackIds: string[];
+  excludedFeedbackIds: string[];
+  suspiciousReasons: string[];
+  confidence: number;
+  recommendation: AdaptivePolicyRecommendation | null;
+}
+
+export interface AdaptivePolicyChangeHistory {
+  change_id: string;
+  recommendation_id: string | null;
+  company_id: string;
+  tier: Tier;
+  before_policy: Record<ScoreComponent, number>;
+  after_policy: Record<ScoreComponent, number>;
+  reason: string;
+  supporting_metrics: Record<string, unknown>;
+  feedback_ids: string[];
+  approved_by: string | null;
+  change_mode: "automatic" | "manual" | "rollback";
+  created_at: string;
+  rollback_of_change_id: string | null;
+}
+
+export const DEMO_COMPANY_ID = "demo-company";
 
 export const SCORE_COMPONENTS: ScoreComponent[] = [
   "travel",
@@ -622,6 +733,7 @@ export const DEFAULT_CONFIG: RuntimeConfig = {
   clockMode: "real",
   customTimeISO: null,
   dispatchPolicy: DISPATCH_POLICY,
+  policyVersion: "policy-v1",
   // 1 = a re-plan that moves ONE customer's appointment may auto-commit —
   // but only if it also clears every rail in AUTO_REPLAN_LIMITS (Flexible
   // tier only, same-day, <=3h shift, >=2h gap, no SLA breach, not already
@@ -639,4 +751,14 @@ export const DEFAULT_CONFIG: RuntimeConfig = {
     commercial_chiller: 320,
   },
   llmMode: "stub",
+  adaptivePolicy: {
+    enabled: false,
+    mode: "recommendation_only",
+    minFeedbackCount: 20,
+    minUniqueTechnicians: 3,
+    maxChangePerUpdate: 0.02,
+    cooldownDays: 14,
+    minConfidence: 0.75,
+    maxCustomerSatisfactionWeight: 0.15,
+  },
 };
