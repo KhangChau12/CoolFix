@@ -12,7 +12,7 @@
 // picker below) for a stable link, e.g. to walk a judge through one
 // booking after the fact.
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { apiGet } from "@/lib/client";
 import { useRealtime } from "@/components/useRealtime";
@@ -51,11 +51,11 @@ function AgentFlowPageInner() {
   // the log but whose full job record hasn't flushed yet (customer/tier
   // come from the Orchestrator "New booking received" row).
   const [logStub, setLogStub] = useState<LogStub | null>(null);
-  const [followId, setFollowId] = useState<string | null>(pinnedJobId);
+  // The most recently created booking we know about, tracked continuously
+  // regardless of pin state — so unpinning shows it instantly instead of
+  // waiting on a fresh discovery round trip.
+  const [latestJobId, setLatestJobId] = useState<string | null>(null);
   const followingLatest = !pinnedJobId;
-  // The newest job id we've already adopted — so a burst of polls doesn't
-  // keep "re-discovering" the same booking.
-  const adoptedNewest = useRef<string | null>(null);
 
   // Discovery runs off the agent_decision_log, NOT the jobs table: a
   // decision row lands the instant its agent finishes (see
@@ -109,14 +109,10 @@ function AgentFlowPageInner() {
         }
       }
 
+      setLatestJobId(newestEntry ? newestEntry[0] : null);
+
       if (followingLatest && newestEntry) {
         const [newestId, firstRow] = newestEntry;
-        // Adopt a booking the first time we see it — the ref guards against
-        // a burst of polls re-triggering the switch for the same job.
-        if (adoptedNewest.current !== newestId) {
-          adoptedNewest.current = newestId;
-          setFollowId(newestId);
-        }
         // Header stand-in until the real job record shows up.
         setLogStub(stubFromRow(newestId, firstRow));
       } else if (!followingLatest && pinnedJobId) {
@@ -138,10 +134,7 @@ function AgentFlowPageInner() {
     load();
   }, [load]);
 
-  useEffect(() => {
-    setFollowId(pinnedJobId);
-  }, [pinnedJobId]);
-
+  const followId = pinnedJobId ?? latestJobId;
   const shownJob = jobs.find((j) => j.job_id === followId) ?? null;
   // While the pipeline is mid-run the full job record may not have flushed
   // yet — fall back to the header stand-in built from the first decision row.
@@ -188,7 +181,6 @@ function AgentFlowPageInner() {
             className="btn"
             style={{ fontWeight: 400, minWidth: 220 }}
           >
-            <option value="">— follow latest —</option>
             {pickerJobs.slice(0, 30).map((j) => (
               <option key={j.job_id} value={j.job_id}>
                 {j.customer_name} · {j.job_id}
