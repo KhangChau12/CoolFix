@@ -7,9 +7,10 @@
 // Re-seeds the DB first (same convention as scripts/smoke.ts /
 // trackingSmoke.ts). Covers: submission, validation, authorization via the
 // tracking token, duplicate rejection (including a real concurrent race),
-// aggregation correctness, cold start, and — importantly — that the new
-// customerSatisfaction scoring component never overrides a hard
-// constraint, only nudges the ranking among already-qualified candidates.
+// aggregation correctness, cold start, and — importantly — that customer
+// feedback/ratings are visible and aggregated but never affect the
+// Assignment Agent's choice of technician (customerSatisfaction always
+// contributes exactly 0 to the score, hard-enforced in scoring.ts).
 
 import "./_env";
 import * as repo from "../src/lib/repo";
@@ -202,15 +203,24 @@ async function main() {
     })(),
   );
 
-  line("16/17. Hard constraints still win; rating only nudges among the qualified");
+  line("16/17. Hard constraints still win; customer feedback never affects the AI's choice");
   {
     const ctx = await AgentContext.create();
+    // Fixed at 10:00 SGT, 14 days out (02:00 UTC) — comfortably inside
+    // every technician's shift and well past the seed data's -6..+6 day
+    // window (src/data/seed.ts LATER_DAYS), so this can't spuriously trip
+    // the working-hours or route-feasibility hard constraints depending on
+    // what time the suite happens to run or what the seed already booked.
+    const farOutSgt = new Date();
+    farOutSgt.setUTCDate(farOutSgt.getUTCDate() + 14);
+    farOutSgt.setUTCHours(2, 0, 0, 0);
+    const scoringTestTime = farOutSgt.toISOString();
     // tech_kelvin only holds basic_maintenance — scoring a job that needs
     // refrigerant_handling must exclude him regardless of any rating.
     const pool = scorePool(ctx, ["tech_marcus", "tech_kelvin"], {
       jobLocation: { lat: 1.3521, lng: 103.8198 },
       skillRequired: ["refrigerant_handling"],
-      scheduledTime: new Date(Date.now() + 6 * 3600_000).toISOString(),
+      scheduledTime: scoringTestTime,
       ignoreJobId: "__scoring_test__",
       tier: "standard",
     });
@@ -221,10 +231,25 @@ async function main() {
     check("qualified technician (tech_marcus) is scored", pool.some((p) => p.technician_id === "tech_marcus"));
     const marcusEntry = pool.find((p) => p.technician_id === "tech_marcus");
     check(
-      "customer_satisfaction is present on the breakdown and contributes a small, non-zero fraction of the total",
-      !!marcusEntry &&
-        (marcusEntry.breakdown.customer_satisfaction ?? 0) > 0 &&
-        (marcusEntry.breakdown.customer_satisfaction ?? 0) < marcusEntry.breakdown.total,
+      "customer_satisfaction is present on the breakdown (still computed for transparency) but always contributes exactly 0 to the total, whatever tech_marcus's rating is",
+      !!marcusEntry && (marcusEntry.breakdown.customer_satisfaction ?? -1) === 0,
+    );
+    check(
+      "a stored policy that tries to weight customer satisfaction is ignored by the scorer",
+      (() => {
+        const original = ctx.config.dispatchPolicy!.standard.customerSatisfaction;
+        ctx.config.dispatchPolicy!.standard.customerSatisfaction = 0.9;
+        const rigged = scorePool(ctx, ["tech_marcus", "tech_kelvin"], {
+          jobLocation: { lat: 1.3521, lng: 103.8198 },
+          skillRequired: ["refrigerant_handling"],
+          scheduledTime: scoringTestTime,
+          ignoreJobId: "__scoring_test__",
+          tier: "standard",
+        });
+        ctx.config.dispatchPolicy!.standard.customerSatisfaction = original;
+        const riggedMarcus = rigged.find((p) => p.technician_id === "tech_marcus");
+        return !!riggedMarcus && (riggedMarcus.breakdown.customer_satisfaction ?? -1) === 0;
+      })(),
     );
   }
 

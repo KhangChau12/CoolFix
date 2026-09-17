@@ -653,18 +653,19 @@ export const SCORE_COMPONENT_LABEL: Record<ScoreComponent, string> = {
  *   • flexible — the customer has weeks of slack; spread the work to
  *                whoever is under-loaded and keep routes tight.
  *
- * `customerSatisfaction` (historical rating, see src/lib/rating.ts) is
- * deliberately small (0.05 = 5%) everywhere — a SOFT tie-breaker among
- * candidates who already cleared every hard constraint, never a reason on
- * its own to prefer one qualified technician over another. The other five
- * weights are scaled by 0.95 from their pre-feedback values so each row
- * still sums to 1.0.
+ * `customerSatisfaction` (historical rating, see src/lib/rating.ts) is kept
+ * at 0 by default: customer feedback and reviews are shown to coordinators
+ * and feed the adaptive-policy *recommendations*, but must never by
+ * themselves change which technician the agent picks. See
+ * `weight()`/`rawComponentsForTech()` in src/agents/scoring.ts, which hard-
+ * zero this component's contribution regardless of what a stored policy
+ * (default or adaptive) says.
  */
 export const DISPATCH_POLICY: Record<Tier, Record<ScoreComponent, number>> = {
-  urgent: { travel: 0.399, skillFit: 0.266, availability: 0.114, slaHeadroom: 0.171, loadBalance: 0.0, customerSatisfaction: 0.05 },
-  priority: { travel: 0.323, skillFit: 0.247, availability: 0.143, slaHeadroom: 0.114, loadBalance: 0.124, customerSatisfaction: 0.05 },
-  standard: { travel: 0.266, skillFit: 0.209, availability: 0.162, slaHeadroom: 0.048, loadBalance: 0.266, customerSatisfaction: 0.05 },
-  flexible: { travel: 0.209, skillFit: 0.171, availability: 0.171, slaHeadroom: 0.019, loadBalance: 0.38, customerSatisfaction: 0.05 },
+  urgent: { travel: 0.42, skillFit: 0.28, availability: 0.12, slaHeadroom: 0.18, loadBalance: 0.0, customerSatisfaction: 0 },
+  priority: { travel: 0.34, skillFit: 0.26, availability: 0.15, slaHeadroom: 0.12, loadBalance: 0.13, customerSatisfaction: 0 },
+  standard: { travel: 0.28, skillFit: 0.22, availability: 0.17, slaHeadroom: 0.05, loadBalance: 0.28, customerSatisfaction: 0 },
+  flexible: { travel: 0.22, skillFit: 0.18, availability: 0.18, slaHeadroom: 0.02, loadBalance: 0.4, customerSatisfaction: 0 },
 };
 
 /**
@@ -759,6 +760,9 @@ export const DEFAULT_CONFIG: RuntimeConfig = {
     maxChangePerUpdate: 0.02,
     cooldownDays: 14,
     minConfidence: 0.75,
-    maxCustomerSatisfactionWeight: 0.15,
+    // Customer feedback/ratings must never affect which technician the
+    // agent picks — kept at 0 so this stays true even if a coordinator
+    // later approves an adaptive recommendation or flips to automatic mode.
+    maxCustomerSatisfactionWeight: 0,
   },
 };

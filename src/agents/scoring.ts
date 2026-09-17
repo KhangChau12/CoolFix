@@ -447,16 +447,25 @@ function policyFor(
   tier: Tier,
 ): Record<ScoreComponent, number> {
   const p = ctx.config.dispatchPolicy?.[tier] ?? DISPATCH_POLICY[tier];
-  // Normalise defensively so `total` stays in [0,1] even if a stored config
-  // row's weights don't sum to exactly 1.
-  const sum = Object.values(p).reduce((s, v) => s + (Number(v) || 0), 0) || 1;
+  // Customer feedback/ratings must never affect which technician the agent
+  // picks. Hard-zero this weight HERE — not just in the DISPATCH_POLICY
+  // default — so it stays zero no matter what a stored config row says
+  // (an older migrated database, a hand-edited Settings value, or a future
+  // adaptive-policy recommendation). The remaining components are
+  // normalised among themselves so `total` still tops out at 1.
+  const sum =
+    (Number(p.travel) || 0) +
+    (Number(p.skillFit) || 0) +
+    (Number(p.availability) || 0) +
+    (Number(p.slaHeadroom) || 0) +
+    (Number(p.loadBalance) || 0) || 1;
   return {
-    travel: p.travel / sum,
-    skillFit: p.skillFit / sum,
-    availability: p.availability / sum,
-    slaHeadroom: p.slaHeadroom / sum,
-    loadBalance: p.loadBalance / sum,
-    customerSatisfaction: (Number(p.customerSatisfaction) || 0) / sum,
+    travel: (Number(p.travel) || 0) / sum,
+    skillFit: (Number(p.skillFit) || 0) / sum,
+    availability: (Number(p.availability) || 0) / sum,
+    slaHeadroom: (Number(p.slaHeadroom) || 0) / sum,
+    loadBalance: (Number(p.loadBalance) || 0) / sum,
+    customerSatisfaction: 0,
   };
 }
 

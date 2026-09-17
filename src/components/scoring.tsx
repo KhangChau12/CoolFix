@@ -155,10 +155,10 @@ export const SCORING_COMPONENTS: {
   {
     key: "customerSatisfaction",
     label: "Customer satisfaction",
-    weightNote: "absolute [0,1] · small default weight",
+    weightNote: "absolute [0,1] · weight fixed at 0",
     measures:
-      "Bayesian-smoothed historical rating from past customer feedback (1-5★, minimum-sample smoothed toward a neutral prior so one review can't swing it). A technician with no ratings yet scores at that same neutral prior — never 0, never penalised for being new.",
-    why: "A soft tie-breaker only, by design: it runs after every hard constraint (skill, hours, no double-booking, route feasibility) has already filtered the pool, and its weight defaults to a conservative 5% everywhere. It can nudge which of several qualified technicians gets the job; it can never make an unqualified one win.",
+      "Bayesian-smoothed historical rating from past customer feedback (1-5★, minimum-sample smoothed toward a neutral prior so one review can't swing it). Still computed and shown here for transparency, and it feeds coordinator-facing feedback trends and adaptive-policy recommendations.",
+    why: "It does not affect which technician gets picked. The Assignment Agent hard-zeroes this weight (src/agents/scoring.ts) regardless of what any stored policy says, so ratings and reviews stay informational — never a factor in the AI's choice.",
   },
 ];
 

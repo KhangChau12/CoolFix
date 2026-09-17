@@ -37,7 +37,11 @@ const DEFAULT_SETTINGS: AdaptivePolicySettings = {
   maxChangePerUpdate: 0.02,
   cooldownDays: 14,
   minConfidence: 0.75,
-  maxCustomerSatisfactionWeight: 0.15,
+  // Customer feedback/ratings must never affect which technician the agent
+  // picks (src/agents/scoring.ts hard-zeroes this weight regardless of what
+  // a proposal sets it to) — keep the cap at 0 so recommendations and the
+  // policy shown to coordinators stay honest about that.
+  maxCustomerSatisfactionWeight: 0,
 };
 
 type FeedbackJob = { feedback: JobFeedback; job: Job };

@@ -28,17 +28,17 @@ const POLICY_PRESETS: Record<
   speed: {
     label: "Speed first",
     blurb: "Nearest capable technician, fast. Best for urgent work.",
-    weights: { travel: 0.45, skillFit: 0.28, availability: 0.12, slaHeadroom: 0.10, loadBalance: 0.0, customerSatisfaction: 0.05 },
+    weights: { travel: 0.45, skillFit: 0.28, availability: 0.12, slaHeadroom: 0.15, loadBalance: 0.0, customerSatisfaction: 0 },
   },
   balanced: {
     label: "Balanced",
     blurb: "Trade travel against a sustainable, even day across the roster.",
-    weights: { travel: 0.3, skillFit: 0.24, availability: 0.16, slaHeadroom: 0.1, loadBalance: 0.15, customerSatisfaction: 0.05 },
+    weights: { travel: 0.3, skillFit: 0.24, availability: 0.16, slaHeadroom: 0.1, loadBalance: 0.2, customerSatisfaction: 0 },
   },
   fair: {
     label: "Spread the load",
     blurb: "Push work to under-loaded technicians. Best for flexible, non-urgent jobs.",
-    weights: { travel: 0.2, skillFit: 0.18, availability: 0.18, slaHeadroom: 0.02, loadBalance: 0.37, customerSatisfaction: 0.05 },
+    weights: { travel: 0.2, skillFit: 0.18, availability: 0.18, slaHeadroom: 0.02, loadBalance: 0.42, customerSatisfaction: 0 },
   },
 };
 
@@ -776,12 +776,19 @@ function PolicyTierCard({
                 min={0}
                 max={1}
                 step={0.01}
-                value={row[k] ?? 0}
+                value={k === "customerSatisfaction" ? 0 : (row[k] ?? 0)}
+                disabled={k === "customerSatisfaction"}
                 onChange={(e) => onComponent(k, Number(e.target.value))}
-                style={{ width: "100%", accentColor: compColor[k] }}
+                style={{
+                  width: "100%",
+                  accentColor: compColor[k],
+                  opacity: k === "customerSatisfaction" ? 0.5 : 1,
+                }}
               />
               <div className="faint" style={{ fontSize: 10.5, lineHeight: 1.45 }}>
-                {meta[k]?.measures}
+                {k === "customerSatisfaction"
+                  ? "Fixed at 0 — customer feedback never affects technician choice."
+                  : meta[k]?.measures}
               </div>
             </div>
           ))}
