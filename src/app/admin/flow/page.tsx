@@ -86,9 +86,28 @@ function AgentFlowPageInner() {
           firstRowByJob.set(d.job_id, d);
         }
       }
-      const newestEntry = [...firstRowByJob.entries()].sort(
-        ([, a], [, b]) => b.timestamp.localeCompare(a.timestamp) || seqOf(b.log_id) - seqOf(a.log_id),
-      )[0];
+      // Rank by the job's real `created_at` once its full record has
+      // landed — falling back to the first decision-log row's timestamp
+      // only while a booking is still mid-pipeline with no job row yet.
+      // Ranking off decision-log timestamps alone breaks on seed/demo data:
+      // many seeded jobs share the exact same `created_at` (a flat
+      // "N hours ago" default), so their first decision rows land at the
+      // same millisecond too, and the old log_id tiebreak — a counter that
+      // increments once per row across ALL jobs in seed order, not a true
+      // per-booking arrival signal — ends up picking whichever job the
+      // seeder happened to process last, not the one actually most
+      // recently booked.
+      const jobById = new Map(sortedJobs.map((j) => [j.job_id, j]));
+      let newestEntry: [string, AgentDecisionLog] | null = null;
+      let newestArrival = "";
+      for (const entry of firstRowByJob) {
+        const [jobId, firstRow] = entry;
+        const arrival = jobById.get(jobId)?.created_at ?? firstRow.timestamp;
+        if (arrival > newestArrival) {
+          newestArrival = arrival;
+          newestEntry = entry;
+        }
+      }
 
       if (followingLatest && newestEntry) {
         const [newestId, firstRow] = newestEntry;
