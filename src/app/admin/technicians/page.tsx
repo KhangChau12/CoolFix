@@ -19,6 +19,7 @@ import {
   type Job,
   type SkillTag,
   type Technician,
+  type TechnicianUnavailableResult,
 } from "@/lib/types";
 import { topTags, type TechnicianRatingSummary } from "@/lib/rating";
 
@@ -44,6 +45,7 @@ export default function TechniciansPage() {
 
   useRealtime("technicians", load);
   useRealtime("job_feedback", load);
+  useRealtime("jobs", load);
   useEffect(() => {
     load();
   }, [load]);
@@ -211,9 +213,17 @@ export default function TechniciansPage() {
                     <tr>
                       <td colSpan={6} style={{ background: "var(--surface-2)", padding: "16px 18px" }}>
                         <PerformanceDetail
+                          technicianId={t.technician_id}
                           technicianName={t.name}
                           rating={rating}
                           completedJobs={completedCountFor(t)}
+                          todayCount={load.todayCount}
+                          onDisrupted={(msg, ok) => {
+                            // No manual refetch needed — useRealtime("jobs"/
+                            // "technicians", load) above already picks up
+                            // whatever this action changed.
+                            setToast({ msg, kind: ok ? "success" : "error" });
+                          }}
                         />
                       </td>
                     </tr>
@@ -383,20 +393,26 @@ function RatingSummaryCell({ rating }: { rating: TechnicianRatingSummary | undef
 // metric this codebase actually has real data for (see completedCountFor's
 // comment — no arrival timestamps exist to compute a genuine on-time %).
 function PerformanceDetail({
+  technicianId,
   technicianName,
   rating,
   completedJobs,
+  todayCount,
+  onDisrupted,
 }: {
+  technicianId: string;
   technicianName: string;
   rating: TechnicianRatingSummary | undefined;
   completedJobs: number;
+  todayCount: number;
+  onDisrupted: (msg: string, ok: boolean) => void;
 }) {
   const r = rating;
   const topPositive = r ? topTags(r.positiveTagCounts, FEEDBACK_POSITIVE_TAGS, 3) : [];
   const topImprovement = r ? topTags(r.improvementTagCounts, FEEDBACK_IMPROVEMENT_TAGS, 3) : [];
 
   return (
-    <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+    <div className="grid" style={{ gridTemplateColumns: "1fr 1fr 1fr", gap: 20 }}>
       <div>
         <div className="faint" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
           Rating distribution
@@ -444,6 +460,139 @@ function PerformanceDetail({
           </div>
         )}
       </div>
+
+      <DisruptionTrigger
+        technicianId={technicianId}
+        technicianName={technicianName}
+        todayCount={todayCount}
+        onDone={onDisrupted}
+      />
+    </div>
+  );
+}
+
+// ── Disruption demo trigger ─────────────────────────────────────────
+// "This technician can't work the rest of today" — the one real entry
+// point into the technician-unavailable disruption pipeline (see
+// runTechnicianUnavailable in agents/orchestrator.ts). Re-plans every one
+// of their remaining, not-yet-started jobs today: a clean same-slot swap
+// auto-commits, anything riskier (or touching a frozen appointment) goes to
+// the Approvals queue. Reusing the existing decision log / reasoning feed /
+// approvals UI for the result — this panel just triggers it and summarises
+// what happened.
+function DisruptionTrigger({
+  technicianId,
+  technicianName,
+  todayCount,
+  onDone,
+}: {
+  technicianId: string;
+  technicianName: string;
+  todayCount: number;
+  onDone: (msg: string, ok: boolean) => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<TechnicianUnavailableResult | null>(null);
+
+  async function trigger() {
+    setBusy(true);
+    try {
+      const r = await apiSend<TechnicianUnavailableResult>(
+        `/api/technicians/${encodeURIComponent(technicianId)}/unavailable`,
+        "POST",
+        { reason: "Called in sick" },
+      );
+      setResult(r);
+      setConfirming(false);
+      const auto = r.affectedJobs.filter((j) => j.outcome === "auto_reassigned").length;
+      const needsApproval = r.affectedJobs.filter((j) => j.outcome === "needs_approval").length;
+      const unresolvable = r.affectedJobs.filter((j) => j.outcome === "unresolvable").length;
+      onDone(
+        r.affectedJobs.length === 0
+          ? `${technicianName} has no remaining jobs today — nothing to re-plan.`
+          : `${technicianName} unavailable: ${auto} auto-reassigned, ${needsApproval} sent for approval${unresolvable ? `, ${unresolvable} need manual handling` : ""}.`,
+        true,
+      );
+    } catch (e) {
+      onDone((e as Error).message, false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <div className="faint" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
+        Disruption demo
+      </div>
+      {!confirming && !result && (
+        <>
+          <p className="faint" style={{ fontSize: 11, lineHeight: 1.5, margin: "0 0 10px" }}>
+            Simulate {technicianName} becoming unavailable for the rest of today. Their {todayCount || "remaining"} job
+            {todayCount === 1 ? "" : "s"} get re-planned live — a clean swap auto-commits, anything riskier goes to
+            Approvals.
+          </p>
+          <button className="btn" style={{ fontSize: 11.5 }} onClick={() => setConfirming(true)} disabled={busy}>
+            Mark unavailable for today
+          </button>
+        </>
+      )}
+      {confirming && (
+        <div className="card" style={{ padding: 10, background: "var(--surface)" }}>
+          <p style={{ fontSize: 11.5, margin: "0 0 8px" }}>
+            Mark <strong>{technicianName}</strong> unavailable for the rest of today?
+          </p>
+          <div className="row" style={{ gap: 6 }}>
+            <button className="btn btn-primary" style={{ fontSize: 11 }} onClick={trigger} disabled={busy}>
+              {busy ? "Re-planning…" : "Confirm"}
+            </button>
+            <button className="btn" style={{ fontSize: 11 }} onClick={() => setConfirming(false)} disabled={busy}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {result && (
+        <div className="stack" style={{ gap: 5 }}>
+          {result.affectedJobs.length === 0 && (
+            <div className="faint" style={{ fontSize: 11.5 }}>No remaining jobs today — nothing to re-plan.</div>
+          )}
+          {result.affectedJobs.map((j) => (
+            <div
+              key={j.jobId}
+              className="row"
+              style={{ gap: 6, fontSize: 11, alignItems: "flex-start" }}
+              title={j.reason}
+            >
+              <span
+                className="chip"
+                style={{
+                  fontSize: 9,
+                  flexShrink: 0,
+                  color: j.outcome === "auto_reassigned" ? "var(--success)" : j.outcome === "needs_approval" ? "var(--tier-priority)" : "var(--tier-urgent)",
+                  borderColor: "currentColor",
+                }}
+              >
+                {j.outcome === "auto_reassigned" ? "AUTO" : j.outcome === "needs_approval" ? (j.approvalKind === "emergency_override" ? "OVERRIDE" : "APPROVAL") : "MANUAL"}
+              </span>
+              <span>
+                {j.customerName}
+                {j.outcome === "auto_reassigned" && j.newTechnicianName && (
+                  <span className="faint"> → {j.newTechnicianName}{j.sameSlot ? " (same time)" : " (re-timed)"}</span>
+                )}
+              </span>
+            </div>
+          ))}
+          <button
+            className="btn"
+            style={{ fontSize: 11, marginTop: 4, alignSelf: "flex-start" }}
+            onClick={() => setResult(null)}
+          >
+            Done
+          </button>
+        </div>
+      )}
     </div>
   );
 }

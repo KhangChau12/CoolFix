@@ -201,7 +201,7 @@ export default function SettingsPage() {
           <NumberField label="Maximum change per update" value={draft.adaptivePolicy.maxChangePerUpdate} min={0.005} max={0.02} step={0.005} onChange={(v) => set("adaptivePolicy", { ...draft.adaptivePolicy, maxChangePerUpdate: v })} />
           <NumberField label="Cooldown between changes" value={draft.adaptivePolicy.cooldownDays} min={1} max={90} step={1} unit="days" onChange={(v) => set("adaptivePolicy", { ...draft.adaptivePolicy, cooldownDays: v })} />
           <NumberField label="Minimum confidence" value={draft.adaptivePolicy.minConfidence} min={0.5} max={1} step={0.05} onChange={(v) => set("adaptivePolicy", { ...draft.adaptivePolicy, minConfidence: v })} />
-          <NumberField label="Maximum customer-satisfaction weight" value={draft.adaptivePolicy.maxCustomerSatisfactionWeight} min={0.05} max={0.15} step={0.01} onChange={(v) => set("adaptivePolicy", { ...draft.adaptivePolicy, maxCustomerSatisfactionWeight: v })} />
+          <NumberField label="Maximum customer-satisfaction weight" value={draft.adaptivePolicy.maxCustomerSatisfactionWeight} min={0} max={0.15} step={0.01} onChange={(v) => set("adaptivePolicy", { ...draft.adaptivePolicy, maxCustomerSatisfactionWeight: v })} />
         </div>
         <p className="faint" style={{ fontSize: 11, lineHeight: 1.5, margin: "12px 0 0" }}>
           Default flow: recommendation → coordinator review → apply. Automatic mode is

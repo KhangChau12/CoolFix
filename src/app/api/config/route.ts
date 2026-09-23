@@ -49,6 +49,19 @@ export async function PATCH(req: Request) {
         (acc, k, i) => ({ ...acc, [k]: round3(raw[i] / sum) }),
         {} as Record<ScoreComponent, number>,
       );
+      // Defense in depth: scoring.ts already hard-zeroes this weight at
+      // read time regardless of what's stored, so this can never actually
+      // move a dispatch decision — but persisting a nonzero value here
+      // would still be a dishonest config row (a coordinator inspecting
+      // /admin/settings or the DB directly would see a weight that looks
+      // live but silently isn't). Zero it here too and re-normalise the
+      // other five so the row still sums to 1.
+      if (out[tier].customerSatisfaction !== 0) {
+        out[tier].customerSatisfaction = 0;
+        const rest = SCORE_COMPONENTS.filter((k) => k !== "customerSatisfaction");
+        const restSum = rest.reduce((s, k) => s + out[tier][k], 0) || 1;
+        for (const k of rest) out[tier][k] = round3(out[tier][k] / restSum);
+      }
     }
     patch.dispatchPolicy = out;
   }
@@ -73,7 +86,11 @@ export async function PATCH(req: Request) {
       maxChangePerUpdate: clamp(Number(a.maxChangePerUpdate ?? 0.02), 0.005, 0.02),
       cooldownDays: Math.max(1, Math.min(90, Math.round(Number(a.cooldownDays ?? 14)))),
       minConfidence: clamp(Number(a.minConfidence ?? 0.75), 0.5, 1),
-      maxCustomerSatisfactionWeight: clamp(Number(a.maxCustomerSatisfactionWeight ?? 0.15), 0.05, 0.15),
+      // Default/floor is 0, not 0.05 — customer feedback must never affect
+      // which technician gets picked (see the hard-zero in scoring.ts and
+      // DISPATCH_POLICY's default). A PATCH that omits this field must fall
+      // back to 0, not silently re-open a nonzero cap.
+      maxCustomerSatisfactionWeight: clamp(Number(a.maxCustomerSatisfactionWeight ?? 0), 0, 0.15),
     };
   }
 

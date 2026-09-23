@@ -50,7 +50,8 @@ import {
 import { logDecision } from "./log";
 import { validateDisruptionPlans } from "./schemas";
 import type { AssignmentResult, LlmPlan } from "./schemas";
-import type { Job, ReplanOption, RuntimeConfig, SkillTag, Tier } from "@/lib/types";
+import { scorePool } from "./scoring";
+import type { ApprovalKind, Job, ReplanOption, RuntimeConfig, SkillTag, Tier } from "@/lib/types";
 import { AUTO_REPLAN_LIMITS } from "@/lib/types";
 import type { AgentContext } from "./context";
 
@@ -102,8 +103,11 @@ export interface DisruptionOutcome {
   options: ReplanOption[];
   recommendedOptionId: string | null;
   needsApproval: boolean;
-  /** Always "standard" — freeze window is an absolute constraint, never overridden by the pipeline. */
-  approvalKind: "standard";
+  /** "standard" for the booking-conflict path (freeze window is an absolute
+   *  constraint there, never overridden). "emergency_override" only for the
+   *  technician-unavailable path, and only when the affected job is frozen —
+   *  see `runTechnicianUnavailableReplan`. */
+  approvalKind: ApprovalKind;
   autoChosenOptionId: string | null;
   /** True if the generation-time search found zero constraint-safe candidates — no re-plan is possible. */
   noCleanOption: boolean;
@@ -445,12 +449,14 @@ function legalSlotsFor(
 
 function buildReplanSpace(
   ctx: AgentContext,
-  args: { bumped: Job; originalTechId: string; now: string },
+  args: { bumped: Job; originalTechId: string; now: string; excludeTechIds?: string[] },
 ): ReplanSpace {
-  const { bumped, originalTechId, now } = args;
+  const { bumped, originalTechId, now, excludeTechIds } = args;
 
-  const skilled = ctx.technicians.filter((t) =>
-    bumped.skill_required.every((s) => t.skill_tags.includes(s)),
+  const skilled = ctx.technicians.filter(
+    (t) =>
+      bumped.skill_required.every((s) => t.skill_tags.includes(s)) &&
+      !excludeTechIds?.includes(t.technician_id),
   );
 
   const allowedSlotsByTech: Record<string, string[]> = {};
@@ -901,13 +907,15 @@ function tightestGapHours(
  */
 function buildCandidateMoves(
   ctx: AgentContext,
-  args: { bumped: Job; originalTechId: string; now: string },
+  args: { bumped: Job; originalTechId: string; now: string; excludeTechIds?: string[] },
 ): CandidateMove[] {
-  const { bumped, originalTechId, now } = args;
+  const { bumped, originalTechId, now, excludeTechIds } = args;
   const out: CandidateMove[] = [];
 
-  const skilledTechs = ctx.technicians.filter((t) =>
-    bumped.skill_required.every((s) => t.skill_tags.includes(s)),
+  const skilledTechs = ctx.technicians.filter(
+    (t) =>
+      bumped.skill_required.every((s) => t.skill_tags.includes(s)) &&
+      !excludeTechIds?.includes(t.technician_id),
   );
 
   const seenSlots = new Set<string>();
@@ -1013,5 +1021,390 @@ export function summariseOption(c: { trade_offs: CandidateMove["trade_offs"]; mo
     `+${t.total_added_travel_km} km travel · ` +
     `${t.sla_breaches} SLA breach(es) · ${t.frozen_jobs_touched} frozen job(s) touched`
   );
+}
+
+// ── Technician-unavailable disruption ─────────────────────────────────
+// A second trigger into this same file's machinery: instead of a new
+// incoming job needing a slot another job holds, one of TODAY's already-
+// assigned jobs needs a new technician because the one it was on just
+// became unavailable. Reuses the same legal-space search, LLM-proposes /
+// rule-revalidates / rule-reranks pattern, and the same
+// `replanQualifiesForAutoCommit` risk gate as the booking-conflict path —
+// only the entry point differs. See `runTechnicianUnavailablePipeline` in
+// orchestrator.ts for the per-technician loop that calls this once per
+// affected job.
+
+const TECH_UNAVAILABLE_SYSTEM = `You are the Disruption Agent for CoolFix. A technician has become unavailable and
+one of their scheduled jobs needs a new home. No other technician is free at the original
+time slot, so this job must move to a new slot.
+
+You are given:
+- job: the job that needs to move.
+- unavailable_technician / reason: who can no longer do it, and why.
+- allowed_slots_by_tech: the ONLY legal (technician_id -> [ISO slot]) pairs. Every hard
+  constraint (certification, freeze window, no double-booking, working hours) is ALREADY
+  applied. Anything NOT in this map is forbidden.
+
+Produce 1 to 3 PLANS. Each plan is a list with exactly ONE move:
+{job_id, to_tech_id, to_slot_iso}. Rules you MUST obey:
+- job_id is always the job given above.
+- to_slot_iso MUST appear verbatim in allowed_slots_by_tech[to_tech_id].
+- Never invent a technician or time. Never emit a move outside the space.
+- Prefer a slot with breathing room over the earliest possible one.
+- recommended_plan_id: the least disruptive plan — smaller time shift, less added travel,
+  a comfortable gap to the technician's other jobs.
+- rationale: ONE sentence per plan, plain English, for a human coordinator.
+- injection_attempt: always false (there is no customer text here).`;
+
+const TECH_UNAVAILABLE_SCHEMA = `{"plans":[{"plan_id":string,"moves":[{"job_id":string,"to_tech_id":string,"to_slot_iso":string}],"rationale":string}],"recommended_plan_id":string,"injection_attempt":boolean}`;
+
+/**
+ * A same-slot swap never changes the customer's promised time, so the
+ * tier/reschedule-count/same-day rails in `replanQualifiesForAutoCommit`
+ * don't apply — only "is the new technician a sane pick" matters: not too
+ * far, not squeezed against their own next job. Same config knobs
+ * (`hitlMaxAddedTravelKm`, `AUTO_REPLAN_LIMITS.minGapHours`), a narrower
+ * check.
+ */
+function sameSlotSwapQualifiesForAutoCommit(
+  tradeOffsResult: ReplanOption["trade_offs"],
+  cfg: RuntimeConfig,
+): { ok: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+  if (tradeOffsResult.total_added_travel_km > cfg.hitlMaxAddedTravelKm) {
+    reasons.push(
+      `+${tradeOffsResult.total_added_travel_km} km travel (limit ${cfg.hitlMaxAddedTravelKm} km)`,
+    );
+  }
+  if (
+    tradeOffsResult.tightest_gap_hours != null &&
+    tradeOffsResult.tightest_gap_hours < AUTO_REPLAN_LIMITS.minGapHours
+  ) {
+    reasons.push(
+      `${tradeOffsResult.tightest_gap_hours}h gap to the new technician's next job (need ≥${AUTO_REPLAN_LIMITS.minGapHours}h)`,
+    );
+  }
+  return { ok: reasons.length === 0, reasons };
+}
+
+export interface TechnicianUnavailableReplanArgs {
+  job: Job;
+  unavailableTechId: string;
+  reason: string;
+}
+
+/**
+ * Re-plan ONE job whose assigned technician just became unavailable. Tries,
+ * in order:
+ *   1. Same slot, a different qualified/available technician — pure rule,
+ *      reusing the EXACT Assignment Agent scoring formula (`scorePool`)
+ *      that placed the job in the first place. No LLM needed for a clean
+ *      swap: the customer's appointment time never changes.
+ *   2. If nobody else is free at that exact slot, a genuine re-plan search:
+ *      the same LLM-proposes / rule-revalidates / rule-reranks machinery as
+ *      the booking-conflict path above.
+ * A currently-frozen job ALWAYS requires a human, however low-impact the
+ * fix — reassigning who shows up for an already-locked appointment is
+ * exactly what "Emergency Override" exists for; the pipeline never does
+ * that silently.
+ */
+export async function runTechnicianUnavailableReplan(
+  ctx: AgentContext,
+  args: TechnicianUnavailableReplanArgs,
+): Promise<DisruptionOutcome> {
+  const { job, unavailableTechId, reason } = args;
+  const now = nowISO();
+  const wasFrozen = isFrozen(job.freeze_point, now);
+  const unavailableTechName = ctx.getTechnician(unavailableTechId)?.name ?? unavailableTechId;
+
+  // ── 1. Same-slot swap — reuse the real scoring engine ────────────────
+  const otherTechIds = ctx.technicians
+    .map((t) => t.technician_id)
+    .filter((id) => id !== unavailableTechId);
+  const pool = scorePool(ctx, otherTechIds, {
+    jobLocation: job.location,
+    skillRequired: job.skill_required,
+    scheduledTime: job.scheduled_time,
+    ignoreJobId: job.job_id,
+    jobCreatedAt: job.created_at,
+    tier: job.tier,
+  });
+
+  if (pool.length > 0) {
+    const newTech = ctx.getTechnician(pool[0].technician_id)!;
+    const oldTech = ctx.getTechnician(unavailableTechId);
+    const addedKm = oldTech
+      ? Math.max(
+          0,
+          distanceKm(newTech.location, job.location) - distanceKm(oldTech.location, job.location),
+        )
+      : 0;
+    const gap = tightestGapHours(ctx.jobs, newTech.technician_id, job.scheduled_time, job.job_id);
+    const swapTradeOffs: ReplanOption["trade_offs"] = {
+      customers_affected: 1,
+      total_added_travel_km: Math.round(addedKm * 10) / 10,
+      sla_breaches: 0, // same slot — SLA posture is unchanged
+      frozen_jobs_touched: wasFrozen ? 1 : 0,
+      total_shift_hours: 0,
+      tightest_gap_hours: Number.isFinite(gap) ? Math.round(gap * 10) / 10 : undefined,
+    };
+    const option: ReplanOption = {
+      option_id: `opt_swap_${newTech.technician_id}`,
+      label: `Reassign to ${newTech.name} (same time)`,
+      summary: summariseOption({ trade_offs: swapTradeOffs, moves: [1] }),
+      moves: [
+        {
+          job_id: job.job_id,
+          customer_name: job.customer_name,
+          from_time: job.scheduled_time,
+          to_time: job.scheduled_time,
+          technician_id: newTech.technician_id,
+        },
+      ],
+      trade_offs: swapTradeOffs,
+      recommended: true,
+    };
+
+    const gate = sameSlotSwapQualifiesForAutoCommit(swapTradeOffs, ctx.config);
+    const needsApproval = wasFrozen || !gate.ok;
+    const approvalKind: ApprovalKind = wasFrozen ? "emergency_override" : "standard";
+
+    const entry = logDecision(ctx, {
+      agent: "DisruptionAgent",
+      jobId: job.job_id,
+      reasoningKind: "rule",
+      input: {
+        trigger: "technician_unavailable",
+        unavailable_technician: unavailableTechName,
+        reason,
+        job_was_frozen: wasFrozen,
+      },
+      output: {
+        result: "same_slot_swap",
+        new_technician: newTech.name,
+        needs_approval: needsApproval,
+      },
+      headline: needsApproval
+        ? wasFrozen
+          ? `Emergency override needed — ${job.customer_name}'s locked appointment needs a new technician`
+          : `Approval needed — reassigning ${job.customer_name} to ${newTech.name}`
+        : `Auto-reassigned ${job.customer_name} to ${newTech.name} — same appointment time`,
+      outcome: needsApproval ? "requires_approval" : "auto_commit",
+      requiresApproval: needsApproval,
+      replanOptions: [option],
+      guardrailNotes: [
+        `${unavailableTechName} became unavailable (${reason}).`,
+        "Same-slot swap found via the Assignment Agent's own scoring formula — no time shift, appointment window unchanged.",
+        wasFrozen
+          ? "This appointment is inside its freeze window — even a same-time technician swap requires a human's sign-off (Emergency Override)."
+          : needsApproval
+            ? `Not eligible for auto-commit — ${gate.reasons.join("; ")}.`
+            : "Low impact — auto-committed without a human.",
+      ],
+    });
+
+    return {
+      logId: entry.log_id,
+      options: [option],
+      recommendedOptionId: option.option_id,
+      needsApproval,
+      approvalKind,
+      autoChosenOptionId: needsApproval ? null : option.option_id,
+      noCleanOption: false,
+      llmChoiceAccepted: false,
+    };
+  }
+
+  // ── 2. No same-slot replacement — fall back to a real re-plan search ──
+  const space = buildReplanSpace(ctx, {
+    bumped: job,
+    originalTechId: unavailableTechId,
+    now,
+    excludeTechIds: [unavailableTechId],
+  });
+  const fallbackPool = buildCandidateMoves(ctx, {
+    bumped: job,
+    originalTechId: unavailableTechId,
+    now,
+    excludeTechIds: [unavailableTechId],
+  });
+  const spaceEmpty = Object.keys(space.allowedSlotsByTech).length === 0;
+
+  if (fallbackPool.length === 0 && spaceEmpty) {
+    const entry = logDecision(ctx, {
+      agent: "DisruptionAgent",
+      jobId: job.job_id,
+      reasoningKind: "rule",
+      input: { trigger: "technician_unavailable", unavailable_technician: unavailableTechName, reason },
+      output: { result: "no_clean_option" },
+      headline: `No re-plan possible for ${job.customer_name} — every technician/slot fails a hard constraint`,
+      outcome: "requires_approval",
+      requiresApproval: true,
+      guardrailNotes: [
+        `${unavailableTechName} became unavailable (${reason}).`,
+        "No qualified technician is free at this slot, and no alternative slot clears every hard constraint (certification, freeze window, clash, working hours).",
+      ],
+    });
+    return {
+      logId: entry.log_id,
+      options: [],
+      recommendedOptionId: null,
+      needsApproval: false,
+      approvalKind: "standard",
+      autoChosenOptionId: null,
+      noCleanOption: true,
+      llmChoiceAccepted: false,
+    };
+  }
+
+  const rankedFallback = [...fallbackPool].sort((a, b) => a.heuristic_cost - b.heuristic_cost);
+  const bestMechanical: CandidateMove = rankedFallback[0] ?? mechanicalFromSpace(ctx, space, now)!;
+
+  const rejectionNotes: string[] = [];
+  let resp: Awaited<ReturnType<typeof callLlm>> | null = null;
+  if (Object.keys(space.allowedSlotsByTech).length > 0) {
+    try {
+      resp = await callLlm({
+        task: "disruption_replan",
+        system: TECH_UNAVAILABLE_SYSTEM,
+        structuredInput: {
+          job: {
+            job_id: job.job_id,
+            customer_name: job.customer_name,
+            tier: job.tier,
+            current_slot: job.scheduled_time,
+            skill_required: job.skill_required,
+          },
+          unavailable_technician: unavailableTechName,
+          reason,
+          allowed_slots_by_tech: space.allowedSlotsByTech,
+        },
+        expectedSchema: TECH_UNAVAILABLE_SCHEMA,
+        maxAttempts: 2,
+      });
+    } catch {
+      rejectionNotes.push(
+        "LLM call failed after retry (malformed JSON) — using best mechanical option instead.",
+      );
+    }
+  }
+
+  let acceptedOptions: ReplanOption[] = [];
+  let llmAccepted = false;
+  if (resp) {
+    try {
+      const parsed = validateDisruptionPlans(resp.data, {
+        bumpedJobId: job.job_id,
+        allowedSlotsByTech: space.allowedSlotsByTech,
+        movableSoftJobs: [],
+      });
+      const llmRecommendedId = parsed.plans[0]?.plan_id ?? null;
+      const scored: { opt: ReplanOption; cost: number; llmRec: boolean }[] = [];
+      for (const plan of parsed.plans) {
+        if (scored.length >= MAX_PLANS_KEPT) break;
+        const rv = revalidatePlan(ctx, plan, now);
+        if (!rv.ok) {
+          rejectionNotes.push(`LLM plan ${plan.plan_id} rejected on re-validation (${rv.reason}).`);
+          continue;
+        }
+        const opt = planToReplanOption(ctx, plan, rv.resolvedMoves!, scored.length, now);
+        scored.push({ opt, cost: heuristicCost(opt.trade_offs), llmRec: plan.plan_id === llmRecommendedId });
+      }
+      if (scored.length > 0) {
+        llmAccepted = true;
+        scored.sort((a, b) => a.cost - b.cost);
+        acceptedOptions = scored.map((s) => s.opt);
+        acceptedOptions[0].recommended = true;
+        if (!scored[0].llmRec && scored.some((s) => s.llmRec)) {
+          rejectionNotes.push(
+            "The LLM's stated preference scored worse than another plan it proposed — the lower-cost plan is recommended instead.",
+          );
+        }
+      } else {
+        rejectionNotes.push("No LLM plan survived live re-validation — using best mechanical option instead.");
+      }
+    } catch (e) {
+      rejectionNotes.push(
+        `LLM response failed the plan-space cross-check (${
+          e instanceof Error ? e.message : "invalid"
+        }) — using best mechanical option instead.`,
+      );
+    }
+  }
+
+  let options: ReplanOption[];
+  let chosen: ReplanOption;
+  if (llmAccepted) {
+    options = acceptedOptions;
+    const mechOpt = candidateToReplanOption(bestMechanical, false);
+    if (!options.some((o) => sameMoves(o, mechOpt))) {
+      options = [...options, { ...mechOpt, label: `${mechOpt.label} (mechanical baseline)` }];
+    }
+    chosen = acceptedOptions[0];
+  } else {
+    const mechShortlist = rankedFallback.slice(0, TOP_N_FOR_LLM);
+    options =
+      mechShortlist.length > 0
+        ? mechShortlist.map((c, i) => candidateToReplanOption(c, i === 0))
+        : [candidateToReplanOption(bestMechanical, true)];
+    chosen = options[0];
+  }
+
+  const gate = replanQualifiesForAutoCommit(ctx, chosen, ctx.config, now);
+  const needsApproval = wasFrozen || !gate.ok;
+  const approvalKind: ApprovalKind = wasFrozen ? "emergency_override" : "standard";
+
+  const entry = logDecision(ctx, {
+    agent: "DisruptionAgent",
+    jobId: job.job_id,
+    reasoningKind: "llm",
+    input: {
+      trigger: "technician_unavailable",
+      unavailable_technician: unavailableTechName,
+      reason,
+      job_was_frozen: wasFrozen,
+      legal_slots: Object.values(space.allowedSlotsByTech).reduce((n, a) => n + a.length, 0),
+      llm_mode: resp?.mode ?? "failed",
+      cached: resp?.cached ?? false,
+    },
+    output: {
+      chosen_option_id: chosen.option_id,
+      needs_approval: needsApproval,
+      llm_choice_accepted: llmAccepted,
+    },
+    headline: needsApproval
+      ? wasFrozen
+        ? `Emergency override needed — no same-time replacement for ${job.customer_name}; re-plan requires a human`
+        : `Approval needed — re-plan for ${job.customer_name} affects ${chosen.trade_offs.customers_affected} customer(s)`
+      : `Auto-committed re-plan for ${job.customer_name}: ${chosen.label}`,
+    outcome: needsApproval ? "requires_approval" : "auto_commit",
+    requiresApproval: needsApproval,
+    replanOptions: options,
+    latencyMs: resp?.latency_ms ?? 0,
+    guardrailNotes: [
+      `${unavailableTechName} became unavailable (${reason}). No qualified technician was free at the original slot.`,
+      ...(resp?.guardrail_notes ?? []),
+      ...rejectionNotes,
+      llmAccepted
+        ? "LLM designed the re-plan; the chosen plan was re-validated move-by-move against live schedule state before use."
+        : "Fell back to the best pre-computed mechanical option — every constraint still enforced.",
+      wasFrozen
+        ? "This appointment is inside its freeze window — moving it always requires a human's sign-off (Emergency Override), regardless of impact."
+        : needsApproval
+          ? `Not eligible for auto-commit — ${gate.reasons.join("; ")}.`
+          : "Low impact on every safety rail — auto-committed without a human.",
+    ],
+  });
+
+  return {
+    logId: entry.log_id,
+    options,
+    recommendedOptionId: chosen.option_id,
+    needsApproval,
+    approvalKind,
+    autoChosenOptionId: needsApproval ? null : chosen.option_id,
+    noCleanOption: false,
+    llmChoiceAccepted: llmAccepted,
+  };
 }
 

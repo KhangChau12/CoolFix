@@ -88,14 +88,21 @@ export default function ApprovalsPage() {
         const levelColor = isEmergency ? "var(--tier-urgent)" : "var(--agent-disruption)";
         const disruptionRow = decisions.find((d) => d.log_id === a.disruption_log_id);
 
-        // Map the geography of this decision: the incoming job that forced the
-        // re-plan (anchor) plus every OTHER job the selected plan would move,
-        // each tagged with the technician who'd take it.
+        // Map the geography of this decision: the anchor job (either a new
+        // incoming booking, or — for a technician-unavailable re-plan — the
+        // existing job that lost its technician) plus every OTHER job the
+        // selected plan would move, each tagged with the technician who'd
+        // take it.
         const selectedOpt =
           a.options.find((o) => o.option_id === selected) ??
           a.options.find((o) => o.recommended) ??
           a.options[0];
+        // A technician-unavailable re-plan's own move touches THIS job — it's
+        // already the anchor pin below, so exclude it here to avoid a second,
+        // overlapping marker at the same coordinates.
+        const jobIsAmongMoves = (selectedOpt?.moves ?? []).some((mv) => mv.job_id === a.job_id);
         const extraPins: MapPin[] = (selectedOpt?.moves ?? [])
+          .filter((mv) => mv.job_id !== a.job_id)
           .map((mv): MapPin | null => {
             const mj = jobs[mv.job_id];
             if (!mj) return null;
@@ -276,7 +283,7 @@ export default function ApprovalsPage() {
                   <p className="faint row" style={{ fontSize: 10.5, margin: "5px 0 0", gap: 12, flexWrap: "wrap" }}>
                     <span className="row" style={{ gap: 5 }}>
                       <span style={{ width: 7, height: 7, borderRadius: 999, background: "var(--tier-standard)", flex: "none" }} />
-                      incoming urgent job
+                      {jobIsAmongMoves ? "affected appointment" : "incoming urgent job"}
                     </span>
                     {extraPins.length > 0 && (
                       <span className="row" style={{ gap: 5 }}>

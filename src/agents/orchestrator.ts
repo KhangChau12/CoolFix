@@ -22,7 +22,7 @@ import {
   loneCandidateIsStrained,
   runAssignmentTiebreakAgent,
 } from "./assignmentTiebreak";
-import { runDisruptionAgent } from "./disruption";
+import { runDisruptionAgent, runTechnicianUnavailableReplan } from "./disruption";
 import {
   buildEdgecaseSpace,
   runAssignmentEdgecaseAgent,
@@ -38,10 +38,16 @@ import {
   findTimeClash,
   isFrozen,
   nowISO,
+  sameSgDay,
   snapToStandardDispatchSlot,
   snapToUrgentDispatchSlot,
 } from "@/lib/time";
-import type { ApprovalRequest, Job } from "@/lib/types";
+import type {
+  ApprovalRequest,
+  Job,
+  TechnicianUnavailableJobOutcome,
+  TechnicianUnavailableResult,
+} from "@/lib/types";
 import { generateTrackingToken } from "@/lib/trackingToken";
 
 export interface PipelineResult {
@@ -73,17 +79,26 @@ export interface PipelineResult {
 // an optimistic pre-flush re-check instead.)
 let pipelineChain: Promise<unknown> = Promise.resolve();
 
-export function runBookingPipeline(
-  rawBooking: unknown,
-): Promise<PipelineResult> {
-  const run = pipelineChain.then(
-    () => runBookingPipelineUnsafe(rawBooking),
-    () => runBookingPipelineUnsafe(rawBooking),
-  );
+/**
+ * Serializes any caller that loads an `AgentContext` snapshot and mutates
+ * the schedule onto the SAME in-process queue described above — not just
+ * new bookings. A technician-unavailable re-plan (`runTechnicianUnavailable`
+ * below) reads and writes the same jobs/technicians rows a concurrent
+ * booking could be mid-flight on; without sharing this queue the two could
+ * each stage a conflicting assignment invisible to the other.
+ */
+function runSerialized<T>(fn: () => Promise<T>): Promise<T> {
+  const run = pipelineChain.then(fn, fn);
   // Keep the chain alive regardless of this run's outcome; swallow here so
   // a rejection doesn't become an unhandled rejection on the chain itself.
   pipelineChain = run.catch(() => undefined);
   return run;
+}
+
+export function runBookingPipeline(
+  rawBooking: unknown,
+): Promise<PipelineResult> {
+  return runSerialized(() => runBookingPipelineUnsafe(rawBooking));
 }
 
 // Monotonic suffixes so two entities created in the same millisecond can
@@ -736,6 +751,189 @@ export function incomingJobClashAfterReplan(
     job.scheduled_time,
     incomingJobId,
   );
+}
+
+// ── Technician-unavailable disruption ──────────────────────────────
+// A second front door into the same reasoning loop as runBookingPipeline:
+// instead of a new booking arriving, a technician already on the schedule
+// goes offline for the rest of today. Every one of their remaining,
+// not-yet-started jobs gets re-planned via runTechnicianUnavailableReplan
+// (disruption.ts) — same auto-commit-vs-HITL risk gate, same LLM-proposes /
+// rule-validates discipline — one decision per job, exactly like any other
+// disruption. See docs/README for the demo trigger (admin/technicians).
+
+export function runTechnicianUnavailable(
+  technicianId: string,
+  reason: string,
+): Promise<TechnicianUnavailableResult> {
+  return runSerialized(() => runTechnicianUnavailableUnsafe(technicianId, reason));
+}
+
+async function runTechnicianUnavailableUnsafe(
+  technicianId: string,
+  reason: string,
+): Promise<TechnicianUnavailableResult> {
+  const ctx = await AgentContext.create();
+  const tech = ctx.getTechnician(technicianId);
+  if (!tech) throw new Error(`Unknown technician: ${technicianId}`);
+
+  const now = nowISO();
+  const nowMs = new Date(now).getTime();
+  // "Became unavailable" is scoped to the rest of TODAY: a job already
+  // in_progress/completed is left alone (the technician is already there,
+  // or already done), and anything on a later day is untouched (they're
+  // presumed back). Earliest-first so, when capacity is tight, the jobs
+  // closest to starting get first claim on whatever replacement capacity
+  // exists.
+  const affected = ctx.jobs
+    .filter(
+      (j) =>
+        j.assigned_technician_id === technicianId &&
+        (j.status === "assigned" || j.status === "frozen") &&
+        sameSgDay(j.scheduled_time, now) &&
+        new Date(j.scheduled_time).getTime() >= nowMs,
+    )
+    .sort((a, b) => a.scheduled_time.localeCompare(b.scheduled_time));
+
+  const results: TechnicianUnavailableJobOutcome[] = [];
+
+  for (const job of affected) {
+    const disruption = await runTechnicianUnavailableReplan(ctx, {
+      job,
+      unavailableTechId: technicianId,
+      reason,
+    });
+
+    if (disruption.noCleanOption) {
+      const held: Job = {
+        ...job,
+        status: "pending",
+        assigned_technician_id: null,
+        pipeline_stage: "awaiting_approval",
+      };
+      ctx.stageJob(held);
+      results.push({
+        jobId: job.job_id,
+        customerName: job.customer_name,
+        outcome: "unresolvable",
+        reason: "No qualified technician or legal slot was found automatically — needs manual handling.",
+      });
+      continue;
+    }
+
+    if (!disruption.needsApproval && disruption.autoChosenOptionId) {
+      const replanReason = `${tech.name} became unavailable (${reason})`;
+      applyReplan(ctx, disruption.autoChosenOptionId, disruption.options, "auto", replanReason);
+
+      // Last-line integrity check, same discipline as the booking-conflict
+      // path — refuse to double-book rather than trust the gate blindly.
+      const clash = incomingJobClashAfterReplan(ctx, job.job_id);
+      if (clash) {
+        const pending: Job = {
+          ...(ctx.getJob(job.job_id) ?? job),
+          status: "pending",
+          pipeline_stage: "awaiting_approval",
+        };
+        ctx.stageJob(pending);
+        logDecision(ctx, {
+          agent: "Orchestrator",
+          jobId: job.job_id,
+          reasoningKind: "rule",
+          input: { trigger: "technician_unavailable", auto_commit_blocked: true },
+          output: { result: "unassignable", clashing_job: clash },
+          headline: `Auto-commit blocked — the re-plan would still double-book (job ${clash})`,
+          outcome: "requires_approval",
+          requiresApproval: true,
+          guardrailNotes: [
+            "Post-apply safety check failed — escalated to a coordinator instead of double-booking.",
+          ],
+        });
+        results.push({
+          jobId: job.job_id,
+          customerName: job.customer_name,
+          outcome: "unresolvable",
+          reason: "The automatic re-plan would still have double-booked the new technician.",
+        });
+        continue;
+      }
+
+      const opt = disruption.options.find((o) => o.option_id === disruption.autoChosenOptionId)!;
+      const move = opt.moves.find((m) => m.job_id === job.job_id);
+      await notifyReschedule(ctx, { options: [opt], recommendedOptionId: opt.option_id }, replanReason);
+      logDecision(ctx, {
+        agent: "Orchestrator",
+        jobId: job.job_id,
+        reasoningKind: "rule",
+        input: { trigger: "technician_unavailable", unavailable_technician: tech.name },
+        output: { result: "auto_reassigned", new_technician: move?.technician_id },
+        headline: `Auto-committed: ${job.customer_name} reassigned — ${tech.name} unavailable`,
+        outcome: "auto_commit",
+      });
+      results.push({
+        jobId: job.job_id,
+        customerName: job.customer_name,
+        outcome: "auto_reassigned",
+        newTechnicianId: move?.technician_id,
+        newTechnicianName: move ? ctx.getTechnician(move.technician_id)?.name : undefined,
+        sameSlot: move ? move.from_time === move.to_time : undefined,
+      });
+      continue;
+    }
+
+    // Needs a human. Hold the recommended candidate on the job (same
+    // convention as the booking-conflict HITL path) so the Approvals screen
+    // has something concrete to show while it waits.
+    const recommendedTechId = disruption.options
+      .find((o) => o.option_id === disruption.recommendedOptionId)
+      ?.moves.find((m) => m.job_id === job.job_id)?.technician_id;
+
+    const approval: ApprovalRequest = {
+      approval_id: nextApprovalId(),
+      created_at: nowISO(),
+      kind: disruption.approvalKind,
+      job_id: job.job_id,
+      reason:
+        disruption.approvalKind === "emergency_override"
+          ? `${tech.name} became unavailable and this appointment is inside its freeze window — reassigning it needs a human's sign-off.`
+          : `${tech.name} became unavailable and the best re-plan for this job exceeds the automatic-approval thresholds.`,
+      disruption_log_id: disruption.logId,
+      options: disruption.options,
+      chosen_option_id: null,
+      status: "pending",
+      resolved_by: null,
+      resolved_at: null,
+      frozen_jobs_impacted: disruption.approvalKind === "emergency_override" ? [job.job_id] : [],
+    };
+    ctx.bufferApproval(approval);
+
+    const held: Job = {
+      ...job,
+      status: "pending",
+      assigned_technician_id: recommendedTechId ?? job.assigned_technician_id,
+      pipeline_stage: "awaiting_approval",
+    };
+    ctx.stageJob(held);
+
+    results.push({
+      jobId: job.job_id,
+      customerName: job.customer_name,
+      outcome: "needs_approval",
+      approvalId: approval.approval_id,
+      approvalKind: disruption.approvalKind,
+    });
+  }
+
+  await ctx.flush();
+
+  return {
+    technicianId,
+    technicianName: tech.name,
+    reason,
+    affectedJobs: results,
+    decisionLogIds: ctx.decisions.map((d) => d.log_id),
+    notificationsSent: ctx.notifications.length,
+    llmCalls: countLlm(ctx),
+  };
 }
 
 // ── Notification helpers ──────────────────────────────────────────

@@ -612,6 +612,38 @@ const SPECS: SeedJobSpec[] = [
     createdHoursAgo: 26,
   },
 
+  // ── Technician-unavailable disruption demo (job_2012) ───────────────
+  // Anchored with `today_offset` (hours-from-now, like the fillers) rather
+  // than `urgent_slot`/`urgent_offset` (relative to the NEXT service-hours
+  // block, which can drift onto tomorrow depending on what time of day the
+  // seed happens to run — job_2006/2010/2011 above do exactly that) so this
+  // job reliably lands THIS SGT day no matter when the demo runs. Daniel
+  // has no other same-day load in this seed (his other jobs are `urgent_
+  // offset`/day-1+), so "mark Daniel unavailable" always affects exactly
+  // this one job: basic_maintenance is held by 6 of the 9 technicians, not
+  // frozen, and not urgent — a same-slot swap should have real candidates,
+  // making it the low-risk half of the disruption demo pair (job_2001,
+  // Marcus's frozen job above, is the high-risk / Emergency Override half).
+  {
+    id: "job_2012",
+    customer: "Grace Lim",
+    email: "grace.lim@example.sg",
+    phone: "+65 9111 0012",
+    address: "18 Ghim Moh Rd, #05-14",
+    loc: { lat: 1.3105, lng: 103.7865 },
+    desc: "Annual aircon servicing, living room unit.",
+    category: "routine",
+    skill: ["basic_maintenance"],
+    tier: "standard",
+    dayOffset: 0,
+    hour: 5.5,
+    hourMode: "today_offset",
+    status: "assigned",
+    tech: "tech_daniel",
+    stage: "assigned",
+    createdHoursAgo: 20,
+  },
+
   // Tomorrow-afternoon job the agents already handled — assigned, waiting
   // for its slot. Gopal (Woodlands, refrigerant-certified) is free tomorrow;
   // job_2005/2006/2007 only load the refrigerant technicians at TODAY's
@@ -913,20 +945,28 @@ export function seedJobs(freezeWindowHours: number): Job[] {
     };
   });
 
-  resolveFillerClashes(jobs, freezeWindowHours);
+  // Anything scheduled on the `today_offset` basis (hours-from-`now`
+  // directly) — every filler job, plus any hand-crafted job that opts into
+  // it (see job_2012) — is on a DIFFERENT time basis than `urgent_slot`/
+  // `urgent_offset` (relative to the next service-hours block). The two
+  // bases can drift into each other depending on what wall-clock hour the
+  // seed happens to run at, so anything on the `today_offset` basis must be
+  // nudgeable, never treated as fixed ground truth a fixed/dynamic job is
+  // allowed to collide with.
+  const nudgeableIds = new Set(SPECS.filter((s) => s.hourMode === "today_offset").map((s) => s.id));
+  resolveFillerClashes(jobs, freezeWindowHours, nudgeableIds);
   return jobs;
 }
 
 /**
- * Belt-and-braces pass: nudge any filler job (`job_3xxx`) that lands within
- * 90 min of ANY other job on the same technician — including the 10
- * hand-crafted jobs, whose dynamic slots (`urgent_slot`/`urgent_offset`)
- * are only known after they're resolved above. Fillers are on a separate,
- * fixed time basis by construction (see `buildFillerSpecs`) so this should
- * rarely fire, but a real coincidence is cheap to rule out here rather than
- * leave a double-booking in the seed. Mutates `jobs` in place.
+ * Belt-and-braces pass: nudge any job on the `today_offset` time basis
+ * (fillers, `job_3xxx`, plus any hand-crafted job opted into `nudgeableIds`)
+ * that lands within 90 min of ANY other job on the same technician —
+ * including the hand-crafted jobs on a DIFFERENT time basis
+ * (`urgent_slot`/`urgent_offset`), whose dynamic slots are only known after
+ * they're resolved above. Mutates `jobs` in place.
  */
-function resolveFillerClashes(jobs: Job[], freezeWindowHours: number): void {
+function resolveFillerClashes(jobs: Job[], freezeWindowHours: number, nudgeableIds: Set<string>): void {
   const byTech = new Map<string, Job[]>();
   for (const j of jobs) {
     if (!j.assigned_technician_id) continue;
@@ -934,7 +974,7 @@ function resolveFillerClashes(jobs: Job[], freezeWindowHours: number): void {
     arr.push(j);
     byTech.set(j.assigned_technician_id, arr);
   }
-  const isFiller = (id: string) => id.startsWith("job_3");
+  const isFiller = (id: string) => id.startsWith("job_3") || nudgeableIds.has(id);
 
   for (const [, techJobs] of byTech) {
     // Fixed (non-filler) jobs are ground truth and never move; fillers are

@@ -19,6 +19,7 @@
 //     `Technician` row — so a new internal column never leaks by default.
 
 import { NextResponse } from "next/server";
+import { createHash } from "node:crypto";
 import * as repo from "@/lib/repo";
 import { isValidTrackingTokenFormat } from "@/lib/trackingTokenFormat";
 import { toPublicJobView } from "@/lib/publicTracking";
@@ -30,11 +31,52 @@ const NOT_FOUND = {
   error: "Tracking code not found. Please check the code and try again.",
 };
 
-export async function GET(_req: Request, { params }: { params: { token: string } }) {
+// In-memory, per-process enumeration throttle — single-node deployment
+// (see next.config.mjs), so a module-level Map is enough; no new DB table
+// needed (matches the existing pipelineChain in-process-lock philosophy
+// elsewhere in this codebase). Keyed by a salted hash of the requester's IP
+// (never the raw IP, same salt convention as the feedback rate limiter),
+// tracking DISTINCT tokens queried in a rolling window: the customer's own
+// tracking page polls the SAME token every few seconds forever and is never
+// throttled by this — only querying many DIFFERENT tokens from one source
+// (token-guessing) trips it.
+const WINDOW_MS = 5 * 60_000;
+const MAX_DISTINCT_TOKENS_PER_WINDOW = 20;
+const recentQueriesByIp = new Map<string, { tokens: Set<string>; windowStart: number }>();
+
+function rateLimitTrackingLookup(req: Request, token: string): boolean {
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+  const salt = process.env.FEEDBACK_RATE_LIMIT_SALT ?? "coolfix-demo-rate-limit";
+  const ipHash = createHash("sha256").update(`${salt}:tracking:${ip}`).digest("hex").slice(0, 32);
+  const now = Date.now();
+  let entry = recentQueriesByIp.get(ipHash);
+  if (!entry || now - entry.windowStart > WINDOW_MS) {
+    entry = { tokens: new Set(), windowStart: now };
+    recentQueriesByIp.set(ipHash, entry);
+  }
+  entry.tokens.add(token);
+  // Opportunistic cleanup so the map can't grow unbounded over a
+  // long-running process.
+  if (recentQueriesByIp.size > 5000) {
+    for (const [k, v] of recentQueriesByIp) {
+      if (now - v.windowStart > WINDOW_MS) recentQueriesByIp.delete(k);
+    }
+  }
+  return entry.tokens.size <= MAX_DISTINCT_TOKENS_PER_WINDOW;
+}
+
+export async function GET(req: Request, { params }: { params: { token: string } }) {
   const token = params.token ?? "";
 
   if (!isValidTrackingTokenFormat(token)) {
     return NextResponse.json(NOT_FOUND, { status: 404 });
+  }
+
+  if (!rateLimitTrackingLookup(req, token)) {
+    return NextResponse.json(
+      { error: "Too many tracking lookups from this connection. Please try again in a few minutes." },
+      { status: 429 },
+    );
   }
 
   // Fail closed on any lookup error (not just "not found") — a customer

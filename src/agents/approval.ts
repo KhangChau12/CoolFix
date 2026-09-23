@@ -154,15 +154,31 @@ export async function resolveApproval(input: ResolveInput): Promise<ResolveResul
     };
   }
 
-  // Commit the incoming job onto its technician.
+  // Commit the incoming job onto its technician. Re-fetch rather than reuse
+  // the `incoming` captured at the top of this function: for a standard
+  // disruption re-plan, `approval.job_id` was never itself one of
+  // `chosen.moves`, so the two are identical there — but for a technician-
+  // unavailable re-plan the affected job IS one of the moves, and
+  // `applyReplan` just updated its technician/slot/freeze_point in `ctx`.
+  // Using the stale pre-move `incoming` here would silently revert that
+  // update while still reporting success.
   const now = nowISO();
+  const target = ctx.getJob(approval.job_id) ?? incoming;
   const committed: Job = {
-    ...incoming,
-    status: isFrozen(incoming.freeze_point, now) ? "frozen" : "assigned",
+    ...target,
+    status: isFrozen(target.freeze_point, now) ? "frozen" : "assigned",
     pipeline_stage: "assigned",
   };
   ctx.stageJob(committed);
-  if (committed.assigned_technician_id) ctx.stageWorkload(committed.assigned_technician_id, +1);
+  // `applyReplan` above already adjusted workload for any job in
+  // `chosen.moves` — which, for a technician-unavailable re-plan, includes
+  // the incoming job itself. Only apply the extra +1 here when it doesn't
+  // (the normal disruption case: a brand-new booking, never previously
+  // assigned to any technician, so nothing already credited it).
+  const alreadyHandledByReplan = chosen.moves.some((m) => m.job_id === approval.job_id);
+  if (committed.assigned_technician_id && !alreadyHandledByReplan) {
+    ctx.stageWorkload(committed.assigned_technician_id, +1);
+  }
 
   await repo.resolveApproval(approval.approval_id, {
     status: "approved",
@@ -217,19 +233,25 @@ export async function resolveApproval(input: ResolveInput): Promise<ResolveResul
     });
     ctx.bufferNotification(cn);
   }
-  // Notify the newly-assigned incoming job.
-  const newTn = await runNotificationAgent(ctx, {
-    jobId: approval.job_id,
-    channel: "technician_app",
-    kind: "new_assignment",
-  });
-  ctx.bufferNotification(newTn);
-  const newCn = await runNotificationAgent(ctx, {
-    jobId: approval.job_id,
-    channel: "customer_email",
-    kind: "booking_confirmed",
-  });
-  ctx.bufferNotification(newCn);
+  // Notify the newly-assigned incoming job — unless it was itself one of
+  // `chosen.moves` (a technician-unavailable re-plan), in which case the
+  // loop above already sent it a "reschedule" notification and a second,
+  // contradictory "new_assignment"/"booking_confirmed" pair would just be
+  // noise.
+  if (!alreadyHandledByReplan) {
+    const newTn = await runNotificationAgent(ctx, {
+      jobId: approval.job_id,
+      channel: "technician_app",
+      kind: "new_assignment",
+    });
+    ctx.bufferNotification(newTn);
+    const newCn = await runNotificationAgent(ctx, {
+      jobId: approval.job_id,
+      channel: "customer_email",
+      kind: "booking_confirmed",
+    });
+    ctx.bufferNotification(newCn);
+  }
 
   await ctx.flush();
   return {

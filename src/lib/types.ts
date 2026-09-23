@@ -383,6 +383,32 @@ export interface ApprovalRequest {
   frozen_jobs_impacted: string[];
 }
 
+/** One affected job's outcome from a technician-unavailable disruption run
+ *  (`runTechnicianUnavailable` in agents/orchestrator.ts). */
+export interface TechnicianUnavailableJobOutcome {
+  jobId: string;
+  customerName: string;
+  outcome: "auto_reassigned" | "needs_approval" | "unresolvable";
+  newTechnicianId?: string;
+  newTechnicianName?: string;
+  /** True if the swap kept the exact same appointment time (only the
+   *  technician changed) — the low-risk case the auto-commit path favours. */
+  sameSlot?: boolean;
+  approvalId?: string;
+  approvalKind?: ApprovalKind;
+  reason?: string;
+}
+
+export interface TechnicianUnavailableResult {
+  technicianId: string;
+  technicianName: string;
+  reason: string;
+  affectedJobs: TechnicianUnavailableJobOutcome[];
+  decisionLogIds: string[];
+  notificationsSent: number;
+  llmCalls: number;
+}
+
 // ── Notifications (two-way, for the demo) ──────────────────────────
 
 export type NotificationChannel = "technician_app" | "customer_email";
