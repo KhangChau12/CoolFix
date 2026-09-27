@@ -15,9 +15,9 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiGet } from "@/lib/client";
 import { useRealtime } from "./useRealtime";
+import { useLiveData } from "./useLiveData";
 import {
   computeFlow,
-  sortPipelineOrder,
   STATION_ORDER,
   STATION_LABEL,
   STATION_KIND,
@@ -190,6 +190,12 @@ const RETURN_RAIL_IDS = new Set(["disrupt-notify", "hitl-notify", "tiebrk-notify
 
 const RAIL_BY_PAIR = new Map(RAILS.map((r) => [`${r.a}->${r.b}`, r]));
 
+// SMIL's begin="0s" is relative to the SVG document, not this element's
+// mount. Start each newly mounted hop on the current timeline instead.
+function beginMotion(node: SVGAnimateMotionElement | null) {
+  node?.beginElement();
+}
+
 // ── component ────────────────────────────────────────────────────────
 
 interface Props {
@@ -198,30 +204,24 @@ interface Props {
 }
 
 export function AgentFlowMap({ jobId, job }: Props) {
-  const [rows, setRows] = useState<AgentDecisionLog[]>([]);
-  const [loaded, setLoaded] = useState(false);
+  // A job owns its requests, animation, hover state and modal selection.
+  return <JobFlowMap key={jobId ?? "empty"} jobId={jobId} job={job} />;
+}
 
+const EMPTY_ROWS: AgentDecisionLog[] = [];
+
+function JobFlowMap({ jobId, job }: Props) {
   const load = useCallback(async () => {
-    if (!jobId) {
-      setRows([]);
-      setLoaded(true);
-      return;
-    }
-    try {
-      const { decisions } = await apiGet<{ decisions: AgentDecisionLog[] }>(
-        `/api/decisions?job=${encodeURIComponent(jobId)}&limit=200`,
-      );
-      setRows(sortPipelineOrder(decisions));
-      setLoaded(true);
-    } catch {
-      /* keep last */
-    }
+    if (!jobId) return EMPTY_ROWS;
+    const { decisions } = await apiGet<{ decisions: AgentDecisionLog[] }>(
+      `/api/decisions?job=${encodeURIComponent(jobId)}&limit=500`,
+    );
+    return decisions;
   }, [jobId]);
-
-  const conn = useRealtime("agent_decision_log", load);
-  useEffect(() => {
-    load();
-  }, [load]);
+  const { data, refresh } = useLiveData(load);
+  const rows = data ?? EMPTY_ROWS;
+  const loaded = data !== null;
+  const conn = useRealtime("agent_decision_log", refresh);
 
   const flow = useMemo(() => computeFlow(rows), [rows]);
   const steps = flow.steps;
@@ -255,7 +255,6 @@ export function AgentFlowMap({ jobId, job }: Props) {
     shownRef.current = 0;
     setShownStepCount(0);
     setTrain(null);
-    setLoaded(false);
     if (timerRef.current) {
       clearTimeout(timerRef.current);
       // A cleared timeout is no longer an active animation. Reset the
@@ -343,7 +342,7 @@ export function AgentFlowMap({ jobId, job }: Props) {
   const visibleFlow = useMemo(() => {
     if (shownStepCount >= steps.length) return flow;
     const visibleRows: AgentDecisionLog[] = [];
-    for (let i = 0; i < shownStepCount; i++) visibleRows.push(steps[i].row);
+    for (let i = 0; i < Math.min(shownStepCount, steps.length); i++) visibleRows.push(steps[i].row);
     return computeFlow(visibleRows);
   }, [flow, steps, shownStepCount]);
 
@@ -427,6 +426,7 @@ export function AgentFlowMap({ jobId, job }: Props) {
                 >
                   <FlowSvgInner
                     stations={visibleFlow.stations}
+                    steps={visibleFlow.steps}
                     train={train}
                     hoverId={hoverId}
                     pinnedId={modalId}
@@ -829,6 +829,7 @@ function LegendSwatch({ cls, label }: { cls: string; label: string }) {
 
 function FlowSvgInner({
   stations,
+  steps,
   train,
   hoverId,
   pinnedId,
@@ -837,6 +838,7 @@ function FlowSvgInner({
   onClick,
 }: {
   stations: Record<StationId, StationRuntime>;
+  steps: FlowStep[];
   train: { path: string; dur: number; cls: string; key: number; phase: "run" | "fade" } | null;
   hoverId: StationId | null;
   pinnedId: StationId | null;
@@ -854,19 +856,17 @@ function FlowSvgInner({
         // branches that weren't taken this time fade back so the one that
         // WAS taken stands out.
         const anyRun = STATION_ORDER.some((id) => stations[id].visits.length > 0);
+        const traversed = new Set(steps.map((step) => `${step.from}->${step.to}`));
         return RAILS.filter((r) => {
           // Return-to-Notification arcs only ever matter for the one
           // branch that actually ran this time — don't draw the other 3
           // as idle clutter.
-          if (RETURN_RAIL_IDS.has(r.id)) return stations[r.a].visits.length > 0;
+          if (RETURN_RAIL_IDS.has(r.id)) return traversed.has(`${r.a}->${r.b}`) || train?.path === r.d;
           return true;
         }).map((r) => {
           const isBranchKind = r.cls === "branch" || r.cls === "branch dim" || r.cls === "ghost";
-          const bRan = stations[r.b].visits.length > 0;
-          const aRan = stations[r.a].visits.length > 0;
-          const doneMain = r.cls === "main" && bRan && aRan;
-          const doneBranch = isBranchKind && bRan && aRan;
-          const takenThisRun = doneMain || doneBranch || r.cls === "halt";
+          const takenThisRun = traversed.has(`${r.a}->${r.b}`);
+          const doneMain = r.cls === "main" && takenThisRun;
 
           // idle (no run yet): every branch rail is a plain, legible
           // dashed line in the neutral "structure" colour — not tied to
@@ -961,12 +961,13 @@ function FlowSvgInner({
           >
             <animateMotion
               key={`motion-${train.key}`}
+              ref={beginMotion}
               dur={`${train.dur / 1000}s`}
               path={train.path}
               fill="freeze"
               calcMode="linear"
               rotate={train.path.includes("Q") ? "0" : "auto"}
-              begin="0s"
+              begin="indefinite"
             />
             {/* a soft glowing pulse riding with the car */}
             <animate
@@ -1040,6 +1041,8 @@ function Station({
   return (
     <g
       transform={`translate(${cx} ${cy})`}
+      data-station={id}
+      data-state={state}
       style={{ cursor: "pointer" }}
       tabIndex={0}
       role="button"
@@ -1098,13 +1101,13 @@ function Station({
       {/* status disc, top-right corner */}
       {state !== "pending" && (
         <>
-          <g key={`${id}-status-${state}-${runtime.visits.length}`}>
+          <g>
             <circle
               className={state === "active" ? "fm-active-disc" : undefined}
               cx={CW / 2 - 2}
               cy={topY - 1}
               r="8"
-              fill={state === "active" ? "var(--tier-priority)" : state === "halt" ? "var(--tier-urgent)" : "var(--brand)"}
+              fill={state === "active" ? "var(--tier-priority)" : state === "halt" ? "var(--tier-urgent)" : state === "skipped" ? "var(--text-faint)" : "var(--brand)"}
             />
             {state === "active" ? (
               // three dots fading in sequence — a "working" indicator with no
@@ -1114,6 +1117,10 @@ function Station({
                 <circle className="fm-dot fm-dot-2" cx={CW / 2 - 2} cy={topY - 1} r="1.5" fill="#fff" />
                 <circle className="fm-dot fm-dot-3" cx={CW / 2 + 2} cy={topY - 1} r="1.5" fill="#fff" />
               </g>
+            ) : state === "halt" || state === "skipped" ? (
+              <text x={CW / 2 - 2} y={topY + 3} textAnchor="middle" fill="#fff" fontSize="11" fontWeight={700}>
+                {state === "halt" ? "!" : "−"}
+              </text>
             ) : (
               <path
                 d={`M ${CW / 2 - 5.3} ${topY - 0.7} l 2.4 2.4 l 4.6 -5`}

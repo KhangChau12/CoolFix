@@ -512,9 +512,9 @@ export interface JobFeedback {
 
 export interface RuntimeConfig {
   freezeWindowHours: number;
-  /** The scheduling clock used by the agents and demo interfaces. */
+  /** Legacy config field. Runtime reads/writes always normalize to "real". */
   clockMode: "real" | "custom";
-  /** Fixed simulated instant, used only when clockMode is "custom". */
+  /** Legacy override, ignored at runtime and cleared on writes. */
   customTimeISO: string | null;
   /**
    * How the Assignment Agent weighs the five scoring components, per tier.

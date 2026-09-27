@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { apiGet, apiSend } from "@/lib/client";
 import MapView, { type RouteSegment, type TrafficCamera } from "@/components/MapView";
 import type { Job, Technician } from "@/lib/types";
+import { sameSgDay } from "@/lib/time";
 
 interface RouteOption {
   id: string;
@@ -15,6 +16,8 @@ interface RouteOption {
   geometry: Array<[number, number]>;
   legs: Array<Array<[number, number]>>;
   legDurations: number[];
+  adjustedLegDurations?: number[];
+  legCongestionSegments?: RouteOption["congestionSegments"][];
   nearbyCameraIds: string[];
   congestionSegments: Array<{
     coordinates: Array<[number, number]>;
@@ -29,6 +32,7 @@ interface Recommendation {
   trafficAvailable: boolean;
   trafficObservedAt: string | null;
   trafficNote: string;
+  simulatedTraffic?: boolean;
 }
 
 export default function RecommendedRouting({
@@ -47,6 +51,8 @@ export default function RecommendedRouting({
   const [routeChangeNotice, setRouteChangeNotice] = useState<string | null>(null);
   const [pendingRecommendation, setPendingRecommendation] = useState<Recommendation | null>(null);
   const [showAllRoutes, setShowAllRoutes] = useState(true);
+  const [mapAvailable, setMapAvailable] = useState(true);
+  const requestIdRef = useRef(0);
   const notifyingSignature = useRef<string | null>(null);
   const activeSignature = useRef<string | null>(null);
   const recommendationRef = useRef<Recommendation | null>(null);
@@ -54,13 +60,17 @@ export default function RecommendedRouting({
   const techRef = useRef<Technician | undefined>(tech);
   currentJobRef.current = currentJob;
   techRef.current = tech;
+  const remainingStops = currentJob ? dayJobs
+    .filter((job) => job.status !== "completed" && job.status !== "disrupted" &&
+      job.assigned_technician_id === tech?.technician_id && sameSgDay(job.scheduled_time, currentJob.scheduled_time))
+    .sort((a, b) => a.scheduled_time.localeCompare(b.scheduled_time)) : [];
 
   // The technician page refreshes its job snapshot for realtime safety. Use
   // stable route inputs rather than object identity, otherwise an unchanged
   // job object would clear and redraw the map on every safety poll.
   const routeJobKey = currentJob
-    ? `${currentJob.job_id}|${currentJob.location.lat}|${currentJob.location.lng}|${dayJobs
-        .map((job) => `${job.job_id}:${job.scheduled_time}:${job.location.lat},${job.location.lng}`)
+    ? `${currentJob.job_id}|${currentJob.scheduled_time}|${currentJob.location.lat}|${currentJob.location.lng}|${remainingStops
+        .map((job) => `${job.job_id}:${job.status}:${job.scheduled_time}:${job.location.lat},${job.location.lng}`)
         .join("|")}`
     : "";
   const routeTechKey = tech
@@ -71,6 +81,7 @@ export default function RecommendedRouting({
     const technician = techRef.current;
     const job = currentJobRef.current;
     if (!technician || !job) return;
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     setError(null);
     try {
@@ -82,9 +93,7 @@ export default function RecommendedRouting({
       });
       const orderedStops = [
         job,
-        ...dayJobs
-          .filter((dayJob) => dayJob.status !== "completed" && dayJob.job_id !== job.job_id)
-          .sort((a, b) => a.scheduled_time.localeCompare(b.scheduled_time)),
+        ...remainingStops.filter((dayJob) => dayJob.job_id !== job.job_id),
       ];
       params.set(
         "points",
@@ -93,6 +102,7 @@ export default function RecommendedRouting({
           .join(";"),
       );
       const result = await apiGet<Recommendation>(`/api/routing/recommendation?${params}`);
+      if (requestId !== requestIdRef.current) return;
       const signature = routeSignature(result.recommended);
       const storageKey = `coolfix-route-signature:${technician.technician_id}:${job.job_id}`;
       let previousSignature: string | null = null;
@@ -121,8 +131,10 @@ export default function RecommendedRouting({
             subject: "Route update needs your approval",
             body: `The recommended route to ${routeLabel} changed after a traffic refresh. Please review the new route and approve the change before updating navigation.`,
           });
+          if (requestId !== requestIdRef.current) return;
           setRouteChangeNotice("Route updated — a permission request was sent to your Messages inbox.");
         } catch {
+          if (requestId !== requestIdRef.current) return;
           setRouteChangeNotice("Route updated — review the new route before changing navigation.");
         }
       }
@@ -142,9 +154,9 @@ export default function RecommendedRouting({
         setUpdatedAt(new Date());
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to calculate a route.");
+      if (requestId === requestIdRef.current) setError(err instanceof Error ? err.message : "Unable to calculate a route.");
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) setLoading(false);
     }
   }, [routeJobKey, routeTechKey]);
 
@@ -153,12 +165,17 @@ export default function RecommendedRouting({
     setRouteChangeNotice(null);
     setPendingRecommendation(null);
     setShowAllRoutes(true);
+    setMapAvailable(true);
+    setUpdatedAt(null);
+    setLoading(false);
+    setError(null);
     activeSignature.current = null;
     recommendationRef.current = null;
     notifyingSignature.current = null;
     // Routing is checked when this screen/task changes. It is never polled
     // automatically for new OSRM or traffic results.
     void refresh(false);
+    return () => { requestIdRef.current++; };
   }, [refresh]);
 
   function applyPendingRecommendation() {
@@ -190,15 +207,12 @@ export default function RecommendedRouting({
   const routeCoordinates = (firstLeg && firstLeg.length > 1 ? firstLeg : route?.geometry)?.map(
     ([lng, lat]) => [lat, lng] as [number, number],
   );
-  const remainingStops = dayJobs
-    .filter((job) => job.status !== "completed")
-    .sort((a, b) => a.scheduled_time.localeCompare(b.scheduled_time));
   const routeSegments: RouteSegment[] = (route?.legs ?? []).slice(1).map((leg) => ({
     coordinates: leg.map(([lng, lat]) => [lat, lng] as [number, number]),
     color: "#9ca3af",
     dashArray: "6 5",
   }));
-  const currentWorkEta = route?.legDurations?.[0] ?? route?.adjustedTime ?? 0;
+  const currentWorkEta = route?.adjustedLegDurations?.[0] ?? route?.legDurations?.[0] ?? route?.adjustedTime ?? 0;
   const otherStops = remainingStops
     .filter((job) => job.job_id !== currentJob.job_id)
     .map((job) => ({
@@ -211,11 +225,11 @@ export default function RecommendedRouting({
   return (
     <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
       <div>
-        <div className="spread" style={{ gap: 8 }}>
+        <div className="spread" style={{ gap: 8, flexWrap: "wrap" }}>
           <div>
             <h2 style={{ fontSize: 18 }}>Recommended routing</h2>
             <p className="muted" style={{ fontSize: 12, margin: 0 }}>
-              From {tech.name}&rsquo;s current position through today&rsquo;s remaining service stops.
+              From {tech.name}&rsquo;s current position through remaining stops on {new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Singapore", day: "numeric", month: "short" }).format(new Date(currentJob.scheduled_time))} (SGT).
             </p>
           </div>
           <div className="row" style={{ gap: 6, flexShrink: 0 }}>
@@ -247,10 +261,12 @@ export default function RecommendedRouting({
 
       {route && routeCoordinates && routeCoordinates.length > 1 && currentJob && (
         <>
+          {!mapAvailable && <p className="muted">Map tiles are unavailable. Route estimates and stop addresses remain available below.</p>}
           <MapView
             mode="display"
             height={270}
             interactiveZoom
+            onUnavailable={() => setMapAvailable(false)}
             customer={{ ...currentJob.location }}
             customerColor="#2563eb"
             extras={showAllRoutes ? otherStops : []}
@@ -258,7 +274,7 @@ export default function RecommendedRouting({
             route={{
               coordinates: routeCoordinates,
               color: "#2563eb",
-              congestionSegments: route.congestionSegments.map((segment) => ({
+              congestionSegments: (showAllRoutes ? route.congestionSegments : route.legCongestionSegments?.[0] ?? []).map((segment) => ({
                 coordinates: segment.coordinates.map(([lng, lat]) => [lat, lng] as [number, number]),
                 severity: segment.severity,
               })),
@@ -301,6 +317,7 @@ export default function RecommendedRouting({
             <span><i className="routing-legend-dot" style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: "#f0b429", marginRight: 4 }} />Low</span>
             <span><i className="routing-legend-dot" style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: "#e67e22", marginRight: 4 }} />Medium</span>
             <span><i className="routing-legend-dot" style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: "#d64545", marginRight: 4 }} />High</span>
+            <span><i style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: "#64748b", marginRight: 4 }} />Camera · severity unknown</span>
           </div>
         </>
       )}

@@ -125,7 +125,17 @@ export class AgentContext {
    *  write failure would. */
   bufferDecision(entry: AgentDecisionLog): void {
     this.decisionBuffer.push(entry);
-    this.decisionInserts.push(repo.insertDecision(entry));
+    // Keep live INSERT visibility in pipeline order as well as flush order.
+    // Concurrent inserts can otherwise reveal a later station first, then
+    // insert an earlier row behind the animation's cursor.
+    const previous = this.decisionInserts[this.decisionInserts.length - 1];
+    const insert = previous
+      ? previous.then(() => repo.insertDecision(entry))
+      : repo.insertDecision(entry);
+    this.decisionInserts.push(insert);
+    // flush() still reports the original rejection. Handle it immediately
+    // too, since an agent can take seconds before reaching that flush.
+    void insert.catch(() => {});
   }
 
   bufferNotification(n: NotificationRecord): void {

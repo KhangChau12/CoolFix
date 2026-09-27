@@ -176,6 +176,16 @@ npm run seed                    # load demo technicians + jobs
 npm run dev                     # http://localhost:3000
 ```
 
+For the larger scheduling/routing demo with four human-review cases, see
+[the showcase guide](docs/SHOWCASE.md). Use `npm run seed:demo` to preview and
+`npm run seed:demo -- --apply` to back up and replace the application rows.
+Migration `0009_technician_realtime.sql` adds technician realtime updates.
+
+For a live hospital emergency where all technicians are busy, use
+`npm run seed:hospital -- --apply` and follow the
+[hospital approval demo](docs/HOSPITAL_DEMO.md). It backs up the current data and
+loads a starting schedule that makes an Urgent booking pause for human approval.
+
 ### Scripts
 
 | command | what it does |

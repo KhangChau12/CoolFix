@@ -8,15 +8,7 @@ import { DEFAULT_CONFIG } from "@/lib/types";
 export const dynamic = "force-dynamic";
 
 export async function POST() {
-  // Reset the demo data without silently changing the coordinator's selected
-  // scheduling clock. The clock remains simulated until they choose real time
-  // in Settings.
-  const currentConfig = await repo.getConfig();
-  const resetConfig = {
-    ...DEFAULT_CONFIG,
-    clockMode: currentConfig.clockMode,
-    customTimeISO: currentConfig.customTimeISO,
-  };
+  const resetConfig = { ...DEFAULT_CONFIG };
   await repo.wipeAll();
   const techs = seedTechnicians();
   for (const t of techs) await repo.upsertTechnician(t);

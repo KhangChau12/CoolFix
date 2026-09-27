@@ -7,9 +7,11 @@
 // booking. Rows expand to the score bars / candidate list / re-plan
 // options / guardrail notes.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { apiGet } from "@/lib/client";
 import { useRealtime } from "./useRealtime";
+import { useLiveData } from "./useLiveData";
+import { sortPipelineOrder } from "@/lib/flowMap";
 import { ScoreBars, ScoringExplainer } from "./scoring";
 import { fmtSGTime } from "@/lib/time";
 import type { AgentDecisionLog, AgentName } from "@/lib/types";
@@ -28,26 +30,23 @@ const AGENT_META: Record<AgentName, { color: string; short: string }> = {
 };
 
 export function PipelineReplay({ jobId }: { jobId: string }) {
-  const [rows, setRows] = useState<AgentDecisionLog[]>([]);
-  const [loaded, setLoaded] = useState(false);
+  return <JobPipelineReplay key={jobId} jobId={jobId} />;
+}
+
+function JobPipelineReplay({ jobId }: { jobId: string }) {
   const [open, setOpen] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
-    try {
-      const { decisions } = await apiGet<{ decisions: AgentDecisionLog[] }>(
-        `/api/decisions?job=${encodeURIComponent(jobId)}&limit=200`,
-      );
-      setRows(decisions);
-      setLoaded(true);
-    } catch {
-      /* keep last */
-    }
+    const { decisions } = await apiGet<{ decisions: AgentDecisionLog[] }>(
+      `/api/decisions?job=${encodeURIComponent(jobId)}&limit=500`,
+    );
+    return sortPipelineOrder(decisions);
   }, [jobId]);
 
-  const conn = useRealtime("agent_decision_log", load);
-  useEffect(() => {
-    load();
-  }, [load]);
+  const { data, refresh } = useLiveData(load);
+  const rows = data ?? [];
+  const loaded = data !== null;
+  const conn = useRealtime("agent_decision_log", refresh);
 
   function toggle(id: string) {
     setOpen((s) => {

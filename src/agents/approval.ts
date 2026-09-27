@@ -127,12 +127,19 @@ export async function resolveApproval(input: ResolveInput): Promise<ResolveResul
       ? "Emergency Override approved by the coordinator"
       : "Re-plan approved by the coordinator";
 
-  applyReplan(ctx, chosen.option_id, approval.options, input.coordinatorName, reason);
-
-  // Last-line integrity check: after the moves are applied, the incoming
-  // job's slot must be clear on its technician. If the chosen option would
-  // leave a collision, refuse to commit rather than double-book.
-  const clash = incomingJobClashAfterReplan(ctx, approval.job_id);
+  // Validate an in-memory projection BEFORE staging anything: stageJob()
+  // immediately publishes the first write, so checking after applyReplan()
+  // would already persist a plan that this guard is meant to reject.
+  const preview = new AgentContext();
+  preview.jobs = ctx.jobs.map((job) => ({ ...job }));
+  for (const move of chosen.moves) {
+    const job = preview.getJob(move.job_id);
+    if (!job) continue;
+    job.scheduled_time = move.to_time;
+    job.assigned_technician_id = move.technician_id;
+    job.status = "assigned";
+  }
+  const clash = incomingJobClashAfterReplan(preview, approval.job_id);
   if (clash) {
     logDecision(ctx, {
       agent: "Orchestrator",
@@ -143,7 +150,7 @@ export async function resolveApproval(input: ResolveInput): Promise<ResolveResul
       headline: `Re-plan blocked — it would still leave ${incoming.customer_name} double-booked with job ${clash}`,
       outcome: "rejected",
       guardrailNotes: [
-        "Post-apply safety check: the incoming job's slot was not clear after the re-plan — nothing was committed.",
+        "Pre-commit safety check: the proposed re-plan leaves the incoming job's slot occupied — no schedule changes were committed.",
       ],
     });
     await ctx.flush();
@@ -153,6 +160,8 @@ export async function resolveApproval(input: ResolveInput): Promise<ResolveResul
       decisionLogIds: ctx.decisions.map((d) => d.log_id),
     };
   }
+
+  applyReplan(ctx, chosen.option_id, approval.options, input.coordinatorName, reason);
 
   // Commit the incoming job onto its technician. Re-fetch rather than reuse
   // the `incoming` captured at the top of this function: for a standard

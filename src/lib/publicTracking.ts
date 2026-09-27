@@ -9,7 +9,7 @@
 // technician phone/id, score_breakdown, candidate lists, replan options,
 // agent decision rows, runtime config, any other job's data.
 
-import { SKILL_LABEL, TIER_META, type Job, type Technician } from "./types";
+import { estimatedJobMinutes, SKILL_LABEL, TIER_META, type Job, type Technician } from "./types";
 import { hoursBetween, nowISO } from "./time";
 import type { TechnicianRatingSummary } from "./rating";
 
@@ -27,7 +27,7 @@ export interface PublicJobView {
   appointment: {
     date: string; // "2026-09-12"
     start: string; // "15:30"
-    end: string; // "17:00" (best-effort +2h display window)
+    end: string; // "17:00" (estimated service duration from the scheduling duration table)
   };
   service: {
     category: string;
@@ -92,10 +92,6 @@ function addMinutesLabel(iso: string, minutes: number): string {
     hour12: false,
   }).format(d);
 }
-
-// Visit-length estimate for the display-only appointment window — matches
-// the same duration table the pipeline itself uses for scheduling.
-const DEFAULT_VISIT_MIN = 90;
 
 interface StatusInfo {
   code: string;
@@ -267,7 +263,7 @@ export function toPublicJobView(
     appointment: {
       date,
       start: time,
-      end: addMinutesLabel(job.scheduled_time, DEFAULT_VISIT_MIN),
+      end: addMinutesLabel(job.scheduled_time, estimatedJobMinutes(job.skill_required)),
     },
     service: {
       category: job.problem_category || "Aircon service",

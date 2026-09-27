@@ -6,7 +6,6 @@
 // All writes use the service_role client (server-side only).
 
 import { serviceClient } from "./supabase";
-import { configureClock } from "./time";
 import {
   approvalToRow,
   adaptiveHistoryToRow,
@@ -46,11 +45,29 @@ function orThrow<T>(res: { data: T | null; error: unknown }, ctx: string): T {
   return res.data as T;
 }
 
+/** PostgREST caps each response; scheduling and rating inputs must include
+ * every row, not only the first page. Callers provide a stable unique order. */
+async function allRows<T>(
+  page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown; count: number | null }>,
+  ctx: string,
+  optionalTable = false,
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (;;) {
+    const res = await page(rows.length, rows.length + 499);
+    if (optionalTable && res.error && isMissingTableError(res.error)) return [];
+    const batch = orThrow(res, ctx) ?? [];
+    rows.push(...batch);
+    if (!batch.length || (res.count !== null && rows.length >= res.count)) return rows;
+  }
+}
+
 // ── Technicians ───────────────────────────────────────────────────
 
 export async function listTechnicians(): Promise<Technician[]> {
-  const res = await sb().from("technicians").select("*").order("name");
-  return orThrow(res, "listTechnicians").map(rowToTechnician);
+  const rows = await allRows((from, to) => sb().from("technicians").select("*", { count: "exact" })
+    .order("name").order("technician_id").range(from, to), "listTechnicians");
+  return rows.map(rowToTechnician);
 }
 
 export async function getTechnician(id: string): Promise<Technician | undefined> {
@@ -75,8 +92,9 @@ export async function setTechnicianWorkload(id: string, workload: number): Promi
 // ── Jobs ──────────────────────────────────────────────────────────
 
 export async function listJobs(): Promise<Job[]> {
-  const res = await sb().from("jobs").select("*").order("scheduled_time");
-  return orThrow(res, "listJobs").map(rowToJob);
+  const rows = await allRows((from, to) => sb().from("jobs").select("*", { count: "exact" })
+    .order("scheduled_time").order("job_id").range(from, to), "listJobs");
+  return rows.map(rowToJob);
 }
 
 export async function getJob(id: string): Promise<Job | undefined> {
@@ -120,12 +138,17 @@ export async function insertDecision(d: AgentDecisionLog): Promise<void> {
   orThrow(res, "insertDecision");
 }
 
-export async function listDecisions(limit = 200): Promise<AgentDecisionLog[]> {
-  const res = await sb()
+export async function listDecisions(limit = 200, jobId?: string): Promise<AgentDecisionLog[]> {
+  let query = sb()
     .from("agent_decision_log")
     .select("*")
     .order("timestamp", { ascending: false })
+    .order("log_id")
     .limit(limit);
+  // Filter before applying the feed limit so older jobs still have replay
+  // history even when hundreds of newer decisions exist for other jobs.
+  if (jobId) query = query.eq("job_id", jobId);
+  const res = await query;
   return orThrow(res, "listDecisions").map(rowToDecision);
 }
 
@@ -149,11 +172,11 @@ export async function insertApproval(a: ApprovalRequest): Promise<void> {
 }
 
 export async function listApprovals(): Promise<ApprovalRequest[]> {
-  const res = await sb()
+  const rows = await allRows((from, to) => sb()
     .from("approval_requests")
-    .select("*")
-    .order("created_at", { ascending: false });
-  return orThrow(res, "listApprovals").map(rowToApproval);
+    .select("*", { count: "exact" })
+    .order("created_at", { ascending: false }).order("approval_id").range(from, to), "listApprovals");
+  return rows.map(rowToApproval);
 }
 
 export async function getApproval(id: string): Promise<ApprovalRequest | undefined> {
@@ -190,11 +213,11 @@ export async function insertNotification(n: NotificationRecord): Promise<void> {
 }
 
 export async function listNotifications(): Promise<NotificationRecord[]> {
-  const res = await sb()
+  const rows = await allRows((from, to) => sb()
     .from("notifications")
-    .select("*")
-    .order("created_at", { ascending: false });
-  return orThrow(res, "listNotifications").map(rowToNotification);
+    .select("*", { count: "exact" })
+    .order("created_at", { ascending: false }).order("notification_id").range(from, to), "listNotifications");
+  return rows.map(rowToNotification);
 }
 
 export async function ackNotification(id: string): Promise<void> {
@@ -210,15 +233,15 @@ export async function ackNotification(id: string): Promise<void> {
 export async function getConfig(): Promise<RuntimeConfig> {
   const res = await sb().from("runtime_config").select("*").eq("id", 1).maybeSingle();
   const row = orThrow(res, "getConfig");
-  const config = rowToConfig(row ?? {});
-  configureClock(config);
-  return config;
+  return rowToConfig(row ?? {});
 }
 
 export async function updateConfig(patch: Partial<RuntimeConfig>): Promise<RuntimeConfig> {
-  const effectivePatch = { ...patch };
+  // Clear legacy overrides on every write, including updates from old tabs.
+  const effectivePatch = { ...patch, clockMode: "real" as const, customTimeISO: null };
+  let current: RuntimeConfig | null = null;
   if (patch.dispatchPolicy !== undefined) {
-    const current = await getConfig();
+    current = await getConfig();
     effectivePatch.policyVersion = nextPolicyVersion(current.policyVersion);
   } else {
     // policy_version is server-owned; unrelated settings must not accept a
@@ -228,20 +251,26 @@ export async function updateConfig(patch: Partial<RuntimeConfig>): Promise<Runti
   const row = configToRow(effectivePatch);
   let res = await sb().from("runtime_config").upsert(row);
 
-  // Older hosted databases may not have applied migration 0007 yet. Keep
-  // clock editing usable by retrying through the existing dispatch_policy
-  // JSONB column; once 0007 is applied, the normal columns are used instead.
-  if (res.error && (hasMissingClockColumn(res.error) || hasMissingAdaptiveConfigColumn(res.error))) {
-    const current = patch.dispatchPolicy ? null : await getConfig();
-    const fallbackPatch = current
-      ? { ...patch, dispatchPolicy: current.dispatchPolicy }
-      : patch;
-    const fallbackRow = configToRow(fallbackPatch, { embedClockFallback: true });
-    if (hasMissingClockColumn(res.error)) {
+  // PostgREST reports only one missing column at a time. An older database
+  // can lack both migrations 0007 and 0008; remember each missing group
+  // across bounded retries instead of reintroducing the previous failure.
+  let missingClock = false;
+  let missingAdaptive = false;
+  for (let retry = 0; res.error && retry < 2; retry++) {
+    if (hasMissingClockColumn(res.error) && !missingClock) missingClock = true;
+    else if (hasMissingAdaptiveConfigColumn(res.error) && !missingAdaptive) missingAdaptive = true;
+    else break;
+    const fallbackPatch = { ...effectivePatch };
+    if (missingClock) {
+      current ??= await getConfig();
+      fallbackPatch.dispatchPolicy ??= current.dispatchPolicy;
+    }
+    const fallbackRow = configToRow(fallbackPatch, { embedClockFallback: missingClock });
+    if (missingClock) {
       delete fallbackRow.clock_mode;
       delete fallbackRow.custom_time_iso;
     }
-    if (hasMissingAdaptiveConfigColumn(res.error)) {
+    if (missingAdaptive) {
       for (const key of [
         "policy_version",
         "adaptive_policy_enabled",
@@ -370,25 +399,18 @@ export async function getFeedbackByJobId(jobId: string): Promise<JobFeedback | u
  *  wholesale and summarised in memory, same convention as
  *  `listJobs`/`listTechnicians`. */
 export async function listFeedback(): Promise<JobFeedback[]> {
-  const res = await sb().from("job_feedback").select("*").order("created_at", { ascending: false });
-  if (res.error) {
-    if (isMissingTableError(res.error)) return [];
-    orThrow(res, "listFeedback");
-  }
-  return (res.data ?? []).map(rowToFeedback);
+  const rows = await allRows((from, to) => sb().from("job_feedback").select("*", { count: "exact" })
+    .order("created_at", { ascending: false }).order("feedback_id").range(from, to), "listFeedback", true);
+  return rows.map(rowToFeedback);
 }
 
 export async function listFeedbackForTechnician(technicianId: string): Promise<JobFeedback[]> {
-  const res = await sb()
+  const rows = await allRows((from, to) => sb()
     .from("job_feedback")
-    .select("*")
+    .select("*", { count: "exact" })
     .eq("technician_id", technicianId)
-    .order("created_at", { ascending: false });
-  if (res.error) {
-    if (isMissingTableError(res.error)) return [];
-    orThrow(res, "listFeedbackForTechnician");
-  }
-  return (res.data ?? []).map(rowToFeedback);
+    .order("created_at", { ascending: false }).order("feedback_id").range(from, to), "listFeedbackForTechnician", true);
+  return rows.map(rowToFeedback);
 }
 
 export async function updateFeedbackModeration(

@@ -31,14 +31,11 @@ type LeafletPolyline = import("leaflet").Polyline;
 
 const LEAFLET_VERSION = "1.9.4";
 const LEAFLET_CSS = `https://cdnjs.cloudflare.com/ajax/libs/leaflet/${LEAFLET_VERSION}/leaflet.min.css`;
-// CARTO's "voyager" style, not the default OSM standard style — it renders
-// place labels in English consistently (the default OSM tiles show local-
-// script labels for Singapore locations, e.g. Chinese names in Chinatown,
-// with no way to force English via the raster tile URL).
-const TILE_URL = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
+// The standard OpenStreetMap basemap needs no API key. Provider-specific
+// styles may return an API-key warning image that still counts as loaded.
+const TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
 const TILE_ATTRIB =
-  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors ' +
-  '&copy; <a href="https://carto.com/attributions">CARTO</a>';
+  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 const NOMINATIM = "https://nominatim.openstreetmap.org";
 
 export interface PickedPlace {
@@ -218,6 +215,7 @@ function makePinIcon(L: L, color: string): import("leaflet").DivIcon {
 }
 
 function severityColor(severity: TrafficCamera["severity"]): string {
+  if (!severity) return "#64748b";
   if (severity === "high") return "#d64545";
   if (severity === "medium") return "#e67e22";
   return "#f0b429";
@@ -377,13 +375,15 @@ export default function MapView(props: Props) {
   // ── display mode: customer + technician markers, line, fit ──
   const dCustLat = props.mode === "display" ? props.customer.lat : null;
   const dCustLng = props.mode === "display" ? props.customer.lng : null;
+  const dCustAddress = props.mode === "display" ? props.customer.address : "";
+  const dTechName = props.mode === "display" ? props.technician?.name ?? "" : "";
   const dCustomerColor = props.mode === "display" ? props.customerColor ?? "var(--tier-standard)" : "";
   const dTechLat = props.mode === "display" ? props.technician?.lat ?? null : null;
   const dTechLng = props.mode === "display" ? props.technician?.lng ?? null : null;
   const dActive = props.mode === "display" ? Boolean(props.active) : false;
   const dExtras = props.mode === "display" ? props.extras ?? null : null;
   const dExtrasKey = dExtras
-    ? dExtras.map((e) => `${e.lat.toFixed(4)},${e.lng.toFixed(4)},${e.role ?? ""}`).join("|")
+    ? dExtras.map((e) => `${e.lat.toFixed(4)},${e.lng.toFixed(4)},${e.role ?? ""},${e.label}`).join("|")
     : "";
   const dRoute = props.mode === "display" ? props.route ?? null : null;
   const dRouteSegments = props.mode === "display" ? props.routeSegments ?? [] : [];
@@ -394,6 +394,7 @@ export default function MapView(props: Props) {
           (segment) => `${segment.severity}:${segment.coordinates.map(([lat, lng]) => `${lat.toFixed(5)},${lng.toFixed(5)}`).join(";")}`,
         ),
       ].join("||")
+      + `|${dRoute.color ?? ""}`
     : "";
   const dRouteSegmentsKey = dRouteSegments
     .map((segment) => `${segment.color}:${segment.coordinates.map(([lat, lng]) => `${lat.toFixed(5)},${lng.toFixed(5)}`).join(";")}`)
@@ -425,6 +426,16 @@ export default function MapView(props: Props) {
     } else {
       custMarkerRef.current.setLatLng([dCustLat, dCustLng]);
       custMarkerRef.current.setIcon(makePinIcon(L, dCustomerColor));
+      custMarkerRef.current.bindPopup(`<b>Your address</b><br>${escapeHtml(p.customer.address)}`);
+    }
+    // Assignment changes must remove the previous technician and route.
+    if (dTechLat == null || dTechLng == null) {
+      techMarkerRef.current?.remove();
+      techMarkerRef.current = null;
+      lineRef.current?.remove();
+      lineRef.current = null;
+      for (const segment of routeSegmentsRef.current) segment.remove();
+      routeSegmentsRef.current = [];
     }
 
     // Extra read-only markers (other jobs a re-plan touches). Rebuilt
@@ -453,7 +464,7 @@ export default function MapView(props: Props) {
         .addTo(map)
         .bindPopup(
           `<b>${camera.incident ? "Traffic incident" : "Traffic observation"}</b><br>` +
-            `Camera ${escapeHtml(camera.camera_id)} · ${camera.severity ?? "low"} severity<br>${escapeHtml(camera.timestamp)}<br>` +
+            `Camera ${escapeHtml(camera.camera_id)} · ${camera.severity ? `${camera.severity} severity` : "severity unknown"}<br>${escapeHtml(camera.timestamp)}<br>` +
             `<img src="${escapeHtml(camera.image)}" alt="Live traffic camera ${escapeHtml(camera.camera_id)}" ` +
             `style="display:block;width:260px;max-width:70vw;margin-top:6px;border-radius:6px" />`,
         );
@@ -555,7 +566,7 @@ export default function MapView(props: Props) {
       map.setView([dCustLat, dCustLng], 14, { animate: false });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, mode, dCustLat, dCustLng, dCustomerColor, dTechLat, dTechLng, dActive, dExtrasKey, dRouteKey, dRouteSegmentsKey, dTrafficKey]);
+  }, [ready, mode, dCustLat, dCustLng, dCustAddress, dCustomerColor, dTechLat, dTechLng, dTechName, dActive, dExtrasKey, dRouteKey, dRouteSegmentsKey, dTrafficKey]);
 
   // ── search box (pick only) ──
   const [q, setQ] = useState("");

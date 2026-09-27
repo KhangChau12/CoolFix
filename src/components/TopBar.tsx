@@ -19,12 +19,13 @@ export function TopBar({
 }) {
   return (
     <header
+      className="tb-header"
       style={{
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
-        gap: 20,
-        padding: "0 18px",
+        gap: "var(--tb-gap, 20px)",
+        padding: "0 var(--tb-padding, 18px)",
         height: 56,
         background: "var(--ink)",
         color: "var(--ink-text)",
@@ -37,12 +38,14 @@ export function TopBar({
     >
       <Link
         href="/"
+        aria-label="CoolFix home"
         className="tb-brand"
         style={{
           display: "flex",
           alignItems: "center",
           gap: 11,
           minWidth: 0,
+          flexShrink: 0,
           color: "var(--ink-text)",
         }}
       >
@@ -64,7 +67,7 @@ export function TopBar({
             <path d="M12 2v20M4.2 7l15.6 10M19.8 7L4.2 17" />
           </svg>
         </span>
-        <span style={{ fontWeight: 600, letterSpacing: "-0.01em", fontSize: 15 }}>CoolFix</span>
+        <span className="tb-wordmark" style={{ fontWeight: 600, letterSpacing: "-0.01em", fontSize: 15 }}>CoolFix</span>
         <span
           className="tb-context"
           style={{
@@ -140,6 +143,9 @@ export function TopBar({
         .tb-tab.is-active:hover { background: linear-gradient(180deg, #3e3b63 0%, #302d4e 100%); }
         @media (max-width: 560px) {
           .tb-context { display: none; }
+          .tb-header { --tb-gap: 8px; --tb-padding: 12px; }
+          .tb-wordmark { display: none; }
+          .tb-tab { font-size: 11.5px; padding: 7px 8px; }
         }
       `}</style>
     </header>

@@ -1,9 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 import { apiGet } from "@/lib/client";
 import { useRealtime } from "./useRealtime";
+import { useLiveData } from "./useLiveData";
+import { compareDecisions, computeFlow } from "@/lib/flowMap";
 import { SCORE_COMPONENT_COLOR } from "./scoring";
 import { fmtSGTime } from "@/lib/time";
 import { TIER_META } from "@/lib/types";
@@ -23,12 +25,6 @@ const AGENT_META: Record<AgentName, { icon: (typeof AGENT_ICON)[AgentName]; colo
   Orchestrator: { icon: AGENT_ICON.Orchestrator, color: "var(--agent-orchestrator)", short: "Orchestrator" },
 };
 
-/** Reliable per-run ordering key: log_id ends in `_<base36 monotonic seq>`. */
-function seqOf(id: string): number {
-  const n = parseInt(id.split("_").pop() ?? "0", 36);
-  return Number.isFinite(n) ? n : 0;
-}
-
 interface JobGroup {
   jobId: string;
   rows: AgentDecisionLog[];
@@ -42,30 +38,22 @@ interface JobGroup {
 }
 
 export function AgentFeed({ limit = 60 }: { limit?: number }) {
-  const [rows, setRows] = useState<AgentDecisionLog[]>([]);
-  const [jobs, setJobs] = useState<Record<string, Job>>({});
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [collapsedJobs, setCollapsedJobs] = useState<Set<string>>(new Set());
-  const [loaded, setLoaded] = useState(false);
 
   const load = useCallback(async () => {
-    try {
-      const [{ decisions }, jobsRes] = await Promise.all([
-        apiGet<{ decisions: AgentDecisionLog[] }>(`/api/decisions?limit=${limit}`),
-        apiGet<{ jobs: Job[] }>("/api/bookings").catch(() => ({ jobs: [] as Job[] })),
-      ]);
-      setRows(decisions);
-      setJobs(Object.fromEntries(jobsRes.jobs.map((j) => [j.job_id, j])));
-      setLoaded(true);
-    } catch {
-      /* keep last */
-    }
+    const [{ decisions }, jobsRes] = await Promise.all([
+      apiGet<{ decisions: AgentDecisionLog[] }>(`/api/decisions?limit=${limit}`),
+      apiGet<{ jobs: Job[] }>("/api/bookings").catch(() => ({ jobs: [] as Job[] })),
+    ]);
+    return { rows: decisions, jobs: Object.fromEntries(jobsRes.jobs.map((j) => [j.job_id, j])) };
   }, [limit]);
 
-  const conn = useRealtime("agent_decision_log", load);
-  useEffect(() => {
-    load();
-  }, [load]);
+  const { data, refresh } = useLiveData(load);
+  const rows = data?.rows ?? [];
+  const jobs = data?.jobs ?? {};
+  const loaded = data !== null;
+  const conn = useRealtime("agent_decision_log", refresh);
 
   function toggleRow(id: string) {
     setExpandedRows((s) => {
@@ -95,9 +83,7 @@ export function AgentFeed({ limit = 60 }: { limit?: number }) {
     }
     const out: JobGroup[] = [];
     for (const [jid, arr] of byJob) {
-      arr.sort(
-        (a, b) => a.timestamp.localeCompare(b.timestamp) || seqOf(a.log_id) - seqOf(b.log_id),
-      );
+      arr.sort(compareDecisions);
       const job = jobs[jid];
       // Fall back to the Orchestrator "New booking received" row for tier if
       // the job record isn't loaded (e.g. wiped between runs).
@@ -109,13 +95,13 @@ export function AgentFeed({ limit = 60 }: { limit?: number }) {
         first: arr[0],
         last: arr[arr.length - 1],
         llmCount: arr.filter((r) => r.reasoning_kind === "llm").length,
-        needsApproval: arr.some((r) => r.requires_human_approval),
+        needsApproval: computeFlow(arr).haltedForHuman,
         customer: job?.customer_name ?? null,
         tier: job?.tier ?? tierFromLog,
         status: job?.status ?? null,
       });
     }
-    out.sort((a, b) => b.last.timestamp.localeCompare(a.last.timestamp) || seqOf(b.last.log_id) - seqOf(a.last.log_id));
+    out.sort((a, b) => compareDecisions(b.last, a.last));
     return out;
   }, [rows, jobs]);
 

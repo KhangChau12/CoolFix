@@ -212,22 +212,11 @@ export function notificationToRow(n: NotificationRecord) {
 }
 
 export function rowToConfig(r: any): RuntimeConfig {
-  const storedClock = r.dispatch_policy?._coolfix_clock;
-  const clockMode = r.clock_mode === "custom" || r.clock_mode === "real"
-    ? r.clock_mode
-    : storedClock?.clockMode === "custom"
-      ? "custom"
-      : "real";
-  const customTimeISO = r.custom_time_iso
-    ? toISO(r.custom_time_iso)
-    : typeof storedClock?.customTimeISO === "string"
-      ? toISO(storedClock.customTimeISO)
-      : null;
-
   return {
     freezeWindowHours: Number(r.freeze_window_hours ?? 3),
-    clockMode,
-    customTimeISO: clockMode === "custom" ? customTimeISO : null,
+    // Keep the legacy API fields for older clients, but ignore saved clocks.
+    clockMode: "real",
+    customTimeISO: null,
     // dispatch_policy is the new per-tier scoring policy. Older rows (or a
     // pre-migration DB) won't have the column — fall back to the shipped
     // default so the pipeline always has a full policy.
@@ -265,16 +254,16 @@ export function configToRow(
 ) {
   const row: Record<string, unknown> = { id: 1, updated_at: new Date().toISOString() };
   if (c.freezeWindowHours !== undefined) row.freeze_window_hours = c.freezeWindowHours;
-  if (c.clockMode !== undefined) row.clock_mode = c.clockMode;
-  if (c.customTimeISO !== undefined) row.custom_time_iso = c.customTimeISO;
+  row.clock_mode = "real";
+  row.custom_time_iso = null;
   if (c.dispatchPolicy !== undefined) {
     row.dispatch_policy = options.embedClockFallback &&
       (c.clockMode !== undefined || c.customTimeISO !== undefined)
       ? {
           ...c.dispatchPolicy,
           _coolfix_clock: {
-            clockMode: c.clockMode ?? "real",
-            customTimeISO: c.customTimeISO ?? null,
+            clockMode: "real",
+            customTimeISO: null,
           },
         }
       : c.dispatchPolicy;

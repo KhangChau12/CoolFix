@@ -6,29 +6,21 @@
 
 import { NextResponse } from "next/server";
 import * as repo from "@/lib/repo";
+import { sortPipelineOrder } from "@/lib/flowMap";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
-  const limit = Math.min(Number(url.searchParams.get("limit") ?? 200), 500);
+  const requestedLimit = Number(url.searchParams.get("limit") ?? 200);
+  const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(Math.floor(requestedLimit), 500)) : 200;
   const jobId = url.searchParams.get("job");
 
-  let decisions = await repo.listDecisions(limit);
+  let decisions = await repo.listDecisions(limit, jobId ?? undefined);
   if (jobId) {
-    // Filter to one job and return it in true pipeline order. Timestamps
-    // tie at 1s resolution, so several agents in the same run share one —
-    // ordering on timestamp alone reverses those. log_id ends in
-    // `_<base36 monotonic seq>` (see agents/log.ts), which is a reliable
-    // per-run ordering key.
-    const seqOf = (id: string) => {
-      const tail = id.split("_").pop() ?? "0";
-      const n = parseInt(tail, 36);
-      return Number.isFinite(n) ? n : 0;
-    };
-    decisions = decisions
-      .filter((d) => d.job_id === jobId)
-      .sort((a, b) => a.timestamp.localeCompare(b.timestamp) || seqOf(a.log_id) - seqOf(b.log_id));
+    // Share the UI's ordering, including frozen demo timestamps and
+    // sequence counters that restart between booking and approval workers.
+    decisions = sortPipelineOrder(decisions);
   }
   return NextResponse.json({ decisions });
 }

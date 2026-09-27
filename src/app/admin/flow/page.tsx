@@ -12,13 +12,14 @@
 // picker below) for a stable link, e.g. to walk a judge through one
 // booking after the fact.
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { apiGet } from "@/lib/client";
 import { useRealtime } from "@/components/useRealtime";
+import { useLiveData } from "@/components/useLiveData";
 import { AgentFlowMap } from "@/components/AgentFlowMap";
 import { TierBadge, StatusDot } from "@/components/ui";
-import { seqOf } from "@/lib/flowMap";
+import { compareDecisions } from "@/lib/flowMap";
 import type { AgentDecisionLog, Job, Tier } from "@/lib/types";
 
 export default function AgentFlowPage() {
@@ -46,15 +47,6 @@ function AgentFlowPageInner() {
   const params = useSearchParams();
   const pinnedJobId = params.get("job");
 
-  const [jobs, setJobs] = useState<Job[]>([]);
-  // A lightweight header stand-in for a booking that has decision rows in
-  // the log but whose full job record hasn't flushed yet (customer/tier
-  // come from the Orchestrator "New booking received" row).
-  const [logStub, setLogStub] = useState<LogStub | null>(null);
-  // The most recently created booking we know about, tracked continuously
-  // regardless of pin state — so unpinning shows it instantly instead of
-  // waiting on a fresh discovery round trip.
-  const [latestJobId, setLatestJobId] = useState<string | null>(null);
   const followingLatest = !pinnedJobId;
 
   // Discovery runs off the agent_decision_log, NOT the jobs table: a
@@ -65,76 +57,67 @@ function AgentFlowPageInner() {
   // pipeline is still on its first agent. The jobs list is loaded too, but
   // only to enrich the header and populate the picker.
   const load = useCallback(async () => {
-    try {
-      const [{ decisions }, jobsRes] = await Promise.all([
-        apiGet<{ decisions: AgentDecisionLog[] }>("/api/decisions?limit=120"),
-        apiGet<{ jobs: Job[] }>("/api/bookings").catch(() => ({ jobs: [] as Job[] })),
-      ]);
+    const [{ decisions }, jobsRes] = await Promise.all([
+      apiGet<{ decisions: AgentDecisionLog[] }>("/api/decisions?limit=120"),
+      apiGet<{ jobs: Job[] }>("/api/bookings").catch(() => ({ jobs: [] as Job[] })),
+    ]);
 
-      const sortedJobs = jobsRes.jobs
-        .slice()
-        .sort((a, b) => b.created_at.localeCompare(a.created_at));
-      setJobs(sortedJobs);
+    const sortedJobs = jobsRes.jobs
+      .slice()
+      .sort((a, b) => b.created_at.localeCompare(a.created_at));
 
-      // Newest booking = the job whose FIRST decision row is the most
-      // recent. (First row per job ≈ the Orchestrator start row, so its
-      // timestamp/seq is the booking's arrival order.)
-      const firstRowByJob = new Map<string, AgentDecisionLog>();
-      for (const d of decisions) {
-        const cur = firstRowByJob.get(d.job_id);
-        if (!cur || d.timestamp < cur.timestamp || (d.timestamp === cur.timestamp && seqOf(d.log_id) < seqOf(cur.log_id))) {
-          firstRowByJob.set(d.job_id, d);
-        }
+    // Newest booking = the job whose FIRST decision row is the most
+    // recent. (First row per job ≈ the Orchestrator start row, so its
+    // timestamp/seq is the booking's arrival order.)
+    const firstRowByJob = new Map<string, AgentDecisionLog>();
+    for (const d of decisions) {
+      const cur = firstRowByJob.get(d.job_id);
+      if (!cur || compareDecisions(d, cur) < 0) {
+        firstRowByJob.set(d.job_id, d);
       }
-      // Rank by the job's real `created_at` once its full record has
-      // landed — falling back to the first decision-log row's timestamp
-      // only while a booking is still mid-pipeline with no job row yet.
-      // Ranking off decision-log timestamps alone breaks on seed/demo data:
-      // many seeded jobs share the exact same `created_at` (a flat
-      // "N hours ago" default), so their first decision rows land at the
-      // same millisecond too, and the old log_id tiebreak — a counter that
-      // increments once per row across ALL jobs in seed order, not a true
-      // per-booking arrival signal — ends up picking whichever job the
-      // seeder happened to process last, not the one actually most
-      // recently booked.
-      const jobById = new Map(sortedJobs.map((j) => [j.job_id, j]));
-      let newestEntry: [string, AgentDecisionLog] | null = null;
-      let newestArrival = "";
-      for (const entry of firstRowByJob) {
-        const [jobId, firstRow] = entry;
-        const arrival = jobById.get(jobId)?.created_at ?? firstRow.timestamp;
-        if (arrival > newestArrival) {
-          newestArrival = arrival;
-          newestEntry = entry;
-        }
-      }
-
-      setLatestJobId(newestEntry ? newestEntry[0] : null);
-
-      if (followingLatest && newestEntry) {
-        const [newestId, firstRow] = newestEntry;
-        // Header stand-in until the real job record shows up.
-        setLogStub(stubFromRow(newestId, firstRow));
-      } else if (!followingLatest && pinnedJobId) {
-        // Pinned to a specific job — still surface a header stand-in from
-        // its first decision row while its full record loads.
-        const first = firstRowByJob.get(pinnedJobId);
-        setLogStub(first ? stubFromRow(pinnedJobId, first) : null);
-      }
-    } catch {
-      /* keep last */
     }
-  }, [followingLatest, pinnedJobId]);
+    // Rank by the job's real `created_at` once its full record has
+    // landed — falling back to the first decision-log row's timestamp
+    // only while a booking is still mid-pipeline with no job row yet.
+    // Ranking off decision-log timestamps alone breaks on seed/demo data:
+    // many seeded jobs share the exact same `created_at` (a flat
+    // "N hours ago" default), so their first decision rows land at the
+    // same millisecond too, and the old log_id tiebreak — a counter that
+    // increments once per row across ALL jobs in seed order, not a true
+    // per-booking arrival signal — ends up picking whichever job the
+    // seeder happened to process last, not the one actually most
+    // recently booked.
+    const jobById = new Map(sortedJobs.map((j) => [j.job_id, j]));
+    let newestEntry: [string, AgentDecisionLog] | null = null;
+    let newestArrival = "";
+    for (const entry of firstRowByJob) {
+      const [jobId, firstRow] = entry;
+      const arrival = jobById.get(jobId)?.created_at ?? firstRow.timestamp;
+      if (arrival > newestArrival) {
+        newestArrival = arrival;
+        newestEntry = entry;
+      }
+    }
+
+    // A busy older job must not steal focus when the newest booking's
+    // decisions have fallen outside the limited discovery feed.
+    const newestJob = sortedJobs[0];
+    const latestJobId = newestJob && newestJob.created_at > newestArrival
+      ? newestJob.job_id : newestEntry?.[0] ?? null;
+    return { jobs: sortedJobs, latestJobId, firstRowByJob };
+  }, []);
 
   // Subscribe to BOTH tables: decisions drive discovery, jobs refresh the
   // header the moment the full record lands.
-  useRealtime("agent_decision_log", load);
-  useRealtime("jobs", load);
-  useEffect(() => {
-    load();
-  }, [load]);
+  const { data, refresh } = useLiveData(load);
+  const jobs = data?.jobs ?? [];
+  const latestJobId = data?.latestJobId ?? null;
+  useRealtime("agent_decision_log", refresh);
+  useRealtime("jobs", refresh);
 
   const followId = pinnedJobId ?? latestJobId;
+  const firstRow = followId ? data?.firstRowByJob.get(followId) : null;
+  const logStub = followId && firstRow ? stubFromRow(followId, firstRow) : null;
   const shownJob = jobs.find((j) => j.job_id === followId) ?? null;
   // While the pipeline is mid-run the full job record may not have flushed
   // yet — fall back to the header stand-in built from the first decision row.

@@ -9,12 +9,13 @@ import { STATUS_ICON } from "@/lib/icons";
 import MapView from "@/components/MapView";
 import {
   TIER_META,
+  estimatedJobMinutes,
   type ApprovalRequest,
   type Job,
   type RuntimeConfig,
   type Technician,
 } from "@/lib/types";
-import { fmtSGDateTime, fmtSGTime, nowISO, sgHour } from "@/lib/time";
+import { fmtSGDateTime, fmtSGTime, isWithinWorkingHours, nowISO } from "@/lib/time";
 
 const DAY_START = 7;
 const DAY_END = 20;
@@ -39,18 +40,15 @@ function sgDayKey(d: Date): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Singapore" }).format(d);
 }
 
-/** `today + offset` as a Date (local midnight is fine — only the SGT day-key is read off it). */
+/** Use Singapore noon so browser timezones and daylight saving cannot shift the day. */
 function dayFromOffset(offset: number): Date {
-  const d = new Date(nowISO());
-  d.setDate(d.getDate() + offset);
-  return d;
+  const noon = new Date(`${sgDayKey(new Date(nowISO()))}T12:00:00+08:00`);
+  return new Date(noon.getTime() + offset * 86400000);
 }
 
-const JOB_BLOCK_HOURS = 1.5; // visual width of a job card, in hours (~90min service window)
-
 /**
- * Assigns each job a vertical "lane" (0, 1, 2…) so that jobs whose ~90min
- * windows overlap in time never render on top of each other. Jobs that don't
+ * Assigns each job a vertical "lane" (0, 1, 2…) so that jobs whose estimated
+ * service windows overlap never render on top of each other. Jobs that don't
  * overlap anything reuse lane 0 (the common case — most technicians only
  * have one job in view at a time). Sorted by start time so lanes fill left-to-right.
  */
@@ -62,7 +60,7 @@ function assignLanes(dayJobs: Job[]): Map<string, number> {
   const lanes = new Map<string, number>();
   for (const j of sorted) {
     const start = sgHourDecimal(j.scheduled_time);
-    const end = start + JOB_BLOCK_HOURS;
+    const end = start + estimatedJobMinutes(j.skill_required) / 60;
     let lane = laneEnds.findIndex((e) => e <= start);
     if (lane === -1) lane = laneEnds.length;
     laneEnds[lane] = end;
@@ -83,9 +81,12 @@ export default function SchedulePage() {
   const [hoverJob, setHoverJob] = useState<Job | null>(null);
   const [pinnedJob, setPinnedJob] = useState<Job | null>(null);
   const [freezeHours, setFreezeHours] = useState(2);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const deepLinkApplied = useRef(false);
 
   const load = useCallback(async () => {
+    try {
     const [j, t, a] = await Promise.all([
       apiGet<{ jobs: Job[] }>("/api/bookings"),
       apiGet<{ technicians: Technician[] }>("/api/technicians"),
@@ -94,6 +95,8 @@ export default function SchedulePage() {
     setJobs(j.jobs);
     setTechs(t.technicians);
     setApprovals(a.approvals);
+    setError(null);
+    setPinnedJob((current) => current ? j.jobs.find((job) => job.job_id === current.job_id) ?? null : null);
     // Deep-link: /admin/schedule?pin=<jobId> opens that job's card and jumps
     // to its day (applied once — a realtime refresh shouldn't re-open it).
     if (typeof window !== "undefined" && !deepLinkApplied.current) {
@@ -113,6 +116,11 @@ export default function SchedulePage() {
           setPinnedJob(target);
         }
       }
+    }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to load the schedule.");
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -169,8 +177,8 @@ export default function SchedulePage() {
   // which keeps the columns stable as you step day-by-day inside a week.
   const weekStartOffset = useMemo(() => {
     const d = dayFromOffset(dayOffset);
-    // getDay(): 0=Sun..6=Sat → days since Monday
-    const sinceMonday = (d.getDay() + 6) % 7;
+    // At Singapore noon the UTC calendar date is also the Singapore date.
+    const sinceMonday = (d.getUTCDay() + 6) % 7;
     return dayOffset - sinceMonday;
   }, [dayOffset]);
 
@@ -202,14 +210,17 @@ export default function SchedulePage() {
   );
 
   // "Free right now" only makes sense for today, at the current moment —
-  // a technician with no job whose slot (±90min) covers `nowDecimal`.
+  // a technician with no active job or estimated service window covering now.
   const freeNowCount = useMemo(() => {
     if (!isToday) return null;
     let free = 0;
     for (const t of techs) {
+      if (!isWithinWorkingHours(t.working_hours, nowISO())) continue;
       const busy = jobsForTechOnOffset(t.technician_id, 0).some((j) => {
+        if (j.status === "completed" || j.status === "disrupted") return false;
+        if (j.status === "in_progress") return true;
         const start = sgHourDecimal(j.scheduled_time);
-        return Math.abs(start - nowDecimal) < 1.5;
+        return nowDecimal >= start && nowDecimal < start + estimatedJobMinutes(j.skill_required) / 60;
       });
       if (!busy) free++;
     }
@@ -225,6 +236,8 @@ export default function SchedulePage() {
 
   return (
     <div className="stack" style={{ gap: 16 }} onClick={() => setPinnedJob(null)}>
+      {error && <div className="card" role="alert" style={{ color: "var(--tier-urgent)" }}>Schedule could not refresh: {error}</div>}
+      {loading && <div className="muted" role="status">Loading schedule…</div>}
       <div className="spread" style={{ alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
         <div>
           <h1 style={{ fontSize: 22, margin: 0 }}>Master schedule</h1>
@@ -1191,14 +1204,14 @@ function DayGantt({
                   left/width below are plain percentages of this overlay's own width. */}
               <div style={{ position: "absolute", top: 0, bottom: 0, left: 168, right: 0 }}>
                 {/* freeze band: now -> now + freezeHours */}
-                {isToday && nowDecimal < DAY_END && (
+                {isToday && nowDecimal < DAY_END && nowDecimal + freezeHours > DAY_START && (
                   <div
                     style={{
                       position: "absolute",
                       top: 0,
                       bottom: 0,
-                      left: `${((nowDecimal - DAY_START) / HOURS.length) * 100}%`,
-                      width: `${(freezeHours / HOURS.length) * 100}%`,
+                      left: `${((Math.max(DAY_START, nowDecimal) - DAY_START) / HOURS.length) * 100}%`,
+                      width: `${((Math.min(DAY_END, nowDecimal + freezeHours) - Math.max(DAY_START, nowDecimal)) / HOURS.length) * 100}%`,
                       background:
                         "repeating-linear-gradient(45deg, rgba(208,52,44,.09) 0 5px, rgba(208,52,44,.02) 5px 10px)",
                       borderRight: "1px dashed rgba(208,52,44,0.35)",
@@ -1228,11 +1241,11 @@ function DayGantt({
 
                 {/* job blocks */}
                 {dayJobs.map((j) => {
-                  const start = sgHour(j.scheduled_time);
+                  const start = sgHourDecimal(j.scheduled_time);
                   const col = start - DAY_START;
                   if (col < 0 || col >= HOURS.length) return null;
                   const leftPct = (col / HOURS.length) * 100;
-                  const widthPct = (1.5 / HOURS.length) * 100; // ~90 min blocks
+                  const widthPct = (Math.min(estimatedJobMinutes(j.skill_required) / 60, DAY_END - start) / HOURS.length) * 100;
                   const frozen = j.status === "frozen";
                   const disrupted = j.status === "disrupted";
                   const isPinned = pinnedJob?.job_id === j.job_id;
@@ -1242,6 +1255,12 @@ function DayGantt({
                       key={j.job_id}
                       role="button"
                       tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setPinnedJob((p) => (p?.job_id === j.job_id ? null : j));
+                        }
+                      }}
                       onMouseEnter={() => setHoverJob(j)}
                       onMouseLeave={() => setHoverJob(null)}
                       onClick={(e) => {

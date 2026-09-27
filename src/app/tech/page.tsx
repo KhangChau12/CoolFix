@@ -18,6 +18,9 @@ export default function TechApp() {
   const [notes, setNotes] = useState<NotificationRecord[]>([]);
   const [openJob, setOpenJob] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const currentTechId = useRef(techId);
+  currentTechId.current = techId;
   const [messagesOpen, setMessagesOpen] = useState(false);
   const [completedOpen, setCompletedOpen] = useState(false);
   const [techTab, setTechTab] = useState<"board" | "routing">("board");
@@ -36,20 +39,31 @@ export default function TechApp() {
         technicians.find((t) => t.technician_id === wanted)?.technician_id ??
         technicians[0]?.technician_id;
       if (pick) setTechId(pick);
+      else setLoading(false);
       const jobParam = params.get("job");
       if (jobParam) setOpenJob(jobParam);
+    }).catch((err) => {
+      setError(err instanceof Error ? err.message : "Unable to load technicians.");
+      setLoading(false);
     });
   }, []);
 
   const load = useCallback(async () => {
     if (!techId) return;
+    try {
     const [j, n] = await Promise.all([
       apiGet<{ jobs: Job[] }>("/api/bookings"),
       apiGet<{ notifications: NotificationRecord[] }>(`/api/notifications?recipient=${techId}`),
     ]);
+    if (currentTechId.current !== techId) return;
     setJobs(j.jobs.filter((x) => x.assigned_technician_id === techId));
     setNotes(n.notifications);
-    setLoading(false);
+    setError(null);
+    } catch (err) {
+      if (currentTechId.current === techId) setError(err instanceof Error ? err.message : "Unable to load technician jobs.");
+    } finally {
+      if (currentTechId.current === techId) setLoading(false);
+    }
   }, [techId]);
 
   useRealtime("jobs", load);
@@ -59,7 +73,11 @@ export default function TechApp() {
     setLoading(true);
     // Collapse any open job when switching to a different technician, but not
     // on the first load (so a /tech?job=<id> deep link stays expanded).
-    if (prevTechId.current && prevTechId.current !== techId) setOpenJob(null);
+    if (prevTechId.current && prevTechId.current !== techId) {
+      setOpenJob(null);
+      setJobs([]);
+      setNotes([]);
+    }
     prevTechId.current = techId;
     load();
   }, [load, techId]);
@@ -71,7 +89,7 @@ export default function TechApp() {
   const upcoming = useMemo(
     () =>
       jobs
-        .filter((j) => j.status !== "completed")
+        .filter((j) => j.status !== "completed" && j.status !== "disrupted")
         .sort((a, b) => a.scheduled_time.localeCompare(b.scheduled_time)),
     [jobs],
   );
@@ -138,13 +156,21 @@ export default function TechApp() {
     .slice(0, 3);
 
   async function ack(id: string) {
-    await apiSend(`/api/notifications/${id}/ack`, "POST");
-    load();
+    try {
+      await apiSend(`/api/notifications/${id}/ack`, "POST");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to acknowledge message.");
+    }
   }
 
   async function setStatus(jobId: string, action: "en_route" | "arrived" | "completed") {
-    await apiSend(`/api/jobs/${jobId}`, "PATCH", { action });
-    load();
+    try {
+      await apiSend(`/api/jobs/${jobId}`, "PATCH", { action });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to update job status.");
+    }
   }
 
   return (
@@ -155,6 +181,8 @@ export default function TechApp() {
           the content into a desktop layout. */}
       <div className="tech-frame-wrap">
       <div className="tech-frame" style={{ maxWidth: 460, margin: "0 auto" }}>
+        {error && <div className="card" role="alert" style={{ margin: 12, color: "var(--tier-urgent)" }}>{error}</div>}
+        {!loading && !error && techs.length === 0 && <p className="muted" style={{ padding: 16 }}>No technicians are available. Add technicians from the coordinator console.</p>}
         {/* technician profile sub-bar (not a second page header — just the
             "who am I / what's my day" strip beneath the shared TopBar) */}
         <div style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)", padding: "12px 16px" }}>
@@ -221,7 +249,7 @@ export default function TechApp() {
         </div>
 
         {techTab === "routing" ? (
-          <RecommendedRouting tech={tech} currentJob={heroJob} dayJobs={todayTimeline} />
+          <RecommendedRouting tech={tech} currentJob={heroJob} dayJobs={jobs} />
         ) : (
           <>
             {/* collapsible messages — never pushes the rest of the day out of view */}
@@ -522,8 +550,7 @@ function sgDayKey(d: Date): string {
 
 function dayGroupLabel(key: string): string {
   const todayKey = sgDayKey(new Date(nowISO()));
-  const tomorrow = new Date(nowISO());
-  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrow = new Date(new Date(`${todayKey}T12:00:00+08:00`).getTime() + 86400000);
   const tomorrowKey = sgDayKey(tomorrow);
   if (key === todayKey) return "Today";
   if (key === tomorrowKey) return "Tomorrow";
@@ -532,7 +559,7 @@ function dayGroupLabel(key: string): string {
     weekday: "long",
     day: "numeric",
     month: "short",
-  }).format(new Date(`${key}T12:00:00`));
+  }).format(new Date(`${key}T12:00:00+08:00`));
 }
 
 /** "~1.5 km · after your 13:30 job" — one line of routing context for a card. */

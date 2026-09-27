@@ -7,8 +7,8 @@
 //
 // Design note: the flow map does NOT hard-code one scripted scenario
 // (unlike the design mockup it was built from). It walks whatever rows
-// a real run actually produced, in true pipeline order (the `_<seq>`
-// suffix on log_id — see agents/log.ts), and infers the station for
+// a real run actually produced, in true pipeline order (timestamp plus
+// the wall-clock and sequence in log_id), and infers the station for
 // each row from `agent_name` plus a couple of Orchestrator special
 // cases (start-of-run, and the terminal outcome deciding whether the
 // run ends at the HITL gate or carries on to Notification).
@@ -47,9 +47,19 @@ export function seqOf(id: string): number {
 }
 
 export function sortPipelineOrder(rows: AgentDecisionLog[]): AgentDecisionLog[] {
-  return [...rows].sort(
-    (a, b) => a.timestamp.localeCompare(b.timestamp) || seqOf(a.log_id) - seqOf(b.log_id),
-  );
+  return [...rows].sort(compareDecisions);
+}
+
+/** The demo clock can freeze timestamps across requests. The wall-clock
+ * part of generated IDs still advances, even when a worker's counter resets. */
+export function compareDecisions(a: AgentDecisionLog, b: AgentDecisionLog): number {
+  const wallTime = (id: string) => {
+    const match = /^log_([0-9a-z]+)_([0-9a-z]+)$/.exec(id);
+    return match ? parseInt(match[1], 36) : 0;
+  };
+  return Date.parse(a.timestamp) - Date.parse(b.timestamp) ||
+    wallTime(a.log_id) - wallTime(b.log_id) ||
+    seqOf(a.log_id) - seqOf(b.log_id) || a.log_id.localeCompare(b.log_id);
 }
 
 const AGENT_TO_STATION: Partial<Record<AgentName, StationId>> = {
@@ -93,7 +103,7 @@ export interface FlowStep {
 
 export interface FlowResult {
   stations: Record<StationId, StationRuntime>;
-  /** The train's hand-offs, in order — animate through these. */
+  /** One step per decision, including consecutive visits to the same station. */
   steps: FlowStep[];
   /** True once the last row we have is a terminal Orchestrator outcome
    *  (auto-commit, unassignable, or the HITL gate) — i.e. this run is
@@ -147,6 +157,16 @@ export function computeFlow(rows: AgentDecisionLog[]): FlowResult {
     if (row.agent_name === "Orchestrator") {
       if (row.output_summary?.pipeline === "start") {
         station = "orch";
+        reachedOutcome = false;
+        haltedForHuman = false;
+      } else if (row.outcome === "approved" || row.outcome === "rejected") {
+        // Approval is a new event at the gate. Updating the historical
+        // proposal must not erase the pause or send the train backwards.
+        station = "hitl";
+        terminal = true;
+        reachedOutcome = true;
+        haltedForHuman = row.outcome === "rejected" ||
+          row.output_summary?.result === "proposal_acknowledged";
       } else if (isTerminalOrchestratorRow(row)) {
         terminal = true;
         reachedOutcome = true;
@@ -154,6 +174,7 @@ export function computeFlow(rows: AgentDecisionLog[]): FlowResult {
           haltedForHuman = true;
           station = "hitl";
         } else {
+          haltedForHuman = false;
           // Auto-committed with no conflict / after a low-impact re-plan —
           // there's no separate "commit" station; treat it as arriving
           // at Notification (which will itself log right after).
@@ -167,14 +188,21 @@ export function computeFlow(rows: AgentDecisionLog[]): FlowResult {
       }
     } else {
       station = AGENT_TO_STATION[row.agent_name] ?? null;
+      // A later disruption starts a new phase of an already completed job.
+      if (station && station !== "notify") reachedOutcome = false;
+      // Technician-unavailable runs can pause in Disruption without a
+      // separate Orchestrator gate row. The flag is historical, so an
+      // in-place approval update still waits for the resolution event.
+      if (station && row.requires_human_approval) {
+        reachedOutcome = true;
+        haltedForHuman = true;
+      }
     }
 
     if (!station) continue;
 
-    if (station !== cursor) {
-      steps.push({ from: cursor, to: station, row });
-      cursor = station;
-    }
+    steps.push({ from: cursor, to: station, row });
+    cursor = station;
     stations[station].visits.push({ row, isTerminalOutcome: terminal });
   }
 
@@ -182,7 +210,8 @@ export function computeFlow(rows: AgentDecisionLog[]): FlowResult {
   for (const id of STATION_ORDER) {
     const s = stations[id];
     if (s.visits.length === 0) continue;
-    if (id === "hitl" && haltedForHuman) {
+    if (haltedForHuman && (id === "hitl" ||
+      (stations.hitl.visits.length === 0 && id === cursor))) {
       s.state = "halt";
     } else {
       s.state = "done";
@@ -205,14 +234,8 @@ export function computeFlow(rows: AgentDecisionLog[]): FlowResult {
         stations[id].state = "skipped";
       }
     }
-    if (stations.notify.visits.length === 0 && reachedOutcome && !haltedForHuman) {
-      // shouldn't normally happen (notify is the terminal marker itself),
-      // but keep it consistent if it does.
-      stations.notify.state = "skipped";
-    }
-    if (stations.notify.visits.length === 0 && haltedForHuman) {
-      stations.notify.state = "pending"; // still waiting on a coordinator
-    }
+    // Notification remains pending both while the gate holds and during
+    // the hand-off after approval. A resolved gate doesn't skip delivery.
   }
 
   return { stations, steps, reachedOutcome, haltedForHuman };

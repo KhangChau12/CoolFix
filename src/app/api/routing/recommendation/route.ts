@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 const OSRM_BASE = process.env.OSRM_BASE_URL ?? "https://router.project-osrm.org";
 const TRAFFIC_IMAGES_URL =
   process.env.DATA_GOV_TRAFFIC_IMAGES_URL ?? "https://api.data.gov.sg/v1/transport/traffic-images";
+const DEMO_TRAFFIC = process.env.DEMO_TRAFFIC === "true";
 
 type LatLng = { lat: number; lng: number };
 type LonLat = [number, number];
@@ -144,10 +145,9 @@ function buildCongestionSegments(route: LonLat[], cameras: TrafficCamera[]): Con
     const severity = highestSeverity(
       cameras
         .filter((camera) => distanceToRoute(camera, pair) <= 0.35)
-        // A camera close to the route is rendered as a conservative low
-        // (yellow) observation until an enriched feed supplies a measured
-        // medium/high severity. It never adds delay by itself.
-        .map((camera) => camera.severity ?? "low"),
+        // Images alone do not measure congestion. Color roads only when
+        // the feed actually supplies a severity value.
+        .map((camera) => camera.severity),
     );
 
     if (!severity) {
@@ -167,6 +167,22 @@ function buildCongestionSegments(route: LonLat[], cameras: TrafficCamera[]): Con
   return segments;
 }
 
+/** Clearly labeled demonstration segments follow the actual routed road geometry. */
+function demoCongestionSegments(route: LonLat[]): CongestionSegment[] {
+  if (route.length < 8) return [];
+  return ([{ fraction: 0.25, severity: "medium" }, { fraction: 0.6, severity: "high" }] as const)
+    .map(({ fraction, severity }) => {
+      const start = Math.floor(route.length * fraction);
+      return { coordinates: route.slice(start, Math.min(route.length, start + Math.max(2, Math.floor(route.length * 0.08)))), severity };
+    });
+}
+
+function trafficDelay(cameras: TrafficCamera[]): number {
+  return cameras.reduce((total, camera) => total +
+    (camera.severity === "high" ? 180 : camera.severity === "medium" ? 90 : camera.severity === "low" ? 30 : 0) +
+    (camera.incident ? 300 : 0), 0);
+}
+
 async function getTrafficCameras(): Promise<TrafficCamera[]> {
   const headers: Record<string, string> = { accept: "application/json" };
   if (process.env.DATA_GOV_SG_API_KEY) headers["x-api-key"] = process.env.DATA_GOV_SG_API_KEY;
@@ -174,6 +190,7 @@ async function getTrafficCameras(): Promise<TrafficCamera[]> {
   const response = await fetch(TRAFFIC_IMAGES_URL, {
     headers,
     cache: "no-store",
+    signal: AbortSignal.timeout(8000),
   });
   if (!response.ok) throw new Error(`Traffic Images returned ${response.status}`);
 
@@ -241,7 +258,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const [osrmResponse, trafficResult] = await Promise.allSettled([
-      fetch(routeUrl, { cache: "no-store" }),
+      fetch(routeUrl, { cache: "no-store", signal: AbortSignal.timeout(12000) }),
       getTrafficCameras(),
     ]);
 
@@ -273,25 +290,36 @@ export async function GET(request: NextRequest) {
       // explicit and conservative instead of inventing a delay from camera
       // count; the camera evidence is exposed to the technician on the map.
       const routeCameras = nearbyCameras;
-      const congestionSegments = buildCongestionSegments(geometry, routeCameras);
+      const legCongestionSegments = legs.map((leg) => DEMO_TRAFFIC
+        ? demoCongestionSegments(leg)
+        : buildCongestionSegments(leg, routeCameras));
+      const congestionSegments = DEMO_TRAFFIC
+        ? (legs.length ? legCongestionSegments.flat() : demoCongestionSegments(geometry))
+        : buildCongestionSegments(geometry, routeCameras);
       const congestionDelay = routeCameras.reduce((total, camera) => {
         if (camera.severity === "high") return total + 180;
         if (camera.severity === "medium") return total + 90;
         return total + (camera.severity === "low" ? 30 : 0);
       }, 0);
       const incidentPenalty = routeCameras.filter((camera) => camera.incident).length * 300;
-      const adjustedTime = route.duration + congestionDelay + incidentPenalty;
+      const simulatedDelay = DEMO_TRAFFIC ? congestionSegments.length * 120 : 0;
+      const adjustedTime = route.duration + (DEMO_TRAFFIC ? simulatedDelay : congestionDelay + incidentPenalty);
+      const adjustedLegDurations = legs.map((leg, legIndex) => legDurations[legIndex] + (DEMO_TRAFFIC
+        ? legCongestionSegments[legIndex].length * 120
+        : trafficDelay(routeCameras.filter((camera) => distanceToRoute(camera, leg) <= 1.5))));
 
       return {
         id: `route-${index + 1}`,
         distance: route.distance,
         normalTime: route.duration,
-        congestionDelay,
-        incidentPenalty,
+        congestionDelay: DEMO_TRAFFIC ? simulatedDelay : congestionDelay,
+        incidentPenalty: DEMO_TRAFFIC ? 0 : incidentPenalty,
         adjustedTime,
         geometry,
         legs,
         legDurations,
+        adjustedLegDurations,
+        legCongestionSegments,
         nearbyCameraIds: nearbyCameras.map((camera) => camera.camera_id),
         congestionSegments,
       };
@@ -310,9 +338,12 @@ export async function GET(request: NextRequest) {
       // Never expose unrelated camera observations to the technician's map.
       cameras: routeCameras,
       trafficAvailable,
+      simulatedTraffic: DEMO_TRAFFIC,
       trafficObservedAt: routeCameras[0]?.timestamp ?? null,
-      trafficNote: trafficAvailable
-        ? "Only traffic observations close to the recommended route are shown. Camera-only observations are marked low/yellow; enriched medium/orange and high/red values are used when available. The Traffic Images API itself does not publish speed or incident fields."
+      trafficNote: DEMO_TRAFFIC
+        ? "DEMO: colored road segments and added delays are simulated scenarios, not live traffic. Road geometry comes from OSRM; camera images, when available, are independent live observations."
+        : trafficAvailable
+        ? "Nearby traffic cameras are shown in gray unless the feed supplies congestion severity. The Traffic Images API itself does not publish speeds or incidents; camera images alone do not add traffic delays."
         : "Traffic Images is temporarily unavailable; the recommendation uses OSRM time only.",
     });
   } catch (error) {
